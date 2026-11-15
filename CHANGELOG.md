@@ -4,6 +4,7 @@
 
 _Sudhaar yahan jama hote hain. Jab 10–15 sudhaar jama ho jayenge, tabhi agla version (1.1.0) npm par aayega — har chhote fix par version nahi badhta._
 
+- Fixed: boolean type now also accepts `on`/`off` and `y`/`n` (case-insensitive, like `true`/`false` and `yes`/`no`); the error message now lists all accepted spellings
 - Fixed: `scanCode` now recognizes `let` and `var` destructuring of `process.env` (previously only `const` was matched)
 - Fixed: `parseEnvFile` now strips inline comments after unquoted values (`PORT=3000 # my port` parses as `3000`); `#` inside quotes stays untouched, and a quoted value followed by a comment (`NAME="x" # note`) parses as `x`
 - Fixed: `scanDir` now also scans `.mts` and `.cts` files (TypeScript ESM/CJS modules were silently skipped)

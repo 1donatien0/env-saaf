@@ -170,4 +170,30 @@ assert.ok(!ex.includes('sk_live'));
   );
 }
 
+// Issue #18: boolean type — 'on'/'off' (aur 'y'/'n') bhi accept karo
+{
+  const b = (v) => validateEnv({ F: { type: 'boolean' } }, { F: v }).F;
+  assert.strictEqual(b('on'), true);
+  assert.strictEqual(b('ON'), true);
+  assert.strictEqual(b('On'), true);
+  assert.strictEqual(b('off'), false);
+  assert.strictEqual(b('OFF'), false);
+  assert.strictEqual(b('Off'), false);
+  assert.strictEqual(b('y'), true);
+  assert.strictEqual(b('n'), false);
+  assert.strictEqual(b('yes'), true);
+  assert.strictEqual(b('no'), false);
+  assert.strictEqual(b('1'), true);
+  assert.strictEqual(b('0'), false);
+  assert.throws(() => validateEnv({ F: { type: 'boolean' } }, { F: 'enabled' }), /expected a boolean/);
+  // end-to-end: FEATURE_X=on / DEBUG=off wali .env file
+  const { parseEnvFile } = require('./index');
+  const parsed = validateEnv(
+    { FEATURE_X: { type: 'boolean' }, DEBUG: { type: 'boolean' } },
+    parseEnvFile('FEATURE_X=on\nDEBUG=off\n')
+  );
+  assert.strictEqual(parsed.FEATURE_X, true);
+  assert.strictEqual(parsed.DEBUG, false);
+}
+
 console.log('env-saaf v1.0.0: all tests passed');
