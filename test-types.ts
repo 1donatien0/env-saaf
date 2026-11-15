@@ -1,6 +1,6 @@
-// env-saaf type tests — sirf `tsc` se check hote hain (`npm test` me shamil).
-// Runtime me kuch nahi chalta: ye file sirf TypeScript inference verify karti hai.
-// Issue #7: validateEnv ka return type schema se infer hona chahiye.
+// env-saaf type tests — checked by `tsc` only (part of `npm test`).
+// Nothing runs at runtime: this file only verifies TypeScript inference.
+// Issue #7: the return type of validateEnv must be inferred from the schema.
 import { validateEnv, EnvSchema, EnvResult } from './index';
 
 const env = validateEnv({
@@ -17,27 +17,27 @@ const port: number = env.PORT;
 const count: number = env.COUNT;
 const url: string = env.API_URL;
 const mode: string = env.MODE;
-// optional keys: value ya undefined
+// optional keys: value or undefined
 const debug: boolean | undefined = env.DEBUG;
 const name: string | undefined = env.NAME;
 
-// number methods chalne chahiye (issue #7 ka asli gap)
+// number methods must work (the real gap from issue #7)
 const doubled: number = env.PORT * 2;
 const fixed: string = env.COUNT.toFixed(0);
 
-// EnvResult seedha bhi use ho sakta hai
+// EnvResult can also be used directly
 type MyEnv = EnvResult<{ PORT: { type: 'port'; required: true }; DEBUG: { type: 'boolean' } }>;
 const myPort: number = null as unknown as MyEnv['PORT'];
 const myDebug: boolean | undefined = null as unknown as MyEnv['DEBUG'];
 
-// @ts-expect-error — PORT number hai, string nahi
+// @ts-expect-error — PORT is a number, not a string
 const wrongType: string = env.PORT;
-// @ts-expect-error — galat key: schema me nahi hai
+// @ts-expect-error — unknown key: not in the schema
 const typo = env.TYPO_KEY;
-// @ts-expect-error — optional key undefined ho sakti hai, seedha boolean nahi
+// @ts-expect-error — an optional key can be undefined, not a plain boolean
 const debugStrict: boolean = env.DEBUG;
 
-// loose schema (jaise EnvSchema type ka variable) par purana loose record milta hai
+// a loose schema (e.g. a variable typed as EnvSchema) falls back to the loose record
 const looseSchema: EnvSchema = { PORT: { type: 'port', required: true } };
 const loose = validateEnv(looseSchema);
 const looseValue: string | number | boolean = loose.ANYTHING;

@@ -2,8 +2,6 @@
 
 ## Unreleased
 
-_Sudhaar yahan jama hote hain. Jab 10–15 sudhaar jama ho jayenge, tabhi agla version (1.2.0) npm par aayega — har chhote fix par version nahi badhta._
-
 - Added: CLI `check` and `scan` accept `--json` for machine-readable output (`{ ok, missing, extra, invalid }` for check; `{ ok, vars }` for scan). Exit codes unchanged. Human-readable output remains the default.
 
 ## 1.1.0
@@ -15,7 +13,7 @@ _Sudhaar yahan jama hote hain. Jab 10–15 sudhaar jama ho jayenge, tabhi agla v
 - Docs: README now shows how to load a real `.env` file (`parseEnvFile` + `validateEnv`) and includes an ES module import example
 - Added: `loadEnv(schema, options?)` — read a `.env` file and validate it in one call (`path`, `override`, `assign` options; `process.env` untouched by default)
 - Added: strict mode — `validateEnv(schema, env, { strict: true })` reports variables that are set but not in the schema (typos like `DATABSE_URL` no longer slip through)
-- TypeScript: `validateEnv` ka return type ab schema se infer hota hai — `type: 'port'`/`'number'` → `number`, `'boolean'` → `boolean`; `required`/`default` wali key hamesha maujood, baaki `| undefined`; galat key par ab TypeScript error aata hai
+- TypeScript: the return type of `validateEnv` is now inferred from the schema — `type: 'port'`/`'number'` → `number`, `'boolean'` → `boolean`; keys with `required` or `default` are always present, the rest are `| undefined`; accessing a key that is not in the schema is now a TypeScript error
 - Fixed: `url` values are returned exactly as provided — validation no longer normalizes them (a bare origin no longer gains a trailing slash)
 - Added: CLI `check` accepts `--file <name>` to compare code usage against a file other than `.env.example` (e.g. `.env.sample`)
 

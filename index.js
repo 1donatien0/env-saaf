@@ -34,8 +34,8 @@ function coerce(key, raw, type) {
     }
     case 'url': {
       // Validate karke ASLI string hi lautaao. new URL(...).toString() value ko
-      // normalize kar deta hai (jaise bare origin par trailing slash jud jata hai),
-      // jo user ke string comparison ko tod sakta hai — isliye sirf jaanch, badlaav nahi.
+      // normalizes the value (a bare origin gains a trailing slash), which can
+      // break the user's string comparisons — so validate only, never modify.
       try { new URL(String(v)); }
       catch { throw new Error(`${key}: expected a valid URL, got "${raw}"`); }
       return String(v);
@@ -123,14 +123,14 @@ function parseEnvFile(text) {
     if (!m) continue;
     let val = m[2].trim();
     if (val.startsWith('"') || val.startsWith("'")) {
-      // Quoted value: '#' andar safe hai; closing quote ke baad ka comment hatao
+      // Quoted value: '#' inside quotes is safe; strip any comment after the closing quote
       // (NAME="x # y" -> x # y; NAME="x" # note -> x)
       const q = val[0];
       const end = val.indexOf(q, 1);
       val = end === -1 ? val : val.slice(1, end);
     } else {
-      // Unquoted value: line ke shuru ya whitespace ke baad '#' se inline comment
-      // (PORT=3000 # my port -> 3000; URL me '#frag' bina space ke safe hai)
+      // Unquoted value: a '#' at the start of the value or after whitespace begins an inline comment
+      // (PORT=3000 # my port -> 3000; a '#frag' inside a URL without a preceding space is safe)
       const hash = val.search(/(^|\s)#/);
       if (hash !== -1) val = val.slice(0, hash).trim();
     }

@@ -10,9 +10,9 @@ export interface EnvRule {
 export type EnvSchema = Record<string, EnvRule>;
 
 /**
- * Ek rule ka value type — schema ke `type` field se:
+ * The value type of a rule, from the schema's `type` field:
  * 'number' / 'port' -> number, 'boolean' -> boolean,
- * baaki (string / url / type nahi diya) -> string.
+ * everything else (string / url / no type given) -> string.
  */
 export type EnvValue<R extends EnvRule> =
   R extends { type: 'number' } ? number :
@@ -21,14 +21,14 @@ export type EnvValue<R extends EnvRule> =
   string;
 
 /**
- * `validateEnv` ka return type — schema se infer hota hai.
- * `required: true` ya `default` wali key hamesha maujood hoti hai;
- * baaki keys optional hain (`| undefined`), kyunki validateEnv unhe
- * missing hone par result me daalta hi nahi.
- * Schema seedha validateEnv(...) ko inline pass karo (ya `as const`),
- * taaki TypeScript literal types dekh sake.
- * Agar schema pehle se loose type ka hai (jaise `EnvSchema`), to
- * purana loose `Record<string, string | number | boolean>` milta hai.
+ * The return type of `validateEnv` — inferred from the schema.
+ * A key with `required: true` or a `default` is always present;
+ * the other keys are optional (`| undefined`), because validateEnv
+ * omits missing keys from the result entirely.
+ * Pass the schema inline to validateEnv(...) (or use `as const`)
+ * so TypeScript can see the literal types.
+ * If the schema already has a loose type (such as `EnvSchema`), the
+ * result falls back to `Record<string, string | number | boolean>`.
  */
 export type EnvResult<S extends EnvSchema> = string extends keyof S
   ? Record<string, string | number | boolean>

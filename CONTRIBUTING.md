@@ -31,9 +31,9 @@ npm test        # runs the full test file, no install step needed
 5. Run `npm test` and make sure it passes.
 6. Open a Pull Request and fill in the template. Link the issue it fixes (`Fixes #123`).
 
-## How releases work here (please read before asking for a version bump)
+## Releases
 
-Releases are deliberately slow. Fixes and improvements collect under `## Unreleased` in the changelog. Only when **10–15 improvements** have collected do we cut a new version (for example `1.1.0`) and publish it to npm. This keeps every release meaningful and avoids version-number noise — so please do not bump `version` in `package.json` in your PR.
+Releases are handled by the maintainer, so please do not bump `version` in `package.json` in your PR — just add a line for your change under `## Unreleased` in `CHANGELOG.md`.
 
 ## Reporting bugs and asking for features
 
