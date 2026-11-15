@@ -215,4 +215,4 @@ assert.ok(!ex.includes('sk_live'));
   assert.ok(outNone.includes('Usage: env-saaf'));
 }
 
-console.log('env-saaf v1.0.0: all tests passed');
+console.log('env-saaf v1.1.0: all tests passed');
