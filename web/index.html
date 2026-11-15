@@ -1,0 +1,503 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>env-saaf — Your .env, validated before it breaks production</title>
+<meta name="description" content="env-saaf is a zero-dependency validator for Node.js environment variables: typed values, every error reported at once, a CLI that keeps .env.example honest, and secret masking for logs.">
+<link rel="canonical" href="https://env-saaf.vercel.app/">
+<meta name="author" content="Abhijeet Kumar">
+<meta name="theme-color" content="#0b0d16">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="env-saaf">
+<meta property="og:title" content="env-saaf — Your .env, validated before it breaks production">
+<meta property="og:description" content="Zero-dependency env validation for Node.js: typed values, all errors at once, secret masking.">
+<meta property="og:url" content="https://env-saaf.vercel.app/">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="env-saaf — Your .env, validated before it breaks production">
+<meta name="twitter:description" content="Zero-dependency env validation for Node.js: typed values, all errors at once, secret masking.">
+<style>
+  :root{
+    --bg:#0b0d16; --bg2:#0e1122; --panel:#12152a; --panel2:#171b33; --line:#232842;
+    --text:#eef0ff; --muted:#9aa3c7; --muted2:#c6cbe8;
+    --red:#e23345; --blue:#4fb3e8; --green:#2fd39a; --yellow:#e0af3c;
+    --mono:ui-monospace,'SF Mono',SFMono-Regular,Menlo,Consolas,monospace;
+    --sans:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;
+  }
+  *{margin:0;padding:0;box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{background:var(--bg);color:var(--text);font-family:var(--sans);line-height:1.65;overflow-x:hidden}
+  body::before{content:"";position:fixed;inset:0;pointer-events:none;z-index:0;
+    background:radial-gradient(900px 480px at 85% -5%,rgba(47,211,154,.14),transparent 60%),
+               radial-gradient(700px 420px at -10% 30%,rgba(79,179,232,.08),transparent 60%);}
+  a{color:var(--blue);text-decoration:none}
+  a:hover{text-decoration:underline}
+  .wrap{max-width:1080px;margin:0 auto;padding:0 22px;position:relative;z-index:1}
+  .reveal{opacity:0;transform:translateY(18px);transition:opacity .6s ease,transform .6s ease}
+  .reveal.in{opacity:1;transform:none}
+
+  /* nav */
+  nav{position:sticky;top:0;z-index:50;backdrop-filter:blur(10px);background:rgba(11,13,22,.82);border-bottom:1px solid var(--line)}
+  nav .wrap{display:flex;align-items:center;gap:26px;height:62px}
+  .logo{font-weight:800;font-size:21px;letter-spacing:-.5px;color:var(--text)}
+  .logo:hover{text-decoration:none}
+  .logo .saaf{color:var(--green)}
+  nav .links{display:flex;gap:22px;margin-left:auto;font-size:14.5px}
+  nav .links a{color:var(--muted2)}
+  nav .links a:hover{color:var(--text);text-decoration:none}
+  .btn{display:inline-block;padding:9px 18px;border-radius:9px;font-weight:600;font-size:14.5px;border:1px solid transparent}
+  .btn:hover{text-decoration:none;opacity:.92}
+  .btn.red{background:var(--red);color:#fff}
+  .btn.ghost{border-color:var(--line);color:var(--text);background:var(--panel)}
+  @media(max-width:720px){nav .links a:not(.btn){display:none}}
+
+  /* hero */
+  header{padding:84px 0 30px;text-align:center}
+  .pill{display:inline-block;font-family:var(--mono);font-size:12.5px;color:var(--muted2);border:1px solid var(--line);background:var(--panel);border-radius:999px;padding:6px 14px;letter-spacing:.4px}
+  .pill b{color:var(--green);font-weight:700}
+  h1{font-size:clamp(40px,6.4vw,68px);line-height:1.08;letter-spacing:-2px;font-weight:800;margin:26px auto 0;max-width:820px}
+  h1 .grad{background:linear-gradient(92deg,var(--green),var(--blue));-webkit-background-clip:text;background-clip:text;color:transparent}
+  .tagline{font-size:clamp(17px,2.4vw,21px);color:var(--muted);max-width:680px;margin:20px auto 0}
+  .install{display:inline-flex;align-items:center;gap:14px;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:13px 18px;margin-top:34px;font-family:var(--mono);font-size:16.5px}
+  .install .dollar{color:var(--green)}
+  .install button{background:var(--red);color:#fff;border:0;border-radius:8px;padding:7px 14px;font-size:13px;cursor:pointer;font-weight:600;font-family:var(--sans)}
+  .cta-row{display:flex;gap:12px;justify-content:center;margin-top:26px;flex-wrap:wrap}
+  .cta{padding:12px 24px;border-radius:10px;font-weight:600;font-size:15.5px}
+  .badges{display:flex;gap:10px;justify-content:center;flex-wrap:wrap;margin-top:30px}
+  .badges img{height:22px}
+
+  /* terminal */
+  .term{max-width:760px;margin:52px auto 0;background:#07080f;border:1px solid var(--line);border-radius:16px;text-align:left;box-shadow:0 30px 80px rgba(0,0,0,.5);overflow:hidden}
+  .term .bar{display:flex;align-items:center;gap:8px;padding:12px 16px;border-bottom:1px solid var(--line);background:var(--panel)}
+  .dot{width:12px;height:12px;border-radius:50%}
+  .term .title{margin-left:8px;color:var(--muted);font-family:var(--mono);font-size:12.5px}
+  .term pre{padding:20px 22px;font-family:var(--mono);font-size:14px;line-height:1.75;min-height:196px;white-space:pre-wrap;word-break:break-word}
+  .term .p{color:var(--green)} .term .err{color:#ff7a89} .term .ok{color:var(--green)} .term .dim{color:#5b6284} .term .key{color:var(--blue)} .term .str{color:var(--yellow)}
+  .cursor{display:inline-block;width:8px;height:16px;background:var(--green);vertical-align:-2px;animation:blink 1s steps(1) infinite}
+  @keyframes blink{50%{opacity:0}}
+
+  section{padding:64px 0 8px}
+  h2{font-size:clamp(28px,4vw,38px);letter-spacing:-1px;margin-bottom:10px}
+  .sub{color:var(--muted);font-size:17px;max-width:640px;margin-bottom:30px}
+  .center{text-align:center}.center .sub{margin-left:auto;margin-right:auto}
+
+  .cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:16px}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:24px}
+  .card h3{font-size:17px;margin-bottom:8px}
+  .card p{color:var(--muted);font-size:15px}
+  .card code{font-family:var(--mono);color:var(--red);font-size:13.5px;background:rgba(226,51,69,.08);padding:1px 5px;border-radius:5px}
+  .card .ico{font-size:22px;margin-bottom:10px}
+
+  .split{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+  @media(max-width:820px){.split{grid-template-columns:1fr}}
+  .codebox{background:#07080f;border:1px solid var(--line);border-radius:14px;overflow:hidden}
+  .codebox .bar{display:flex;align-items:center;gap:8px;padding:10px 14px;border-bottom:1px solid var(--line);background:var(--panel);color:var(--muted);font-family:var(--mono);font-size:12.5px}
+  .codebox pre{padding:18px 20px;font-family:var(--mono);font-size:13.8px;line-height:1.7;overflow-x:auto}
+  .k{color:var(--blue)} .s{color:var(--green)} .c{color:#5b6284} .n{color:var(--yellow)} .e{color:#ff7a89} .fn{color:#b7a6ff}
+
+  /* playground */
+  .play{background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:26px}
+  .play .grid{display:grid;grid-template-columns:1fr 1fr;gap:22px}
+  @media(max-width:820px){.play .grid{grid-template-columns:1fr}}
+  .play label{display:block;font-family:var(--mono);font-size:12.5px;color:var(--muted);margin:12px 0 5px}
+  .play input{width:100%;background:#07080f;border:1px solid var(--line);border-radius:9px;color:var(--text);font-family:var(--mono);font-size:14px;padding:10px 12px}
+  .play input:focus{outline:none;border-color:var(--green)}
+  .play .schema{font-family:var(--mono);font-size:13px;color:var(--muted2);background:#07080f;border:1px solid var(--line);border-radius:9px;padding:14px 16px;line-height:1.7;white-space:pre-wrap}
+  .play .out{font-family:var(--mono);font-size:13.5px;line-height:1.7;background:#07080f;border:1px solid var(--line);border-radius:9px;padding:14px 16px;min-height:120px;white-space:pre-wrap;word-break:break-word}
+  .play .out .bad{color:#ff7a89}.play .out .good{color:var(--green)}
+  .play button{margin-top:16px;background:var(--green);color:#04150e;border:0;border-radius:9px;padding:11px 22px;font-weight:700;font-size:15px;cursor:pointer;font-family:var(--sans)}
+  .play button:hover{opacity:.9}
+  .play .hint{color:var(--muted);font-size:13.5px;margin-top:10px}
+
+  .cmd-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:16px}
+  .cmd{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:22px}
+  .cmd code{display:block;font-family:var(--mono);color:var(--green);font-size:14.5px;margin-bottom:6px}
+  .cmd .sample{font-family:var(--mono);font-size:12.8px;color:var(--muted);background:#07080f;border:1px solid var(--line);border-radius:8px;padding:10px 12px;margin-top:10px;white-space:pre-wrap}
+  .cmd p{color:var(--muted);font-size:14.5px}
+
+  .faq{max-width:760px}
+  .faq details{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:16px 20px;margin-bottom:12px}
+  .faq summary{cursor:pointer;font-weight:600;font-size:16px}
+  .faq p{color:var(--muted);font-size:15px;margin-top:8px}
+  .faq code{font-family:var(--mono);font-size:13.5px;color:var(--green)}
+
+  .people{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:16px}
+  .person{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:22px}
+  .person .who{font-weight:700;font-size:16px}
+  .person .what{color:var(--muted);font-size:14.5px;margin-top:5px}
+
+  footer{border-top:1px solid var(--line);padding:40px 0 52px;text-align:center;color:var(--muted);font-size:14.5px;margin-top:70px}
+  footer a{margin:0 10px}
+</style>
+</head>
+<body>
+
+<nav>
+  <div class="wrap">
+    <a class="logo" href="#top">env-<span class="saaf">saaf</span></a>
+    <div class="links">
+      <a href="#features">Features</a>
+      <a href="#playground">Playground</a>
+      <a href="#cli">CLI</a>
+      <a href="#community">Community</a>
+      <a href="https://github.com/abhi478jeetur-rgb/env-saaf">GitHub</a>
+      <a class="btn red" href="#get-started">Get started</a>
+    </div>
+  </div>
+</nav>
+
+<header id="top">
+  <div class="wrap">
+    <span class="pill">v1.1.0 &nbsp;·&nbsp; <b>zero dependencies</b> &nbsp;·&nbsp; MIT &nbsp;·&nbsp; Node ≥ 16</span>
+    <h1>Your <span class="grad">.env</span>, validated<br>before it breaks production.</h1>
+    <p class="tagline">env-saaf checks your environment variables the moment your app starts — typed values, defaults, choices — and reports <em>every</em> problem at once, in plain language. No more silent config bugs at 2 a.m.</p>
+    <div id="get-started">
+      <div class="install"><span><span class="dollar">$</span> <span id="installCmd">npm install env-saaf</span></span><button onclick="copyInstall(this)">Copy</button></div>
+    </div>
+    <div class="cta-row">
+      <a class="btn red cta" href="https://github.com/abhi478jeetur-rgb/env-saaf#readme">Read the docs</a>
+      <a class="btn ghost cta" href="https://github.com/abhi478jeetur-rgb/env-saaf">Star on GitHub</a>
+    </div>
+    <div class="badges">
+      <img alt="npm version" src="https://img.shields.io/npm/v/env-saaf">
+      <img alt="npm downloads" src="https://img.shields.io/npm/dm/env-saaf">
+      <img alt="license" src="https://img.shields.io/npm/l/env-saaf">
+      <img alt="zero dependencies" src="https://img.shields.io/badge/dependencies-0-brightgreen">
+    </div>
+
+    <div class="term" aria-hidden="true">
+      <div class="bar"><span class="dot" style="background:#e23345"></span><span class="dot" style="background:#e0af3c"></span><span class="dot" style="background:#2fd39a"></span><span class="title">your-app — node server.js</span></div>
+      <pre id="termBody"></pre>
+    </div>
+  </div>
+</header>
+
+<section>
+  <div class="wrap reveal">
+    <h2>Sound familiar?</h2>
+    <p class="sub">Every value in <b>process.env</b> is a string, and nothing checks them for you. These bugs ship quietly and explode loudly.</p>
+    <div class="cards">
+      <div class="card">
+        <div class="ico">💥</div>
+        <h3><code>"false"</code> is truthy</h3>
+        <p>You set <code>DEBUG=false</code> — and the app still runs in debug mode, because the string "false" is truthy in JavaScript.</p>
+      </div>
+      <div class="card">
+        <div class="ico">🔢</div>
+        <h3><code>"3000" + 1 = "30001"</code></h3>
+        <p>PORT arrives as a string. The first time your code does arithmetic on an env value, it silently concatenates instead.</p>
+      </div>
+      <div class="card">
+        <div class="ico">🚨</div>
+        <h3>Missing in production</h3>
+        <p>A variable exists on your laptop but never made it to the server. The app crashes on boot — or worse, runs with <code>undefined</code>.</p>
+      </div>
+      <div class="card">
+        <div class="ico">🔤</div>
+        <h3>The silent typo</h3>
+        <p>The file says <code>DATABSE_URL</code>. Your code reads <code>DATABASE_URL</code>, gets nothing, and nobody is ever told.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap reveal">
+    <h2>Declare a schema. Get typed values.</h2>
+    <p class="sub">One small schema at startup replaces scattered <b>process.env</b> reads — and when something is wrong, you hear about all of it at once.</p>
+    <div class="split">
+      <div class="codebox">
+        <div class="bar">server.js</div>
+        <pre><span class="k">const</span> { validate } = <span class="fn">require</span>(<span class="s">'env-saaf'</span>);
+
+<span class="k">const</span> env = <span class="fn">validate</span>({
+  PORT:    { type: <span class="s">'port'</span>, required: <span class="n">true</span> },
+  DEBUG:   { type: <span class="s">'boolean'</span>, default: <span class="n">false</span> },
+  API_KEY: { type: <span class="s">'string'</span>, required: <span class="n">true</span> },
+  MODE:    { type: <span class="s">'string'</span>,
+             choices: [<span class="s">'development'</span>, <span class="s">'production'</span>],
+             default: <span class="s">'development'</span> },
+});
+
+<span class="c">// env.PORT is a number. env.DEBUG is a real boolean.</span>
+app.<span class="fn">listen</span>(env.PORT);</pre>
+      </div>
+      <div class="codebox">
+        <div class="bar">when something is wrong</div>
+        <pre><span class="e">✗ EnvSaafError: 2 problems with your environment</span>
+
+  • PORT — expected a port (1–65535), got <span class="s">"abc"</span>
+  • API_KEY — missing (required)
+
+<span class="c">Every problem is listed in one error —
+fix them all in a single pass, instead of
+crashing, fixing one, and crashing again.</span>
+
+<span class="c">Secret values are masked in the output,
+so the error is safe to log and share.</span></pre>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="features">
+  <div class="wrap reveal">
+    <h2>Everything a growing app needs</h2>
+    <p class="sub">Small surface, sharp edges. env-saaf does one job — trustworthy configuration — and does it completely.</p>
+    <div class="cards">
+      <div class="card">
+        <div class="ico">🧮</div>
+        <h3>Typed values</h3>
+        <p>Strings become real numbers, booleans and ports. <code>"false"</code> becomes <b>false</b>; <code>"3000"</code> becomes <b>3000</b>.</p>
+      </div>
+      <div class="card">
+        <div class="ico">🧾</div>
+        <h3>Every error at once</h3>
+        <p>One <b>EnvSaafError</b> lists every missing, invalid and unexpected variable — no fix-one-crash-again loop.</p>
+      </div>
+      <div class="card">
+        <div class="ico">📂</div>
+        <h3>loadEnv built in</h3>
+        <p>Read your <code>.env</code> file and validate it in a single call, with defaults applied and types converted.</p>
+      </div>
+      <div class="card">
+        <div class="ico">🔒</div>
+        <h3>Strict mode</h3>
+        <p>Fail on variables that exist but are not in your schema, so a typo'd name can never hide in the file.</p>
+      </div>
+      <div class="card">
+        <div class="ico">🖥️</div>
+        <h3>A CLI that guards .env.example</h3>
+        <p><code>check</code> diffs your real file against the example; <code>scan</code> finds every <code>process.env</code> read in your code.</p>
+      </div>
+      <div class="card">
+        <div class="ico">🙈</div>
+        <h3>Secrets stay secret</h3>
+        <p>Values are masked in error messages and output — safe for logs, CI and screenshots.</p>
+      </div>
+      <div class="card">
+        <div class="ico">⌨️</div>
+        <h3>TypeScript inference</h3>
+        <p>The result type is inferred from your schema: <code>env.PORT</code> is a <b>number</b>, not a string, in your editor too.</p>
+      </div>
+      <div class="card">
+        <div class="ico">🪶</div>
+        <h3>Zero dependencies</h3>
+        <p>Nothing extra lands in your <code>node_modules</code>. Installs in a blink and audits clean, every time.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="playground">
+  <div class="wrap reveal">
+    <h2>Try it right here</h2>
+    <p class="sub">This little demo runs the same rules as the real package. Break something — a bad port, a missing key — and validate.</p>
+    <div class="play">
+      <div class="grid">
+        <div>
+          <div class="schema">validate({
+  PORT:    { type: 'port', required: true },
+  DEBUG:   { type: 'boolean', default: false },
+  API_KEY: { type: 'string', required: true },
+  MODE:    { type: 'string',
+             choices: ['development', 'production'],
+             default: 'development' }
+})</div>
+          <label for="pgPORT">PORT</label>
+          <input id="pgPORT" value="3000" spellcheck="false" autocomplete="off">
+          <label for="pgDEBUG">DEBUG</label>
+          <input id="pgDEBUG" value="true" spellcheck="false" autocomplete="off">
+          <label for="pgAPIKEY">API_KEY</label>
+          <input id="pgAPIKEY" value="" placeholder="(empty — try validating!)" spellcheck="false" autocomplete="off">
+          <label for="pgMODE">MODE</label>
+          <input id="pgMODE" value="development" spellcheck="false" autocomplete="off">
+        </div>
+        <div>
+          <label>Result</label>
+          <div class="out" id="pgOut"></div>
+          <p class="hint">Clear API_KEY or type a bad PORT, then validate again — every problem shows up at once, just like the real thing.</p>
+        </div>
+      </div>
+      <button onclick="pgValidate()">Validate</button>
+    </div>
+  </div>
+</section>
+
+<section id="cli">
+  <div class="wrap reveal">
+    <h2>Guard the example file, too</h2>
+    <p class="sub">Most config bugs are really <b>.env.example</b> drift. The CLI keeps the example, the real file and your code in agreement.</p>
+    <div class="cmd-grid">
+      <div class="cmd">
+        <code>npx env-saaf check</code>
+        <p>Compare your <b>.env</b> against <b>.env.example</b> and fail CI when they drift apart.</p>
+        <div class="sample">✗ missing: DB_URL
+✗ extra:   OLD_KEY</div>
+      </div>
+      <div class="cmd">
+        <code>npx env-saaf scan</code>
+        <p>Scan your codebase for <b>process.env</b> reads and check that each one is declared.</p>
+        <div class="sample">✓ 14 reads found — all declared</div>
+      </div>
+      <div class="cmd">
+        <code>npx env-saaf check --json</code>
+        <p>Machine-readable output for scripts and CI dashboards. Landing in v1.2.0 — already merged on main.</p>
+        <div class="sample">{"ok":false,"missing":["DB_URL"],"extra":["OLD_KEY"]}</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="community">
+  <div class="wrap reveal">
+    <h2>Built in the open</h2>
+    <p class="sub">env-saaf grows in public — and contributors are already shaping it. Thank you.</p>
+    <div class="people">
+      <div class="person">
+        <div class="who">abdul-karim-mia</div>
+        <div class="what">Our first outside contributor — fixed <b>scanCode</b> missing variables declared with <b>let</b> and <b>var</b>. Shipped in v1.1.0.</div>
+      </div>
+      <div class="person">
+        <div class="who">HarshRajSinghania</div>
+        <div class="what">Added the <b>--json</b> flag for machine-readable CLI output. Landing in v1.2.0.</div>
+      </div>
+      <div class="person">
+        <div class="who">Your name here</div>
+        <div class="what">Good first issues are open and labelled. Pick one, open a pull request, get credited on this page. <a href="https://github.com/abhi478jeetur-rgb/env-saaf/labels/good%20first%20issue">Browse good first issues →</a></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap reveal">
+    <h2>Questions</h2>
+    <div class="faq">
+      <details>
+        <summary>Zero dependencies — really?</summary>
+        <p>Really. env-saaf has no runtime dependencies at all: what you install is the package itself, nothing else. That means faster installs, a smaller audit surface, and nothing transitive to break later.</p>
+      </details>
+      <details>
+        <summary>How is this different from dotenv?</summary>
+        <p>dotenv loads a file into <code>process.env</code>; env-saaf makes sure what is there is actually valid — typed, present and allowed. Use env-saaf's <code>loadEnv</code> to do both in one call, or keep dotenv and validate <code>process.env</code> right after it loads.</p>
+      </details>
+      <details>
+        <summary>What happens when validation fails?</summary>
+        <p>Your app stops at startup with one <code>EnvSaafError</code> listing every problem — missing, invalid and unexpected variables together. Failing loudly at boot beats failing quietly in production.</p>
+      </details>
+      <details>
+        <summary>Does it work with TypeScript?</summary>
+        <p>Yes. env-saaf ships its own type definitions, and the validated result is inferred from your schema — <code>env.PORT</code> is typed as a number, not a string.</p>
+      </details>
+      <details>
+        <summary>Which Node versions are supported?</summary>
+        <p>Node.js 16 and newer.</p>
+      </details>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    <div>
+      <a href="https://github.com/abhi478jeetur-rgb/env-saaf">GitHub</a> ·
+      <a href="https://www.npmjs.com/package/env-saaf">npm</a> ·
+      <a href="https://abhi478jeetur-rgb.github.io/env-saaf/">Docs site</a>
+    </div>
+    <p style="margin-top:14px">MIT © 2026 Abhijeet Kumar · <i>saaf</i> (साफ़) — Hindi for clean, clear.</p>
+  </div>
+</footer>
+
+<script>
+function copyInstall(btn){
+  var done = function(){ btn.textContent = 'Copied!'; setTimeout(function(){ btn.textContent = 'Copy'; }, 1600); };
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText('npm install env-saaf').then(done, done);
+  } else { done(); }
+}
+
+/* terminal: line-by-line scenes, looping */
+var scenes = [
+  [
+    '<span class="p">$</span> npm install env-saaf',
+    '<span class="dim">added 1 package — and 0 dependencies</span>',
+    '<span class="p">$</span> node server.js',
+    '<span class="ok">✓ Environment OK — 6 variables validated</span>',
+    '<span class="dim">→ listening on http://localhost:3000</span>'
+  ],
+  [
+    '<span class="p">$</span> node server.js',
+    '<span class="err">✗ EnvSaafError: 3 problems with your environment</span>',
+    '  • <span class="key">PORT</span> — expected a port (1–65535), got <span class="str">"abc"</span>',
+    '  • <span class="key">API_KEY</span> — missing (required)',
+    '  • <span class="key">MODE</span> — expected development | production, got <span class="str">"prod"</span>',
+    '<span class="dim">Fix all three in one pass — no crash-fix-crash loop.</span>'
+  ],
+  [
+    '<span class="p">$</span> npx env-saaf check --json',
+    '<span class="dim">{</span> <span class="key">"ok"</span>: <span class="err">false</span>, <span class="key">"missing"</span>: [<span class="str">"DB_URL"</span>], <span class="key">"extra"</span>: [<span class="str">"OLD_KEY"</span>] <span class="dim">}</span>',
+    '<span class="p">$</span> npx env-saaf scan',
+    '<span class="ok">✓ 14 process.env reads — all declared in .env.example</span>'
+  ]
+];
+var termBody = document.getElementById('termBody');
+var cursorEl = document.createElement('span'); cursorEl.className = 'cursor';
+var sceneIdx = 0;
+function showScene(){
+  var lines = scenes[sceneIdx];
+  termBody.innerHTML = '';
+  lines.forEach(function(html, i){
+    setTimeout(function(){
+      var div = document.createElement('div'); div.innerHTML = html;
+      termBody.appendChild(div); termBody.appendChild(cursorEl);
+    }, 300 * (i + 1));
+  });
+  setTimeout(function(){ sceneIdx = (sceneIdx + 1) % scenes.length; showScene(); }, 300 * lines.length + 3600);
+}
+showScene();
+
+/* playground: mirrors env-saaf validation rules for the fixed schema above */
+function esc(s){ return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+var BOOLS = {'true':1,'false':0,'1':1,'0':0,'yes':1,'no':0,'on':1,'off':0,'y':1,'n':0};
+function pgValidate(){
+  var get = function(id){ return document.getElementById(id).value.trim(); };
+  var errors = [], out = {};
+  var portRaw = get('pgPORT');
+  if (!portRaw) { errors.push(['PORT', 'missing (required)']); }
+  else if (!/^\d+$/.test(portRaw) || +portRaw < 1 || +portRaw > 65535) { errors.push(['PORT', 'expected a port (1–65535), got "' + esc(portRaw) + '"']); }
+  else { out.PORT = +portRaw; }
+  var dbgRaw = get('pgDEBUG'), dbg = dbgRaw.toLowerCase();
+  if (!dbgRaw) { out.DEBUG = false; }
+  else if (dbg in BOOLS) { out.DEBUG = !!BOOLS[dbg]; }
+  else { errors.push(['DEBUG', 'expected a boolean (true/false), got "' + esc(dbgRaw) + '"']); }
+  var key = get('pgAPIKEY');
+  if (!key) { errors.push(['API_KEY', 'missing (required)']); } else { out.API_KEY = key; }
+  var mode = get('pgMODE');
+  if (!mode) { out.MODE = 'development'; }
+  else if (mode === 'development' || mode === 'production') { out.MODE = mode; }
+  else { errors.push(['MODE', 'expected one of development | production, got "' + esc(mode) + '"']); }
+  var box = document.getElementById('pgOut');
+  if (errors.length) {
+    box.innerHTML = '<span class="bad">✗ EnvSaafError: ' + errors.length + ' problem' + (errors.length > 1 ? 's' : '') + '</span>\n\n' +
+      errors.map(function(e){ return '  • ' + e[0] + ' — ' + e[1]; }).join('\n');
+  } else {
+    var fmt = function(k){
+      var v = out[k];
+      var shown = (typeof v === 'string') ? '"' + esc(v) + '"' : String(v);
+      return '  ' + k + ': ' + shown + '   <span style="color:#5b6284">// ' + (typeof v) + '</span>';
+    };
+    box.innerHTML = '<span class="good">✓ Environment OK</span>\n\n{\n' +
+      ['PORT','DEBUG','API_KEY','MODE'].map(fmt).join(',\n') + '\n}';
+  }
+}
+pgValidate();
+
+/* reveal on scroll */
+var io = new IntersectionObserver(function(entries){
+  entries.forEach(function(en){ if (en.isIntersecting) { en.target.classList.add('in'); io.unobserve(en.target); } });
+}, { threshold: 0.08 });
+document.querySelectorAll('.reveal').forEach(function(el){ io.observe(el); });
+</script>
+</body>
+</html>
