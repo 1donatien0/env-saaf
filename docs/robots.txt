@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://abhi478jeetur-rgb.github.io/env-saaf/sitemap.xml
