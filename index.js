@@ -28,9 +28,9 @@ function coerce(key, raw, type) {
     case 'boolean': {
       if (typeof v === 'boolean') return v;
       const s = String(v).toLowerCase();
-      if (['true', '1', 'yes'].includes(s)) return true;
-      if (['false', '0', 'no'].includes(s)) return false;
-      throw new Error(`${key}: expected a boolean (true/false), got "${raw}"`);
+      if (['true', '1', 'yes', 'on', 'y'].includes(s)) return true;
+      if (['false', '0', 'no', 'off', 'n'].includes(s)) return false;
+      throw new Error(`${key}: expected a boolean (true/false, yes/no, on/off, 1/0, y/n), got "${raw}"`);
     }
     case 'url': {
       // Validate karke ASLI string hi lautaao. new URL(...).toString() value ko
