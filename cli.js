@@ -14,6 +14,12 @@ const { scanDir, parseEnvFile, diffEnv } = require('./index');
 
 const argv = process.argv.slice(2);
 const cmd = argv[0];
+const USAGE = 'Usage: env-saaf check [dir] [--file name] | env-saaf scan [dir] | env-saaf example [dir]';
+// --help / -h / help: usage dikhao, exit 0 (help maangna error nahi hai — pehle exit 2 milta tha)
+if (cmd === '--help' || cmd === '-h' || cmd === 'help') {
+  console.log(USAGE);
+  process.exit(0);
+}
 // --file <name> ya --file=<name> (sirf 'check' ke liye): tulna kis file se karni hai
 let fileOpt = '.env.example';
 const positional = [];
@@ -47,6 +53,6 @@ if (cmd === 'scan') {
   used.forEach(k => lines.push(`${k}=`));
   console.log(lines.join('\n'));
 } else {
-  console.log('Usage: env-saaf check [dir] [--file name] | env-saaf scan [dir] | env-saaf example [dir]');
+  console.log(USAGE);
   process.exit(cmd ? 2 : 0);
 }
