@@ -21,7 +21,6 @@ assert.deepStrictEqual(diffEnv(['A', 'B'], ['A', 'C']), { usedNotDocumented: ['B
 assert.strictEqual(maskValue('sk_live_123456'), 'sk***56');
 assert.strictEqual(maskValue('abc'), '****');
 assert.deepStrictEqual(maskSecrets({ KEY: 'sk_live_123456' }), { KEY: 'sk***56' });
-
 // v1.0.0: generateExample — sirf placeholder/default, asli secret kabhi nahi
 const ex = generateExample({ PORT: { type: 'port', required: true }, API_KEY: { type: 'string', required: true } });
 assert.ok(ex.includes('PORT=3000'));
@@ -107,7 +106,7 @@ assert.ok(!ex.includes('sk_live'));
   fs.rmSync(dir, { recursive: true, force: true });
 }
 
-// feat: strict mode — schema se bahar ke set variables flag karo (fixes #4)
+// feat: strict mode — schema se bahari ke set variables flag karo (fixes #4)
 {
   const schema = { PORT: { type: 'port', required: true } };
   // non-strict (default): extra keys ignore hote hain
@@ -117,7 +116,7 @@ assert.ok(!ex.includes('sk_live'));
     () => validateEnv(schema, { PORT: '3000', DATABSE_URL: 'x' }, { strict: true }),
     /DATABSE_URL: set but not in schema/
   );
-  // khaali value strict me bhi ignore (missing jaisi)
+  // khali value strict me bhi ignore (missing jaisi)
   assert.strictEqual(validateEnv(schema, { PORT: '3000', EMPTY_VAR: '' }, { strict: true }).PORT, 3000);
   // ek hi pass me saari problems: unknown + missing
   assert.throws(
@@ -213,6 +212,48 @@ assert.ok(!ex.includes('sk_live'));
   // no-args ab bhi usage + exit 0
   const outNone = execFileSync('node', [cli], { encoding: 'utf8' });
   assert.ok(outNone.includes('Usage: env-saaf'));
+}
+
+// Issue #24: CLI --json output for check and scan
+{
+  const { execFileSync } = require('node:child_process');
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const path = require('node:path');
+  const cli = path.join(__dirname, 'cli.js');
+
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'env-saaf-json-'));
+  fs.writeFileSync(path.join(dir, 'app.js'), 'const x = process.env.MISSING_KEY;\nconst y = process.env.OK_KEY;');
+  fs.writeFileSync(path.join(dir, '.env.example'), 'OK_KEY=1\nEXTRA_KEY=2\n');
+
+  // check --json: missing used-not-documented, extra documented-not-used, ok false, exit 1
+  let code = 0;
+  let out = '';
+  try {
+    out = execFileSync('node', [cli, 'check', dir, '--json'], { encoding: 'utf8' });
+  } catch (e) {
+    code = e.status;
+    out = e.stdout;
+  }
+  assert.strictEqual(code, 1);
+  const parsed = JSON.parse(out);
+  assert.strictEqual(parsed.ok, false);
+  assert.deepStrictEqual(parsed.missing, ['MISSING_KEY']);
+  assert.deepStrictEqual(parsed.extra, ['EXTRA_KEY']);
+  assert.deepStrictEqual(parsed.invalid, []);
+
+  // scan --json: lists vars, ok true, exit 0
+  const scanOut = execFileSync('node', [cli, 'scan', dir, '--json'], { encoding: 'utf8' });
+  const scanParsed = JSON.parse(scanOut);
+  assert.strictEqual(scanParsed.ok, true);
+  assert.deepStrictEqual(scanParsed.vars.sort(), ['MISSING_KEY', 'OK_KEY']);
+
+  // human output still default (no --json)
+  const humanOut = execFileSync('node', [cli, 'scan', dir], { encoding: 'utf8' });
+  assert.ok(humanOut.includes('MISSING_KEY'));
+  assert.ok(!humanOut.includes('{'));
+
+  fs.rmSync(dir, { recursive: true, force: true });
 }
 
 console.log('env-saaf v1.1.0: all tests passed');
