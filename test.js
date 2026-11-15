@@ -307,4 +307,66 @@ assert.deepStrictEqual(
   fs.rmSync(dir, { recursive: true, force: true });
 }
 
+// Issue #34: per-key 'transform' — custom parsing after coercion
+{
+  const { validateEnv, loadEnv } = require('./index');
+  // the issue's own examples: split a comma list, normalise case
+  const t1 = validateEnv({
+    ALLOWED_ORIGINS: { type: 'string', transform: v => v.split(',').map(s => s.trim()) },
+    SHOUTY_NAME: { type: 'string', transform: v => v.toUpperCase() },
+  }, { ALLOWED_ORIGINS: 'a.com, b.com ,c.com', SHOUTY_NAME: 'hello' });
+  assert.deepStrictEqual(t1.ALLOWED_ORIGINS, ['a.com', 'b.com', 'c.com']);
+  assert.strictEqual(t1.SHOUTY_NAME, 'HELLO');
+  // transform runs AFTER coercion and the choices check: a port arrives as a number
+  const t2 = validateEnv({ PORT_PLUS: { type: 'port', transform: n => n + 1 } }, { PORT_PLUS: '3000' });
+  assert.strictEqual(t2.PORT_PLUS, 3001);
+  // a choices failure skips the transform entirely
+  let transformCalled = false;
+  assert.throws(
+    () => validateEnv(
+      { MODE: { type: 'string', choices: ['a', 'b'], transform: v => { transformCalled = true; return v; } } },
+      { MODE: 'c' }
+    ),
+    /expected one of/
+  );
+  assert.strictEqual(transformCalled, false);
+  // a throwing transform is collected as a normal validation error, naming the key —
+  // and it does not hide the other keys' errors
+  assert.throws(
+    () => validateEnv({
+      BAD: { type: 'string', transform: () => { throw new Error('nope'); } },
+      MISSING: { type: 'string', required: true },
+    }, { BAD: 'x' }),
+    (e) => e instanceof EnvSaafError
+      && e.errors.length === 2
+      && e.errors.some(m => m.includes('BAD: transform failed: nope'))
+      && e.errors.some(m => m.includes('MISSING: missing'))
+  );
+  // transform does NOT run on defaults — a default passes through untouched
+  let defaultTransformed = false;
+  const t3 = validateEnv(
+    { GREETING: { type: 'string', default: 'hi', transform: v => { defaultTransformed = true; return v + '!'; } } },
+    {}
+  );
+  assert.strictEqual(t3.GREETING, 'hi');
+  assert.strictEqual(defaultTransformed, false);
+  // a non-function transform is a schema error naming the key
+  assert.throws(
+    () => validateEnv({ A: { type: 'string', transform: 'split' } }, { A: 'x' }),
+    /A: "transform" must be a function/
+  );
+  // end-to-end: loadEnv applies transforms too (it validates through validateEnv)
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const path = require('node:path');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'env-saaf-transform-'));
+  fs.writeFileSync(path.join(dir, '.env'), 'ALLOWED_ORIGINS=a.com, b.com\n');
+  const loaded = loadEnv(
+    { ALLOWED_ORIGINS: { type: 'string', required: true, transform: v => v.split(',').map(s => s.trim()) } },
+    { path: path.join(dir, '.env'), env: {} }
+  );
+  assert.deepStrictEqual(loaded.ALLOWED_ORIGINS, ['a.com', 'b.com']);
+  fs.rmSync(dir, { recursive: true, force: true });
+}
+
 console.log('env-saaf v1.1.0: all tests passed');

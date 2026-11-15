@@ -71,6 +71,22 @@ function validateEnv(schema, env = process.env, options = {}) {
         errors.push(`${key}: expected one of [${rule.choices.join(', ')}], got "${raw}"`);
         continue;
       }
+      // transform: one custom step after coercion and the choices check.
+      // It runs only on values actually provided (not on defaults). A
+      // throwing transform is collected like any other validation error,
+      // with the key named — never thrown raw.
+      if (rule.transform !== undefined) {
+        if (typeof rule.transform !== 'function') {
+          errors.push(`${key}: "transform" must be a function`);
+          continue;
+        }
+        try {
+          out[key] = rule.transform(val);
+        } catch (e) {
+          errors.push(`${key}: transform failed: ${e.message}`);
+        }
+        continue;
+      }
       out[key] = val;
     } catch (e) { errors.push(e.message); }
   }
