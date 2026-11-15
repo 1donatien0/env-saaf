@@ -196,4 +196,23 @@ assert.ok(!ex.includes('sk_live'));
   assert.strictEqual(parsed.DEBUG, false);
 }
 
+// Issue #19: CLI '--help' / '-h' — usage dikhao, exit 0 (help maangna error nahi)
+{
+  const { execFileSync } = require('node:child_process');
+  const path = require('node:path');
+  const cli = path.join(__dirname, 'cli.js');
+  // --help aur -h: exit 0, usage text stdout par
+  const outHelp = execFileSync('node', [cli, '--help'], { encoding: 'utf8' });
+  assert.ok(outHelp.includes('Usage: env-saaf'));
+  const outH = execFileSync('node', [cli, '-h'], { encoding: 'utf8' });
+  assert.ok(outH.includes('Usage: env-saaf'));
+  // unknown command ab bhi exit 2 deta hai
+  let code = 0;
+  try { execFileSync('node', [cli, 'frobnicate'], { stdio: 'pipe' }); } catch (e) { code = e.status; }
+  assert.strictEqual(code, 2);
+  // no-args ab bhi usage + exit 0
+  const outNone = execFileSync('node', [cli], { encoding: 'utf8' });
+  assert.ok(outNone.includes('Usage: env-saaf'));
+}
+
 console.log('env-saaf v1.0.0: all tests passed');
