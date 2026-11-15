@@ -5,6 +5,12 @@ export interface EnvRule {
   required?: boolean;
   default?: string | number | boolean;
   choices?: Array<string | number | boolean>;
+  /**
+   * Custom step applied after coercion and the `choices` check; its return
+   * value is what lands in the result (e.g. split a comma list into an
+   * array). Runs only on values actually provided, not on `default`s.
+   */
+  transform?: (value: any) => any;
 }
 
 export type EnvSchema = Record<string, EnvRule>;
@@ -13,8 +19,10 @@ export type EnvSchema = Record<string, EnvRule>;
  * The value type of a rule, from the schema's `type` field:
  * 'number' / 'port' -> number, 'boolean' -> boolean,
  * everything else (string / url / no type given) -> string.
+ * A rule with a `transform` returns the transform's return type instead.
  */
 export type EnvValue<R extends EnvRule> =
+  R extends { transform: (value: any) => infer T } ? T :
   R extends { type: 'number' } ? number :
   R extends { type: 'port' } ? number :
   R extends { type: 'boolean' } ? boolean :

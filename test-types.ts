@@ -1,6 +1,6 @@
-// env-saaf type tests — checked by `tsc` only (part of `npm test`).
-// Nothing runs at runtime: this file only verifies TypeScript inference.
-// Issue #7: the return type of validateEnv must be inferred from the schema.
+// env-saaf type tests — sirf `tsc` se check hote hain (`npm test` me shamil).
+// Runtime me kuch nahi chalta: ye file sirf TypeScript inference verify karti hai.
+// Issue #7: validateEnv ka return type schema se infer hona chahiye.
 import { validateEnv, EnvSchema, EnvResult } from './index';
 
 const env = validateEnv({
@@ -17,29 +17,40 @@ const port: number = env.PORT;
 const count: number = env.COUNT;
 const url: string = env.API_URL;
 const mode: string = env.MODE;
-// optional keys: value or undefined
+// optional keys: value ya undefined
 const debug: boolean | undefined = env.DEBUG;
 const name: string | undefined = env.NAME;
 
-// number methods must work (the real gap from issue #7)
+// number methods chalne chahiye (issue #7 ka asli gap)
 const doubled: number = env.PORT * 2;
 const fixed: string = env.COUNT.toFixed(0);
 
-// EnvResult can also be used directly
+// EnvResult seedha bhi use ho sakta hai
 type MyEnv = EnvResult<{ PORT: { type: 'port'; required: true }; DEBUG: { type: 'boolean' } }>;
 const myPort: number = null as unknown as MyEnv['PORT'];
 const myDebug: boolean | undefined = null as unknown as MyEnv['DEBUG'];
 
-// @ts-expect-error — PORT is a number, not a string
+// @ts-expect-error — PORT number hai, string nahi
 const wrongType: string = env.PORT;
-// @ts-expect-error — unknown key: not in the schema
+// @ts-expect-error — galat key: schema me nahi hai
 const typo = env.TYPO_KEY;
-// @ts-expect-error — an optional key can be undefined, not a plain boolean
+// @ts-expect-error — optional key undefined ho sakti hai, seedha boolean nahi
 const debugStrict: boolean = env.DEBUG;
 
-// a loose schema (e.g. a variable typed as EnvSchema) falls back to the loose record
+// Issue #34: a transform's return type is the result type for that key
+const transformed = validateEnv({
+  ALLOWED_ORIGINS: { type: 'string', required: true, transform: (v: string) => v.split(',').map(s => s.trim()) },
+  SHOUTY_NAME: { type: 'string', transform: (v: string) => v.toUpperCase() },
+});
+const origins: string[] = transformed.ALLOWED_ORIGINS;
+const shouty: string | undefined = transformed.SHOUTY_NAME;
+
+// @ts-expect-error — ALLOWED_ORIGINS is string[], not string
+const originsWrong: string = transformed.ALLOWED_ORIGINS;
+
+// loose schema (jaise EnvSchema type ka variable) par purana loose record milta hai
 const looseSchema: EnvSchema = { PORT: { type: 'port', required: true } };
 const loose = validateEnv(looseSchema);
 const looseValue: string | number | boolean = loose.ANYTHING;
 
-export { port, count, url, mode, debug, name, doubled, fixed, wrongType, typo, debugStrict, myPort, myDebug, looseValue };
+export { port, count, url, mode, debug, name, doubled, fixed, wrongType, typo, debugStrict, myPort, myDebug, looseValue, origins, shouty, originsWrong };

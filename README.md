@@ -46,6 +46,20 @@ const env = validateEnv(schema, process.env, { strict: true });
 
 Default stays off — many apps share one environment with other tools.
 
+### Per-key `transform` — one custom step after coercion
+
+Some values need one small custom step after type coercion that env-saaf cannot guess — splitting a comma-separated list, normalising case:
+
+```js
+const env = validateEnv({
+  ALLOWED_ORIGINS: { type: 'string', transform: v => v.split(',').map(s => s.trim()) },
+  SHOUTY_NAME:     { type: 'string', transform: v => v.toUpperCase() },
+});
+// env.ALLOWED_ORIGINS is an array, env.SHOUTY_NAME is upper-cased
+```
+
+The transform runs after coercion and after the `choices` check; if it throws, the error is collected like any other validation error (with the key named). It runs only on values actually provided — not on `default` values. In TypeScript the result type for that key is inferred from the transform's return type.
+
 ### Loading a real `.env` file
 
 One call does it — read the file, parse it, validate it:
