@@ -256,4 +256,55 @@ assert.ok(!ex.includes('sk_live'));
   fs.rmSync(dir, { recursive: true, force: true });
 }
 
+// Issue #30: parseEnvFile — multiline quoted values keep their newlines
+// (PEM keys, JSON blobs); the key after the closing quote still parses.
+assert.deepStrictEqual(
+  parseEnvFile('KEY="-----BEGIN-----\nabc123\n-----END-----"\nNEXT=ok\n'),
+  { KEY: '-----BEGIN-----\nabc123\n-----END-----', NEXT: 'ok' });
+assert.deepStrictEqual(
+  parseEnvFile("KEY='line1\nline2' # trailing\nNEXT=ok\n"),
+  { KEY: 'line1\nline2', NEXT: 'ok' });
+
+// Issue #22: parseEnvFile — ${VAR} interpolation in double-quoted and
+// unquoted values; the file's own values win over process.env; nested
+// references expand; single-quoted and \${...} escapes stay literal;
+// unknown names expand to an empty string.
+assert.deepStrictEqual(
+  parseEnvFile('HOST=example.com\nURL=https://${HOST}/api\n'),
+  { HOST: 'example.com', URL: 'https://example.com/api' });
+assert.deepStrictEqual(
+  parseEnvFile('A=hello\nB=${A} world\nC=${B}!\n'),
+  { A: 'hello', B: 'hello world', C: 'hello world!' });
+assert.deepStrictEqual(
+  parseEnvFile("A=hello\nB='${A}'\n"),
+  { A: 'hello', B: '${A}' });
+assert.deepStrictEqual(
+  parseEnvFile('A=hello\nB=\\${A}\n'),
+  { A: 'hello', B: '${A}' });
+assert.deepStrictEqual(
+  parseEnvFile('B=x${MISSING_VAR}y\n'),
+  { B: 'xy' });
+
+// Issue #25: loadEnv — multiple files; later files override earlier ones,
+// via `paths: [...]` or `path` as an array.
+{
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const path = require('node:path');
+  const { loadEnv } = require('./index');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'env-saaf-multi-'));
+  const f1 = path.join(dir, '.env');
+  const f2 = path.join(dir, '.env.local');
+  fs.writeFileSync(f1, 'PORT=3000\nHOST=base\n');
+  fs.writeFileSync(f2, 'HOST=local\n');
+  const merged = loadEnv(
+    { PORT: { type: 'port', required: true }, HOST: { type: 'string', required: true } },
+    { paths: [f1, f2], env: {} });
+  assert.strictEqual(merged.PORT, 3000);
+  assert.strictEqual(merged.HOST, 'local');
+  const viaArray = loadEnv({ HOST: { type: 'string' } }, { path: [f1, f2], env: {} });
+  assert.strictEqual(viaArray.HOST, 'local');
+  fs.rmSync(dir, { recursive: true, force: true });
+}
+
 console.log('env-saaf v1.1.0: all tests passed');

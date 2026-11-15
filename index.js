@@ -91,20 +91,33 @@ function validateEnv(schema, env = process.env, options = {}) {
  * (has a default or is not required).
  */
 function loadEnv(schema, options = {}) {
-  const { path: filePath = '.env', env = process.env, override = false, assign = false, ...rest } = options;
-  let fileText = null;
-  try {
-    fileText = fs.readFileSync(filePath, 'utf8');
-  } catch (e) {
-    if (e.code !== 'ENOENT') throw e;
+  const { path: pathOpt = '.env', paths: pathsOpt, env = process.env, override = false, assign = false, ...rest } = options;
+  // One file or several: `path` may be a string or an array of strings, or
+  // pass `paths: [...]`. Files are read in order and LATER files win over
+  // earlier ones (e.g. ['.env', '.env.local']). Missing files in a list are
+  // skipped; only when NO file is found does the missing-file rule below run.
+  const fileList = pathsOpt !== undefined ? pathsOpt : (Array.isArray(pathOpt) ? pathOpt : [pathOpt]);
+  const fileEnv = {};
+  let foundAny = false;
+  for (const filePath of fileList) {
+    let fileText;
+    try {
+      fileText = fs.readFileSync(filePath, 'utf8');
+    } catch (e) {
+      if (e.code !== 'ENOENT') throw e;
+      continue;
+    }
+    foundAny = true;
+    Object.assign(fileEnv, parseEnvFile(fileText));
+  }
+  if (!foundAny) {
     const needed = Object.entries(schema)
       .filter(([, rule]) => rule.required && rule.default === undefined)
       .map(([key]) => key);
     if (needed.length) {
-      throw new Error(`env-saaf: .env file not found: ${filePath} (required variables missing: ${needed.join(', ')})`);
+      throw new Error(`env-saaf: .env file not found: ${fileList.join(', ')} (required variables missing: ${needed.join(', ')})`);
     }
   }
-  const fileEnv = fileText === null ? {} : parseEnvFile(fileText);
   const merged = override ? { ...env, ...fileEnv } : { ...fileEnv, ...env };
   const validated = validateEnv(schema, merged, rest);
   if (assign) {
@@ -113,28 +126,67 @@ function loadEnv(schema, options = {}) {
   return validated;
 }
 
-/** Parse .env text -> { KEY: value }. Handles quotes, `export `, comments. */
+/** Parse .env text -> { KEY: value }. Handles quotes, `export `, comments,
+ * multiline quoted values, and ${VAR} interpolation. */
 function parseEnvFile(text) {
-  const out = {};
-  for (const line of String(text).split(/\r?\n/)) {
-    const t = line.trim();
+  const raw = {};     // key -> value with quotes removed and comments stripped
+  const quoteOf = {}; // key -> 'single' | 'double' | 'none'
+  const lines = String(text).split(/\r?\n/);
+  for (let i = 0; i < lines.length; i++) {
+    const t = lines[i].trim();
     if (!t || t.startsWith('#')) continue;
     const m = t.replace(/^export\s+/, '').match(/^([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$/);
     if (!m) continue;
+    const key = m[1];
     let val = m[2].trim();
+    let quote = 'none';
     if (val.startsWith('"') || val.startsWith("'")) {
-      // Quoted value: '#' inside quotes is safe; strip any comment after the closing quote
+      // Quoted value: '#' inside quotes is safe; any comment after the closing
+      // quote is dropped because only the quoted span is kept
       // (NAME="x # y" -> x # y; NAME="x" # note -> x)
+      quote = val[0] === '"' ? 'double' : 'single';
       const q = val[0];
-      const end = val.indexOf(q, 1);
-      val = end === -1 ? val : val.slice(1, end);
+      let end = val.indexOf(q, 1);
+      // Multiline value: the closing quote is not on this line, so keep
+      // consuming lines (with their newlines) until it appears
+      // (PRIVATE_KEY="-----BEGIN-----\n...\n-----END-----")
+      while (end === -1 && i + 1 < lines.length) {
+        i++;
+        val += '\n' + lines[i];
+        end = val.indexOf(q, 1);
+      }
+      val = end === -1 ? val.slice(1) : val.slice(1, end);
     } else {
       // Unquoted value: a '#' at the start of the value or after whitespace begins an inline comment
       // (PORT=3000 # my port -> 3000; a '#frag' inside a URL without a preceding space is safe)
       const hash = val.search(/(^|\s)#/);
       if (hash !== -1) val = val.slice(0, hash).trim();
     }
-    out[m[1]] = val;
+    raw[key] = val;
+    quoteOf[key] = quote;
+  }
+  // Interpolation: ${VAR} inside double-quoted and unquoted values expands
+  // from values defined in this file first, then process.env. Single-quoted
+  // values stay literal. \${VAR} is an escape and also stays literal. Unknown
+  // names expand to an empty string. Expansion repeats (at most 5 rounds) so
+  // a value may reference another interpolated value; cycles stop at the cap.
+  const ESC = String.fromCharCode(92) + '${'; // literal backslash + ${ — an escaped reference
+  const PH = String.fromCharCode(1); // placeholder char that cannot appear in real .env text
+  const expandRefs = (s) => s.replace(/\$\{([A-Za-z_][A-Za-z0-9_]*)\}/g, (_, name) =>
+    Object.prototype.hasOwnProperty.call(raw, name) ? raw[name].split(ESC).join(PH)
+      : (process.env[name] !== undefined ? process.env[name] : ''));
+  const out = {};
+  for (const [key, val] of Object.entries(raw)) {
+    if (quoteOf[key] === 'single') { out[key] = val; continue; }
+    // Escapes are protected BEFORE the rounds and restored only AFTER them,
+    // so a restored ${VAR} is never re-expanded by a later round.
+    let v = val.split(ESC).join(PH);
+    for (let round = 0; round < 5; round++) {
+      const next = expandRefs(v);
+      if (next === v) break;
+      v = next;
+    }
+    out[key] = v.split(PH).join('${');
   }
   return out;
 }
