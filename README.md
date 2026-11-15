@@ -61,6 +61,22 @@ const env = loadEnv({
 
 Options: `{ path: '.env.local' }` to read another file, `{ override: true }` to let the file win over `process.env` (by default existing `process.env` values win), `{ assign: true }` to write the validated values back into `process.env` as strings. A missing file throws a clear error unless every variable is optional. By default `process.env` is never mutated.
 
+Several files can be layered — later files override earlier ones:
+
+```js
+const env = loadEnv(schema, { paths: ['.env', '.env.local'] });
+// or: { path: ['.env', '.env.local'] }
+```
+
+Values may reference other values with `${VAR}` — handy for building URLs from parts. References resolve from the same file first, then `process.env`; single-quoted values and `\${VAR}` escapes stay literal:
+
+```env
+HOST=example.com
+API_URL=https://${HOST}/api
+```
+
+Quoted values may also span several lines (PEM keys, JSON blobs) — parsing continues until the closing quote.
+
 The manual way still works too — parse the file and pass it in:
 
 ```js

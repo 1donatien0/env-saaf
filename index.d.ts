@@ -50,7 +50,10 @@ export interface ValidateOptions {
 export function validateEnv<S extends EnvSchema>(schema: S, env?: Record<string, string | undefined>, options?: ValidateOptions): EnvResult<S>;
 
 export interface LoadEnvOptions {
-  path?: string;
+  /** One file, or several files in order (later files win). */
+  path?: string | string[];
+  /** Alias for passing several files at once. */
+  paths?: string[];
   env?: Record<string, string | undefined>;
   override?: boolean;
   assign?: boolean;

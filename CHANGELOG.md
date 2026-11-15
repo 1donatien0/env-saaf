@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Added: `parseEnvFile` now expands `${VAR}` references in double-quoted and unquoted values — the file's own values first, then `process.env`; nested references expand too, single-quoted values and `\${VAR}` escapes stay literal, unknown names expand to an empty string (fixes #22)
+- Added: `loadEnv` accepts multiple files — `path` may be an array or use `paths: [...]`; files are read in order and later files override earlier ones, e.g. `['.env', '.env.local']` (fixes #25)
+- Fixed: `parseEnvFile` no longer breaks on multiline quoted values (PEM keys, JSON blobs) — a quoted value now continues until its closing quote (fixes #30)
 - Added: CLI `check` and `scan` accept `--json` for machine-readable output (`{ ok, missing, extra, invalid }` for check; `{ ok, vars }` for scan). Exit codes unchanged. Human-readable output remains the default.
 
 ## 1.1.0
