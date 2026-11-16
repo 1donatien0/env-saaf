@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Docs: add four `validateEnv` recipes for database settings, feature flags, optional analytics keys, and development/production schemas.
+
 - Docs: landing page quick-start example now shows the new `email` type.
 - Added: `email` type — pragmatic email validation (one `@`, non-empty local/domain, a dot in the domain); plus a `pattern` option for strings — a `RegExp` the value must match (e.g. slugs, prefixed keys like `sk_...`), with the mismatch error naming the pattern (fixes #23)
 - Tests: CLI scanning now has regression coverage for TypeScript namespaces, enums, const assertions, destructuring, and bracket reads (fixes #70).

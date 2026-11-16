@@ -51,6 +51,8 @@ Default stays off — many apps share one environment with other tools.
 Some values need one small custom step after type coercion that env-saaf cannot guess — splitting a comma-separated list, normalising case:
 
 ```js
+const { validateEnv } = require('env-saaf');
+
 const env = validateEnv({
   ALLOWED_ORIGINS: { type: 'string', transform: v => v.split(',').map(s => s.trim()) },
   SHOUTY_NAME:     { type: 'string', transform: v => v.toUpperCase() },
@@ -140,6 +142,81 @@ env.TYPO;            // TypeScript error — not in the schema
 ```
 
 Pass the schema inline to `validateEnv(...)` (or use `as const`) so TypeScript can see the literal types. The `EnvResult<S>` and `EnvValue<R>` types are also exported separately.
+
+## Recipes
+
+These short patterns use only `validateEnv` options available in the current API.
+
+### Database URL and connection-pool size
+
+```js
+const { validateEnv } = require('env-saaf');
+
+const env = validateEnv({
+  DATABASE_URL: { type: 'url', required: true },
+  DB_POOL_SIZE: { type: 'number', default: 10 },
+});
+// env.DATABASE_URL is present; env.DB_POOL_SIZE is a number.
+```
+
+`url` validates URL syntax, while `number` converts the pool size from its environment string.
+
+### Feature flags
+
+```js
+const { validateEnv } = require('env-saaf');
+
+const env = validateEnv({
+  ENABLE_EXPORTS: { type: 'boolean', default: false },
+  ENABLE_PREVIEW: { type: 'boolean', default: false },
+});
+
+if (env.ENABLE_EXPORTS) console.log('Exports are enabled');
+```
+
+The boolean type accepts `true`/`false`, `yes`/`no`, `on`/`off`, and `1`/`0` (also `y`/`n`),
+case-insensitively.
+
+### Optional analytics key
+
+```js
+const { validateEnv } = require('env-saaf');
+
+const env = validateEnv({
+  ANALYTICS_WRITE_KEY: { type: 'string' },
+});
+
+if (env.ANALYTICS_WRITE_KEY !== undefined) {
+  console.log('Analytics is configured'); // Use the key with your analytics client; do not log it.
+}
+```
+
+Without `required` or `default`, a missing key is omitted from the result and has the TypeScript
+type `string | undefined`.
+
+### Different development and production requirements
+
+```js
+const { validateEnv } = require('env-saaf');
+
+const mode = validateEnv({
+  NODE_ENV: {
+    type: 'string',
+    choices: ['development', 'test', 'production'],
+    default: 'development',
+  },
+}).NODE_ENV;
+
+const env = validateEnv({
+  DATABASE_URL:
+    mode === 'production'
+      ? { type: 'url', required: true }
+      : { type: 'url', default: 'http://localhost:5432/app' },
+});
+```
+
+Validate the mode first, then choose an ordinary schema in application code. `validateEnv` does not
+provide conditional rules inside a schema.
 
 ### Keep `.env.example` honest (CLI)
 
