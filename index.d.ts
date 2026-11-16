@@ -1,10 +1,16 @@
-export type EnvType = 'string' | 'number' | 'boolean' | 'url' | 'port';
+export type EnvType = 'string' | 'number' | 'boolean' | 'url' | 'port' | 'email';
 
 export interface EnvRule {
   type?: EnvType;
   required?: boolean;
   default?: string | number | boolean;
   choices?: Array<string | number | boolean>;
+  /**
+   * A regular expression a string value must match (e.g. a slug, or a
+   * prefixed key like `sk_...`). Checked after coercion and `choices`,
+   * before `transform`; a mismatch error names the pattern.
+   */
+  pattern?: RegExp;
   /**
    * Custom step applied after coercion and the `choices` check; its return
    * value is what lands in the result (e.g. split a comma list into an

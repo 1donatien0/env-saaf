@@ -60,6 +60,18 @@ const env = validateEnv({
 
 The transform runs after coercion and after the `choices` check; if it throws, the error is collected like any other validation error (with the key named). It runs only on values actually provided — not on `default` values. In TypeScript the result type for that key is inferred from the transform's return type.
 
+### `email` type and `pattern` — validate formats
+
+```js
+const env = validateEnv({
+  ADMIN_EMAIL: { type: 'email', required: true },
+  SLUG:        { type: 'string', pattern: /^[a-z0-9-]+$/ },
+  API_KEY:     { type: 'string', pattern: /^sk_[A-Za-z0-9]+$/ },
+});
+```
+
+The `email` check is pragmatic — one `@`, a non-empty local part and domain, and a dot in the domain — not full RFC 5322. `pattern` takes a `RegExp` that a string value must match; it runs after coercion and the `choices` check, and a mismatch error names the pattern that failed.
+
 ### Loading a real `.env` file
 
 One call does it — read the file, parse it, validate it:

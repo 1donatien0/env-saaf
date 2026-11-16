@@ -20,6 +20,18 @@ function coerce(key, raw, type) {
   const v = typeof raw === 'string' ? raw.trim() : raw;
   switch (type) {
     case 'string': return String(v);
+    case 'email': {
+      // Pragmatic check, not full RFC 5322: one '@', a non-empty local
+      // part and domain, a dot in the domain, and no whitespace.
+      const s = String(v);
+      const at = s.indexOf('@');
+      if (at <= 0 || at !== s.lastIndexOf('@') || at === s.length - 1
+        || !s.slice(at + 1).includes('.') || s.slice(at + 1).startsWith('.')
+        || s.slice(at + 1).endsWith('.') || /\s/.test(s)) {
+        throw new Error(`${key}: expected a valid email address, got "${raw}"`);
+      }
+      return s;
+    }
     case 'number': {
       const n = Number(v);
       if (v === '' || Number.isNaN(n)) throw new Error(`${key}: expected a number, got "${raw}"`);
@@ -70,6 +82,19 @@ function validateEnv(schema, env = process.env, options = {}) {
       if (rule.choices && !rule.choices.includes(val)) {
         errors.push(`${key}: expected one of [${rule.choices.join(', ')}], got "${raw}"`);
         continue;
+      }
+      // pattern: a RegExp a string value must match (slugs, prefixed keys
+      // like `sk_...`). Runs after coercion and the choices check, before
+      // transform; other types skip it. A mismatch names the pattern.
+      if (rule.pattern !== undefined) {
+        if (!(rule.pattern instanceof RegExp)) {
+          errors.push(`${key}: "pattern" must be a RegExp`);
+          continue;
+        }
+        if (typeof val === 'string' && !rule.pattern.test(val)) {
+          errors.push(`${key}: expected to match ${rule.pattern}, got "${raw}"`);
+          continue;
+        }
       }
       // transform: one custom step after coercion and the choices check.
       // It runs only on values actually provided (not on defaults). A
