@@ -129,6 +129,22 @@
   footer{border-top:1px solid var(--line);padding:40px 0 52px;text-align:center;color:var(--muted);font-size:14.5px;margin-top:70px}
   footer a{margin:0 10px}
 </style>
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "SoftwareApplication",
+  "name": "env-saaf",
+  "applicationCategory": "DeveloperApplication",
+  "operatingSystem": "Node.js 16+",
+  "softwareVersion": "1.2.0",
+  "license": "https://opensource.org/licenses/MIT",
+  "author": { "@type": "Person", "name": "Abhijeet Kumar" },
+  "description": "Zero-dependency validator for Node.js environment variables: typed values, every error reported at once, a CLI that keeps .env.example honest, and secret masking.",
+  "url": "https://env-saaf.vercel.app/",
+  "codeRepository": "https://github.com/abhi478jeetur-rgb/env-saaf",
+  "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" }
+}
+</script>
 </head>
 <body>
 
@@ -148,7 +164,7 @@
 
 <header id="top">
   <div class="wrap">
-    <span class="pill">v1.1.0 &nbsp;·&nbsp; <b>zero dependencies</b> &nbsp;·&nbsp; MIT &nbsp;·&nbsp; Node ≥ 16</span>
+    <span class="pill">v1.2.0 &nbsp;·&nbsp; <b>zero dependencies</b> &nbsp;·&nbsp; MIT &nbsp;·&nbsp; Node ≥ 16</span>
     <h1>Your <span class="grad">.env</span>, validated<br>before it breaks production.</h1>
     <p class="tagline">env-saaf checks your environment variables the moment your app starts — typed values, defaults, choices — and reports <em>every</em> problem at once, in plain language. No more silent config bugs at 2 a.m.</p>
     <div id="get-started">
@@ -342,7 +358,7 @@ so the error is safe to log and share.</span></pre>
       </div>
       <div class="cmd">
         <code>npx env-saaf check --json</code>
-        <p>Machine-readable output for scripts and CI dashboards. Landing in v1.2.0 — already merged on main.</p>
+        <p>Machine-readable output for scripts and CI dashboards. Shipped in v1.2.0.</p>
         <div class="sample">{"ok":false,"missing":["DB_URL"],"extra":["OLD_KEY"]}</div>
       </div>
     </div>
@@ -360,7 +376,15 @@ so the error is safe to log and share.</span></pre>
       </div>
       <div class="person">
         <div class="who">HarshRajSinghania</div>
-        <div class="what">Added the <b>--json</b> flag for machine-readable CLI output. Landing in v1.2.0.</div>
+        <div class="what">Added the <b>--json</b> flag for machine-readable CLI output. Shipped in v1.2.0.</div>
+      </div>
+      <div class="person">
+        <div class="who">Golden007-prog</div>
+        <div class="what">Added the global <b>--no-color</b> CLI flag and seeded parser tests. Shipped in v1.2.0.</div>
+      </div>
+      <div class="person">
+        <div class="who">harshit3355</div>
+        <div class="what">Added four copyable <b>Recipes</b> to the README. Shipped in v1.2.0.</div>
       </div>
       <div class="person">
         <div class="who">Your name here</div>
