@@ -220,6 +220,8 @@ provide conditional rules inside a schema.
 
 ### Keep `.env.example` honest (CLI)
 
+CLI output is plain text by default, including in pipes and CI. For scripts that set a shared color preference, pass `--no-color` before or after the command, or set `NO_COLOR=1`.
+
 ```bash
 npx env-saaf scan ./src     # every env var your code actually uses
 npx env-saaf check .        # code vs .env.example diff — exit 1 if undocumented vars exist (CI-ready)

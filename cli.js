@@ -13,8 +13,11 @@ const path = require('node:path');
 const { scanDir, parseEnvFile, diffEnv } = require('./index');
 
 const argv = process.argv.slice(2);
+// Output is already plain in every mode, including when NO_COLOR is set.
+while (argv[0] === '--no-color') argv.shift();
 const cmd = argv[0];
-const USAGE = 'Usage: env-saaf check [dir] [--file name] [--json] | env-saaf scan [dir] [--json] | env-saaf example [dir]';
+const USAGE = 'Usage: env-saaf check [dir] [--file name] [--json] | env-saaf scan [dir] [--json] | env-saaf example [dir]\n'
+  + 'Global option: --no-color (before or after the command).';
 // --help / -h / help: print usage and exit 0 (asking for help is not an error — this used to exit 2)
 if (cmd === '--help' || cmd === '-h' || cmd === 'help') {
   console.log(USAGE);
@@ -30,7 +33,7 @@ for (let i = 1; i < argv.length; i++) {
   if (a === '--file' && argv[i + 1]) fileOpt = argv[++i];
   else if (a.startsWith('--file=')) fileOpt = a.slice('--file='.length);
   else if (a === '--json') jsonMode = true;
-  else positional.push(a);
+  else if (a !== '--no-color') positional.push(a);
 }
 const dir = positional[0] || process.cwd();
 
