@@ -17,6 +17,56 @@ assert.deepStrictEqual(parseEnvFile('PORT=3000\nNAME="my app"\n'), { PORT: '3000
 assert.deepStrictEqual(scanCode('process.env.API_URL; const { PORT } = process.env;'), ['API_URL', 'PORT']);
 assert.deepStrictEqual(diffEnv(['A', 'B'], ['A', 'C']), { usedNotDocumented: ['B'], documentedNotUsed: ['C'] });
 
+// Issue #69: deterministic combinations of the documented .env syntax.
+{
+  let seed = 0x62a47f21;
+  const pick = (choices) => {
+    seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0;
+    return choices[Math.floor(seed / 0x100000000 * choices.length)];
+  };
+  const spaces = ['', ' ', '  ', '\t'];
+  const fragments = ['sample', '42', 'x=y', 'with#hash', 'café', 'path\\part'];
+  const noise = ['', '# comment', 'word without equals', '? = value', "UNCLOSED='", '??=', ' \\ '];
+
+  for (let sample = 0; sample < 128; sample++) {
+    const newline = pick(['\n', '\r\n']);
+    const anchor = 'FUZZ_BASE_' + sample;
+    const local = 'demo' + sample;
+    const reference = '${' + anchor + '}';
+    const expected = { [anchor]: local };
+    const lines = [anchor + '=' + local];
+
+    for (let index = 0; index < 8; index++) {
+      const key = pick(['FUZZ_KEY_', '_FUZZ_', 'Case_']) + sample + '_' + index;
+      const word = pick(fragments) + '-' + pick(fragments);
+      const phrase = ' ' + word + ' # literal ';
+      const [encoded, value] = pick([
+        [word, word],
+        ['"' + phrase + '"', phrase],
+        ["'" + phrase + "'", phrase],
+        ['"' + word + newline + 'next line"', word + '\nnext line'],
+        [reference + '/suffix', local + '/suffix'],
+        ['"' + reference + ' ' + word + '"', local + ' ' + word],
+        ['\\' + reference, reference],
+        ["'" + reference + "'", reference],
+        ['', ''],
+      ]);
+      const prefix = pick(['', 'export ', 'export\t']);
+      const comment = pick(['', ' # trailing', '\t# trailing']);
+      lines.push(pick(spaces) + prefix + key + pick(spaces) + '=' + pick(spaces) + encoded + comment);
+      expected[key] = value;
+    }
+
+    const valid = lines.join(newline) + newline;
+    let parsed;
+    assert.doesNotThrow(() => { parsed = parseEnvFile(valid); }, JSON.stringify(valid));
+    assert.deepStrictEqual(parsed, expected, JSON.stringify(valid));
+
+    const mixed = [pick(noise), ...lines.slice(0, 5), pick(noise), ...lines.slice(5), pick(noise)].join(newline);
+    assert.doesNotThrow(() => parseEnvFile(mixed), JSON.stringify(mixed));
+  }
+}
+
 // v1.0.0: masking — a real secret is never printed in full
 assert.strictEqual(maskValue('sk_live_123456'), 'sk***56');
 assert.strictEqual(maskValue('abc'), '****');
