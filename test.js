@@ -405,4 +405,38 @@ assert.deepStrictEqual(
   fs.rmSync(dir, { recursive: true, force: true });
 }
 
+// Issue #23: 'email' type and 'pattern' option for strings
+{
+  const { validateEnv } = require('./index');
+  // email: pragmatic validation — one '@', non-empty local/domain, a dot in the domain
+  assert.strictEqual(validateEnv({ E: { type: 'email' } }, { E: 'a@b.co' }).E, 'a@b.co');
+  assert.strictEqual(validateEnv({ E: { type: 'email' } }, { E: 'first.last+tag@sub.example.org' }).E, 'first.last+tag@sub.example.org');
+  for (const bad of ['not-an-email', 'a@b', '@b.co', 'a@.co', 'a@b.', 'a@@b.co', 'a b@c.co', 'a@c']) {
+    assert.throws(() => validateEnv({ E: { type: 'email' } }, { E: bad }), /expected a valid email address/);
+  }
+  // pattern: a slug and a prefixed key; the mismatch error names the pattern
+  const p = validateEnv({
+    SLUG: { type: 'string', pattern: /^[a-z0-9-]+$/ },
+    API_KEY: { type: 'string', pattern: /^sk_[A-Za-z0-9]+$/ },
+  }, { SLUG: 'my-post-2', API_KEY: 'sk_abc123' });
+  assert.strictEqual(p.SLUG, 'my-post-2');
+  assert.strictEqual(p.API_KEY, 'sk_abc123');
+  assert.throws(
+    () => validateEnv({ S: { type: 'string', pattern: /^[a-z0-9-]+$/ } }, { S: 'Bad Slug!' }),
+    (e) => e instanceof EnvSaafError && e.errors.some(m => m.includes('S: expected to match /^[a-z0-9-]+$/'))
+  );
+  // pattern also works with the email type, and runs after the choices check
+  assert.strictEqual(
+    validateEnv({ E: { type: 'email', pattern: /@example\.com$/ } }, { E: 'a@example.com' }).E, 'a@example.com');
+  assert.throws(
+    () => validateEnv({ E: { type: 'email', pattern: /@example\.com$/ } }, { E: 'a@other.com' }),
+    /expected to match/
+  );
+  // a non-RegExp pattern is a schema error naming the key
+  assert.throws(
+    () => validateEnv({ S: { type: 'string', pattern: '[a-z]+' } }, { S: 'abc' }),
+    /S: "pattern" must be a RegExp/
+  );
+}
+
 console.log('env-saaf v1.1.0: all tests passed');
