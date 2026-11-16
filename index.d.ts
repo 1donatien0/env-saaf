@@ -1,10 +1,18 @@
-export type EnvType = 'string' | 'number' | 'boolean' | 'url' | 'port' | 'email';
+export type EnvType = 'string' | 'number' | 'int' | 'boolean' | 'url' | 'port' | 'email';
 
 export interface EnvRule {
   type?: EnvType;
   required?: boolean;
   default?: string | number | boolean;
   choices?: Array<string | number | boolean>;
+  /**
+   * Allowed range for numeric values (`number`, `int`, `port`).
+   * `min` alone or `max` alone both work; out-of-range values are
+   * rejected with an error naming the allowed range.
+   */
+  min?: number;
+  /** See `min`. */
+  max?: number;
   /**
    * A regular expression a string value must match (e.g. a slug, or a
    * prefixed key like `sk_...`). Checked after coercion and `choices`,
@@ -23,13 +31,14 @@ export type EnvSchema = Record<string, EnvRule>;
 
 /**
  * The value type of a rule, from the schema's `type` field:
- * 'number' / 'port' -> number, 'boolean' -> boolean,
+ * 'number' / 'int' / 'port' -> number, 'boolean' -> boolean,
  * everything else (string / url / no type given) -> string.
  * A rule with a `transform` returns the transform's return type instead.
  */
 export type EnvValue<R extends EnvRule> =
   R extends { transform: (value: any) => infer T } ? T :
   R extends { type: 'number' } ? number :
+  R extends { type: 'int' } ? number :
   R extends { type: 'port' } ? number :
   R extends { type: 'boolean' } ? boolean :
   string;

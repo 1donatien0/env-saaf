@@ -535,4 +535,27 @@ assert.deepStrictEqual(
   scanCode('process.env.API_URL; process.env[\'BRACKET\']; process.env[`TICK`];'),
   ['API_URL', 'BRACKET', 'TICK']);
 
+
+// Issues #45 + #47: 'int' type (whole numbers only) and min/max for numbers.
+{
+  const ints = validateEnv({ N: { type: 'int', required: true } }, { N: '42' });
+  assert.strictEqual(ints.N, 42);
+  assert.strictEqual(validateEnv({ N: { type: 'int' } }, { N: '-3' }).N, -3);
+  assert.strictEqual(validateEnv({ N: { type: 'int' } }, { N: '1e3' }).N, 1000); // 1e3 is a whole value
+  assert.strictEqual(validateEnv({ N: { type: 'int' } }, { N: '1.5e2' }).N, 150); // 1.5e2 is whole too
+  assert.throws(() => validateEnv({ N: { type: 'int' } }, { N: '3.5' }), /expected an integer/);
+  assert.throws(() => validateEnv({ N: { type: 'int' } }, { N: 'abc' }), /expected an integer/);
+  // min/max: both, min alone, max alone; the error names the allowed range.
+  assert.strictEqual(validateEnv({ N: { type: 'number', min: 1, max: 10 } }, { N: '5' }).N, 5);
+  assert.throws(() => validateEnv({ N: { type: 'number', min: 1 } }, { N: '0' }), /at least 1/);
+  assert.throws(() => validateEnv({ N: { type: 'number', max: 10 } }, { N: '11' }), /at most 10/);
+  assert.throws(() => validateEnv({ N: { type: 'number', min: 1, max: 10 } }, { N: '99' }), /1\u201310/);
+  // min/max also apply to int and port.
+  assert.strictEqual(validateEnv({ N: { type: 'int', min: 0 } }, { N: '7' }).N, 7);
+  assert.throws(() => validateEnv({ N: { type: 'int', min: 0 } }, { N: '-1' }), /at least 0/);
+  assert.throws(() => validateEnv({ P: { type: 'port', max: 1024 } }, { P: '8080' }), /at most 1024/);
+  // min/max leave non-numeric values alone.
+  assert.strictEqual(validateEnv({ S: { type: 'string', min: 1 } }, { S: 'x' }).S, 'x');
+}
+
 console.log('env-saaf v1.1.0: all tests passed');
