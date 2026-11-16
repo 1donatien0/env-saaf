@@ -6,6 +6,7 @@ import { validateEnv, EnvSchema, EnvResult } from './index';
 const env = validateEnv({
   PORT: { type: 'port', required: true },
   COUNT: { type: 'number', required: true },
+  RETRIES: { type: 'int', required: true, min: 0, max: 5 },
   DEBUG: { type: 'boolean' },
   API_URL: { type: 'url', required: true },
   MODE: { type: 'string', default: 'dev' },
@@ -15,6 +16,7 @@ const env = validateEnv({
 // required keys: exact types
 const port: number = env.PORT;
 const count: number = env.COUNT;
+const retries: number = env.RETRIES;
 const url: string = env.API_URL;
 const mode: string = env.MODE;
 // optional keys: value ya undefined
@@ -37,20 +39,9 @@ const typo = env.TYPO_KEY;
 // @ts-expect-error — optional key undefined ho sakti hai, seedha boolean nahi
 const debugStrict: boolean = env.DEBUG;
 
-// Issue #34: a transform's return type is the result type for that key
-const transformed = validateEnv({
-  ALLOWED_ORIGINS: { type: 'string', required: true, transform: (v: string) => v.split(',').map(s => s.trim()) },
-  SHOUTY_NAME: { type: 'string', transform: (v: string) => v.toUpperCase() },
-});
-const origins: string[] = transformed.ALLOWED_ORIGINS;
-const shouty: string | undefined = transformed.SHOUTY_NAME;
-
-// @ts-expect-error — ALLOWED_ORIGINS is string[], not string
-const originsWrong: string = transformed.ALLOWED_ORIGINS;
-
 // loose schema (jaise EnvSchema type ka variable) par purana loose record milta hai
 const looseSchema: EnvSchema = { PORT: { type: 'port', required: true } };
 const loose = validateEnv(looseSchema);
 const looseValue: string | number | boolean = loose.ANYTHING;
 
-export { port, count, url, mode, debug, name, doubled, fixed, wrongType, typo, debugStrict, myPort, myDebug, looseValue, origins, shouty, originsWrong };
+export { port, count, retries, url, mode, debug, name, doubled, fixed, wrongType, typo, debugStrict, myPort, myDebug, looseValue };

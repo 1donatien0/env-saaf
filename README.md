@@ -74,6 +74,17 @@ const env = validateEnv({
 
 The `email` check is pragmatic — one `@`, a non-empty local part and domain, and a dot in the domain — not full RFC 5322. `pattern` takes a `RegExp` that a string value must match; it runs after coercion and the `choices` check, and a mismatch error names the pattern that failed.
 
+### `int` type and `min`/`max` — whole numbers and ranges
+
+```js
+const env = validateEnv({
+  MAX_RETRIES: { type: 'int', min: 0, max: 5, default: 3 },
+  TIMEOUT_MS:  { type: 'number', min: 100, max: 30000 },
+});
+```
+
+`int` is like `number` but rejects fractional values (`3.5` fails, `42` and `1e3` pass). `min` and `max` work on `number`, `int` and `port`; either one can be used alone, and an out-of-range value is rejected with an error naming the allowed range.
+
 ### Loading a real `.env` file
 
 One call does it — read the file, parse it, validate it:

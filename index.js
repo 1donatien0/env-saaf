@@ -37,6 +37,13 @@ function coerce(key, raw, type) {
       if (v === '' || Number.isNaN(n)) throw new Error(`${key}: expected a number, got "${raw}"`);
       return n;
     }
+    case 'int': {
+      // Whole numbers only: counts, retries, pool sizes. '1e3' is 1000, so
+      // it passes; '3.5' and 'abc' do not.
+      const n = Number(v);
+      if (v === '' || Number.isNaN(n) || !Number.isInteger(n)) throw new Error(`${key}: expected an integer, got "${raw}"`);
+      return n;
+    }
     case 'boolean': {
       if (typeof v === 'boolean') return v;
       const s = String(v).toLowerCase();
@@ -79,6 +86,19 @@ function validateEnv(schema, env = process.env, options = {}) {
     }
     try {
       const val = coerce(key, raw, rule.type || 'string');
+      // min/max: allowed range for numeric values (number, int, port).
+      // Runs right after coercion, before choices/pattern/transform; the
+      // error names the allowed range. min alone or max alone both work.
+      if (typeof val === 'number' && (rule.min !== undefined || rule.max !== undefined)) {
+        const lo = rule.min !== undefined ? rule.min : -Infinity;
+        const hi = rule.max !== undefined ? rule.max : Infinity;
+        if (val < lo || val > hi) {
+          const range = rule.min !== undefined && rule.max !== undefined ? `${rule.min}–${rule.max}`
+            : rule.min !== undefined ? `at least ${rule.min}` : `at most ${rule.max}`;
+          errors.push(`${key}: expected a number ${range}, got "${raw}"`);
+          continue;
+        }
+      }
       if (rule.choices && !rule.choices.includes(val)) {
         errors.push(`${key}: expected one of [${rule.choices.join(', ')}], got "${raw}"`);
         continue;
