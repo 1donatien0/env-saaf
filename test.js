@@ -558,4 +558,4 @@ assert.deepStrictEqual(
   assert.strictEqual(validateEnv({ S: { type: 'string', min: 1 } }, { S: 'x' }).S, 'x');
 }
 
-console.log('env-saaf v1.1.0: all tests passed');
+console.log('env-saaf v1.2.0: all tests passed');
