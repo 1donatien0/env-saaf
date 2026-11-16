@@ -214,6 +214,43 @@ assert.ok(!ex.includes('sk_live'));
   assert.ok(outNone.includes('Usage: env-saaf'));
 }
 
+// Issue #62: --no-color is accepted globally and the CLI keeps its output plain.
+{
+  const { spawnSync } = require('node:child_process');
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const path = require('node:path');
+  const cli = path.join(__dirname, 'cli.js');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'env-saaf-plain-'));
+
+  try {
+    fs.writeFileSync(path.join(dir, 'app.js'), 'const value = process.env.PLAIN_OUTPUT;');
+    const commands = [
+      { args: ['--no-color', 'scan', dir] },
+      { args: ['scan', '--no-color', dir] },
+      { args: ['scan', dir, '--no-color'] },
+      { args: ['scan', dir], env: { ...process.env, NO_COLOR: '1' } },
+    ];
+    for (const { args, env } of commands) {
+      const run = spawnSync(process.execPath, [cli, ...args], { encoding: 'utf8', env });
+      assert.strictEqual(run.status, 0, args.join(' '));
+      assert.strictEqual(run.stdout.trim(), 'PLAIN_OUTPUT');
+      assert.strictEqual(run.stderr, '');
+    }
+
+    const json = spawnSync(process.execPath, [cli, 'scan', '--no-color', dir, '--json'], { encoding: 'utf8' });
+    assert.strictEqual(json.status, 0);
+    assert.deepStrictEqual(JSON.parse(json.stdout), { ok: true, vars: ['PLAIN_OUTPUT'] });
+
+    const help = spawnSync(process.execPath, [cli, '--no-color', '--help'], { encoding: 'utf8' });
+    assert.strictEqual(help.status, 0);
+    assert.ok(help.stdout.includes('--no-color'));
+    assert.strictEqual(help.stderr, '');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+}
+
 // Issue #24: CLI --json output for check and scan
 {
   const { execFileSync } = require('node:child_process');

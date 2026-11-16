@@ -11,6 +11,7 @@
 - Added: CLI `check` and `scan` accept `--json` for machine-readable output (`{ ok, missing, extra, invalid }` for check; `{ ok, vars }` for scan). Exit codes unchanged. Human-readable output remains the default.
 - Added: per-key `transform` option — a custom function applied after coercion and the `choices` check (e.g. split a comma-separated list into an array, upper-case a value); a throwing transform is collected as a normal validation error naming the key, and the result type is inferred from the transform's return type (fixes #34)
 - Fixed: `scanCode` now also finds `process.env[\`KEY\`]` template-literal access (plain identifiers only — interpolated names like `process.env[\`PREFIX_${X}\`]` stay unmatched, since they cannot be known statically) (fixes #33)
+- Added: the CLI accepts `--no-color` before or after the command. Terminal and piped output stay plain (fixes #62).
 
 ## 1.1.0
 - Fixed: CLI `--help` / `-h` now prints usage and exits 0 (previously exit code 2, like a real error); unknown commands still exit 2
