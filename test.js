@@ -256,6 +256,42 @@ assert.ok(!ex.includes('sk_live'));
   fs.rmSync(dir, { recursive: true, force: true });
 }
 
+// Issue #70: CLI scan finds literal env reads in TypeScript modules.
+{
+  const { execFileSync } = require('node:child_process');
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const path = require('node:path');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'env-saaf-ts-cli-'));
+
+  try {
+    fs.writeFileSync(path.join(dir, 'service.ts'), [
+      "enum Mode { Hosted = 'hosted' }",
+      "export const hosts = { [Mode.Hosted]: process.env['SERVICE_HOST'] } as const;",
+    ].join('\n'));
+    fs.mkdirSync(path.join(dir, 'nested'));
+    fs.writeFileSync(path.join(dir, 'nested', 'server.mts'), [
+      'export namespace Server {',
+      '  const { API_PORT: port } = process.env;',
+      '  export const config = { port, endpoint: process.env.SERVICE_HOST } as const;',
+      '}',
+    ].join('\n'));
+    fs.writeFileSync(path.join(dir, 'worker.cts'), [
+      "const { QUEUE_NAME = 'default' } = process.env;",
+      'export const config = { queue: QUEUE_NAME, tracing: process.env["TRACE_MODE"] } as const;',
+    ].join('\n'));
+    const output = execFileSync(process.execPath, [path.join(__dirname, 'cli.js'), 'scan', dir, '--json'], {
+      encoding: 'utf8',
+    });
+    assert.deepStrictEqual(JSON.parse(output), {
+      ok: true,
+      vars: ['API_PORT', 'QUEUE_NAME', 'SERVICE_HOST', 'TRACE_MODE'],
+    });
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+}
+
 // Issue #30: parseEnvFile — multiline quoted values keep their newlines
 // (PEM keys, JSON blobs); the key after the closing quote still parses.
 assert.deepStrictEqual(
