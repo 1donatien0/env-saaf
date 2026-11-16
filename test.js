@@ -439,4 +439,13 @@ assert.deepStrictEqual(
   );
 }
 
+// Issue #33: scanCode finds process.env[`KEY`] template-literal access,
+// but not interpolated names — those cannot be known statically.
+assert.deepStrictEqual(
+  scanCode('const v = process.env[`DYNAMIC_NAME`]; const w = process.env[`PREFIX_${SUFFIX}`];'),
+  ['DYNAMIC_NAME']);
+assert.deepStrictEqual(
+  scanCode('process.env.API_URL; process.env[\'BRACKET\']; process.env[`TICK`];'),
+  ['API_URL', 'BRACKET', 'TICK']);
+
 console.log('env-saaf v1.1.0: all tests passed');

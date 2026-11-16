@@ -238,6 +238,10 @@ function scanCode(text) {
   const patterns = [
     /process\.env\.([A-Za-z_][A-Za-z0-9_]*)/g,
     /process\.env\[['"]([A-Za-z_][A-Za-z0-9_]*)['"]\]/g,
+    // Backtick bracket access with a plain identifier — `process.env[`KEY`]`:
+    // a template with ${} interpolation cannot be known statically and
+    // stays unmatched (the identifier charset excludes $ and {).
+    /process\.env\[`([A-Za-z_][A-Za-z0-9_]*)`\]/g,
   ];
   for (const re of patterns) for (const m of String(text).matchAll(re)) found.add(m[1]);
   const destructure = /(?:const|let|var)\s*\{([^}]+)\}\s*=\s*process\.env/g;
