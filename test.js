@@ -650,4 +650,49 @@ assert.deepStrictEqual(
   assert.deepStrictEqual(parseEnvFile('# see config/notes'), {});
 }
 
+// Issue #88: loadEnv with assign: true must JSON-stringify object/array values.
+{
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const path = require('node:path');
+  const { loadEnv } = require('./index');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'env-saaf-assign-json-'));
+  const file = path.join(dir, '.env');
+  fs.writeFileSync(file, 'CFG={"a":1}\nLIST=[1,2,3]\nN=42\nFLAG=true\nNAME=hi\nNOTHING=null\n');
+  const schema = {
+    CFG: { type: 'json', required: true },
+    LIST: { type: 'json', required: true },
+    N: { type: 'number', required: true },
+    FLAG: { type: 'boolean', required: true },
+    NAME: { type: 'string', required: true },
+    NOTHING: { type: 'json', required: true },
+  };
+  const target = {};
+  const validated = loadEnv(schema, { path: file, env: target, assign: true });
+  // The validated result is unchanged (parsed objects), only the assigned-back copy is text.
+  assert.deepStrictEqual(validated.CFG, { a: 1 });
+  assert.deepStrictEqual(validated.LIST, [1, 2, 3]);
+  // Objects/arrays from the json type round-trip through JSON.parse.
+  assert.strictEqual(target.CFG, '{"a":1}');
+  assert.deepStrictEqual(JSON.parse(target.CFG), { a: 1 });
+  assert.strictEqual(target.LIST, '[1,2,3]');
+  assert.deepStrictEqual(JSON.parse(target.LIST), [1, 2, 3]);
+  // Primitives keep their existing String(value) behaviour.
+  assert.strictEqual(target.N, '42');
+  assert.strictEqual(target.FLAG, 'true');
+  assert.strictEqual(target.NAME, 'hi');
+  // null stays "null".
+  assert.strictEqual(target.NOTHING, 'null');
+
+  // A transform returning an object is also JSON-stringified on assign.
+  const t2 = {};
+  loadEnv(
+    { OBJ: { type: 'string', required: true, transform: (v) => ({ raw: v }) } },
+    { path: (() => { const f = path.join(dir, '.env2'); fs.writeFileSync(f, 'OBJ=x\n'); return f; })(), env: t2, assign: true }
+  );
+  assert.strictEqual(t2.OBJ, '{"raw":"x"}');
+  assert.deepStrictEqual(JSON.parse(t2.OBJ), { raw: 'x' });
+  fs.rmSync(dir, { recursive: true, force: true });
+}
+
 console.log('env-saaf v1.2.0: all tests passed');

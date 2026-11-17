@@ -180,6 +180,7 @@ function validateEnv(schema, env = process.env, options = {}) {
  *   env      — base env to merge with (default process.env); its values win unless override is true
  *   override — if true, values from the file win over `env` (default false)
  *   assign   — if true, write the validated values back into `env` as strings
+ *              (objects/arrays from the json type are JSON-stringified)
  *              (default false — process.env is never mutated silently)
  * Any other options are passed through to validateEnv (e.g. { strict: true }).
  * A missing file throws a clear error unless every schema key is optional
@@ -222,7 +223,12 @@ function loadEnv(schema, options = {}) {
   const merged = override ? { ...env, ...fileEnv } : { ...fileEnv, ...env };
   const validated = validateEnv(schema, merged, rest);
   if (assign) {
-    for (const [key, value] of Object.entries(validated)) env[key] = String(value);
+    for (const [key, value] of Object.entries(validated)) {
+      // A json value (or a transform returning an object/array) must be written
+      // back as JSON text so it round-trips through JSON.parse; String() on an
+      // object would produce the useless "[object Object]".
+      env[key] = (value !== null && typeof value === 'object') ? JSON.stringify(value) : String(value);
+    }
   }
   return validated;
 }
