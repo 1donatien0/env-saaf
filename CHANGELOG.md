@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Fixed: `loadEnv` infers return type from schema (`EnvResult<S>`) like `validateEnv` does, rather than returning a loose `Record<string, string | number | boolean>` (fixes #91)
 - Fixed: `generateExample` leaves an empty placeholder for secret-looking keys (`API_KEY`, `DB_PASSWORD`, …) instead of `your_value_here` — an explicit `default` still wins (fixes #56)
 - Added: `trim: false` option — keep leading/trailing whitespace for values where it is part of the value (e.g. a password with a significant space); trimming stays the default, and numbers/booleans are unaffected (fixes #84)
 - Fixed: `loadEnv` rejects non-schema first arguments with a clear error showing the correct `loadEnv(schema, { path: '.env' })` call (fixes #83)
