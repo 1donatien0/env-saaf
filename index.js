@@ -224,7 +224,7 @@ function parseEnvFile(text) {
   // a path, not .env content. Real .env text has '=' or a newline (or is empty),
   // so none of those trip this guard.
   const input = String(text);
-  if (!input.includes('\n') && !input.includes('=')) {
+  if (!input.includes('\n') && !input.includes('=') && !input.trimStart().startsWith('#')) {
     const pathLike = input.startsWith('.')
       || input.startsWith('/') || input.startsWith('\\')
       || input.includes('/') || input.includes('\\')

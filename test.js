@@ -612,6 +612,8 @@ assert.deepStrictEqual(
   assert.deepStrictEqual(parseEnvFile('A=1'), { A: '1' });
   assert.deepStrictEqual(parseEnvFile('FOO=bar'), { FOO: 'bar' });
   assert.deepStrictEqual(parseEnvFile(''), {});
+  // A lone comment line is not a path, even when it mentions one.
+  assert.deepStrictEqual(parseEnvFile('# see config/notes'), {});
 }
 
 console.log('env-saaf v1.2.0: all tests passed');
