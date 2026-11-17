@@ -103,7 +103,7 @@ export interface LoadEnvOptions {
   strict?: boolean;
 }
 
-export function loadEnv<S extends EnvSchema>(schema: S, options?: LoadEnvOptions): Record<string, string | number | boolean>;
+export function loadEnv<S extends EnvSchema>(schema: S, options?: LoadEnvOptions): EnvResult<S>;
 export function parseEnvFile(text: string): Record<string, string>;
 export function scanCode(text: string): string[];
 export function scanDir(dir: string): string[];

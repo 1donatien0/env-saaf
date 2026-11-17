@@ -1,7 +1,7 @@
 // env-saaf type tests — sirf `tsc` se check hote hain (`npm test` me shamil).
 // Runtime me kuch nahi chalta: ye file sirf TypeScript inference verify karti hai.
 // Issue #7: validateEnv ka return type schema se infer hona chahiye.
-import { validateEnv, EnvSchema, EnvResult } from './index';
+import { validateEnv, loadEnv, EnvSchema, EnvResult } from './index';
 
 const env = validateEnv({
   PORT: { type: 'port', required: true },
@@ -48,4 +48,25 @@ const looseSchema: EnvSchema = { PORT: { type: 'port', required: true } };
 const loose = validateEnv(looseSchema);
 const looseValue: string | number | boolean = loose.ANYTHING;
 
-export { port, count, url, mode, debug, name, doubled, fixed, wrongType, typo, debugStrict, myPort, myDebug, looseValue, flags, token };
+// Issue #91: loadEnv bhi EnvResult infer kare
+const loaded = loadEnv(
+  {
+    PORT: { type: 'port', required: true },
+    NAME: { type: 'string' },
+    TIMEOUT: { type: 'number', default: 5000 },
+  },
+  { paths: [], env: { PORT: '3000' } }
+);
+
+const loadedPort: number = loaded.PORT;
+const loadedName: string | undefined = loaded.NAME;
+const loadedTimeout: number = loaded.TIMEOUT;
+
+// @ts-expect-error — PORT number hai, string nahi
+const loadedPortWrong: string = loaded.PORT;
+// @ts-expect-error — galat key: schema me nahi hai
+const loadedTypo = loaded.TYPO_KEY;
+// @ts-expect-error — NAME optional hai, undefined ho sakta hai
+const loadedNameStrict: string = loaded.NAME;
+
+export { port, count, url, mode, debug, name, doubled, fixed, wrongType, typo, debugStrict, myPort, myDebug, looseValue, flags, token, loadedPort, loadedName, loadedTimeout, loadedPortWrong, loadedTypo, loadedNameStrict };
