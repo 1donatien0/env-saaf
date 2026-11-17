@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Fixed: `generateExample` leaves an empty placeholder for secret-looking keys (`API_KEY`, `DB_PASSWORD`, …) instead of `your_value_here` — an explicit `default` still wins (fixes #56)
 - Added: `trim: false` option — keep leading/trailing whitespace for values where it is part of the value (e.g. a password with a significant space); trimming stays the default, and numbers/booleans are unaffected (fixes #84)
 - Fixed: `loadEnv` rejects non-schema first arguments with a clear error showing the correct `loadEnv(schema, { path: '.env' })` call (fixes #83)
 - Fixed: `parseEnvFile` now throws a clear error when passed a file path by mistake (e.g. `parseEnvFile('.env')`) instead of silently returning `{}`; the message points at `loadEnv(schema, { path: ... })`. Normal .env text still parses as before (fixes #82)
