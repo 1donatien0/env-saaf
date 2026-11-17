@@ -558,4 +558,46 @@ assert.deepStrictEqual(
   assert.strictEqual(validateEnv({ S: { type: 'string', min: 1 } }, { S: 'x' }).S, 'x');
 }
 
+// Issues #32 + #48: 'json' type (parse JSON values) and minLength/maxLength for strings.
+{
+  // json: objects, arrays and primitives are parsed and returned as-is.
+  assert.deepStrictEqual(
+    validateEnv({ F: { type: 'json', required: true } }, { F: '{"beta":true,"maxItems":3}' }).F,
+    { beta: true, maxItems: 3 });
+  assert.deepStrictEqual(
+    validateEnv({ F: { type: 'json' } }, { F: '[1, "two", null]' }).F, [1, 'two', null]);
+  assert.strictEqual(validateEnv({ F: { type: 'json' } }, { F: '42' }).F, 42);
+  assert.strictEqual(validateEnv({ F: { type: 'json' } }, { F: '"hello"' }).F, 'hello');
+  assert.strictEqual(validateEnv({ F: { type: 'json' } }, { F: 'true' }).F, true);
+  assert.strictEqual(validateEnv({ F: { type: 'json' } }, { F: 'null' }).F, null);
+  // Invalid JSON is a normal collected error naming the key.
+  assert.throws(() => validateEnv({ F: { type: 'json' } }, { F: '{not json' }), /expected valid JSON/);
+  assert.throws(() => validateEnv({ F: { type: 'json', required: true } }, { F: '' }), /missing required variable/);
+  // A default may be given as an already-parsed object.
+  assert.deepStrictEqual(
+    validateEnv({ F: { type: 'json', default: { beta: false } } }, {}).F, { beta: false });
+  // An already-parsed value passed directly in the env object passes through.
+  assert.deepStrictEqual(
+    validateEnv({ F: { type: 'json' } }, { F: { beta: true } }).F, { beta: true });
+  // json works with required/default like every other type.
+  assert.throws(() => validateEnv({ F: { type: 'json', required: true } }, {}), EnvSaafError);
+
+  // minLength/maxLength: both, min alone, max alone; the error names the allowed length.
+  assert.strictEqual(validateEnv({ S: { type: 'string', minLength: 2, maxLength: 5 } }, { S: 'abc' }).S, 'abc');
+  assert.throws(() => validateEnv({ S: { type: 'string', minLength: 3 } }, { S: 'ab' }), /at least 3 characters/);
+  assert.throws(() => validateEnv({ S: { type: 'string', maxLength: 2 } }, { S: 'abc' }), /at most 2 characters/);
+  assert.throws(() => validateEnv({ S: { type: 'string', minLength: 2, maxLength: 4 } }, { S: 'abcdef' }), /2\u20134 characters/);
+  // Length is checked after coercion, so surrounding whitespace is trimmed first.
+  assert.strictEqual(validateEnv({ S: { type: 'string', minLength: 3, maxLength: 3 } }, { S: '  abc  ' }).S, 'abc');
+  // Combines with pattern: length is checked first, then the pattern.
+  assert.throws(() => validateEnv({ S: { type: 'string', minLength: 5, pattern: /^[a-z]+$/ } }, { S: 'ab1' }), /at least 5 characters/);
+  assert.throws(() => validateEnv({ S: { type: 'string', minLength: 2, pattern: /^[a-z]+$/ } }, { S: 'ab1' }), /expected to match/);
+  // Applies to email and url values too; non-string values skip the check.
+  assert.throws(() => validateEnv({ E: { type: 'email', maxLength: 5 } }, { E: 'a@b.co' }), /at most 5 characters/);
+  assert.strictEqual(validateEnv({ N: { type: 'number', minLength: 5 } }, { N: '42' }).N, 42);
+  // Bad option values are a clear rule error, not a crash.
+  assert.throws(() => validateEnv({ S: { type: 'string', minLength: -1 } }, { S: 'abc' }), /non-negative integers/);
+  assert.throws(() => validateEnv({ S: { type: 'string', maxLength: 2.5 } }, { S: 'abc' }), /non-negative integers/);
+}
+
 console.log('env-saaf v1.2.0: all tests passed');

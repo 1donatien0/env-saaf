@@ -1,9 +1,10 @@
-export type EnvType = 'string' | 'number' | 'int' | 'boolean' | 'url' | 'port' | 'email';
+export type EnvType = 'string' | 'number' | 'int' | 'boolean' | 'url' | 'port' | 'email' | 'json';
 
 export interface EnvRule {
   type?: EnvType;
   required?: boolean;
-  default?: string | number | boolean;
+  /** A default may be an already-parsed object or array for `type: 'json'`. */
+  default?: string | number | boolean | Record<string, unknown> | unknown[] | null;
   choices?: Array<string | number | boolean>;
   /**
    * Allowed range for numeric values (`number`, `int`, `port`).
@@ -13,6 +14,15 @@ export interface EnvRule {
   min?: number;
   /** See `min`. */
   max?: number;
+  /**
+   * Allowed length for string values (`string`, `email`, `url`).
+   * `minLength` alone or `maxLength` alone both work; a too-short or
+   * too-long value is rejected with an error naming the allowed length.
+   * Checked after coercion, before `pattern`.
+   */
+  minLength?: number;
+  /** See `minLength`. */
+  maxLength?: number;
   /**
    * A regular expression a string value must match (e.g. a slug, or a
    * prefixed key like `sk_...`). Checked after coercion and `choices`,
@@ -32,7 +42,8 @@ export type EnvSchema = Record<string, EnvRule>;
 /**
  * The value type of a rule, from the schema's `type` field:
  * 'number' / 'int' / 'port' -> number, 'boolean' -> boolean,
- * everything else (string / url / no type given) -> string.
+ * 'json' -> unknown (parsed JSON can be any shape),
+ * everything else (string / url / email / no type given) -> string.
  * A rule with a `transform` returns the transform's return type instead.
  */
 export type EnvValue<R extends EnvRule> =
@@ -41,6 +52,7 @@ export type EnvValue<R extends EnvRule> =
   R extends { type: 'int' } ? number :
   R extends { type: 'port' } ? number :
   R extends { type: 'boolean' } ? boolean :
+  R extends { type: 'json' } ? unknown :
   string;
 
 /**

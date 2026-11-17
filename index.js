@@ -44,6 +44,15 @@ function coerce(key, raw, type) {
       if (v === '' || Number.isNaN(n) || !Number.isInteger(n)) throw new Error(`${key}: expected an integer, got "${raw}"`);
       return n;
     }
+    case 'json': {
+      // Structured config in one variable: '{"beta":true,"maxItems":3}'.
+      // Valid JSON of any shape (object, array, primitive) is parsed and
+      // returned as-is; a non-string value (e.g. an object passed directly
+      // in the env argument) is already parsed, so it passes through.
+      if (typeof v !== 'string') return v;
+      try { return JSON.parse(v); }
+      catch { throw new Error(`${key}: expected valid JSON, got "${raw}"`); }
+    }
     case 'boolean': {
       if (typeof v === 'boolean') return v;
       const s = String(v).toLowerCase();
@@ -52,9 +61,9 @@ function coerce(key, raw, type) {
       throw new Error(`${key}: expected a boolean (true/false, yes/no, on/off, 1/0, y/n), got "${raw}"`);
     }
     case 'url': {
-      // Validate karke ASLI string hi lautaao. new URL(...).toString() value ko
-      // normalizes the value (a bare origin gains a trailing slash), which can
-      // break the user's string comparisons — so validate only, never modify.
+      // Validate only — never modify: new URL(...).toString() normalizes
+      // the value (a bare origin gains a trailing slash), which can break
+      // the user's string comparisons.
       try { new URL(String(v)); }
       catch { throw new Error(`${key}: expected a valid URL, got "${raw}"`); }
       return String(v);
@@ -96,6 +105,25 @@ function validateEnv(schema, env = process.env, options = {}) {
           const range = rule.min !== undefined && rule.max !== undefined ? `${rule.min}–${rule.max}`
             : rule.min !== undefined ? `at least ${rule.min}` : `at most ${rule.max}`;
           errors.push(`${key}: expected a number ${range}, got "${raw}"`);
+          continue;
+        }
+      }
+      // minLength/maxLength: allowed length for string values (string,
+      // email, url). Checked after coercion, before choices/pattern; the
+      // error names the allowed length. Either option works alone, and
+      // non-string values skip the check entirely.
+      if (typeof val === 'string' && (rule.minLength !== undefined || rule.maxLength !== undefined)) {
+        if ((rule.minLength !== undefined && (!Number.isInteger(rule.minLength) || rule.minLength < 0))
+          || (rule.maxLength !== undefined && (!Number.isInteger(rule.maxLength) || rule.maxLength < 0))) {
+          errors.push(`${key}: "minLength" and "maxLength" must be non-negative integers`);
+          continue;
+        }
+        const lo = rule.minLength !== undefined ? rule.minLength : 0;
+        const hi = rule.maxLength !== undefined ? rule.maxLength : Infinity;
+        if (val.length < lo || val.length > hi) {
+          const range = rule.minLength !== undefined && rule.maxLength !== undefined ? `${rule.minLength}–${rule.maxLength} characters`
+            : rule.minLength !== undefined ? `at least ${rule.minLength} characters` : `at most ${rule.maxLength} characters`;
+          errors.push(`${key}: expected a string ${range} long, got "${raw}"`);
           continue;
         }
       }
