@@ -6,22 +6,26 @@ import { validateEnv, EnvSchema, EnvResult } from './index';
 const env = validateEnv({
   PORT: { type: 'port', required: true },
   COUNT: { type: 'number', required: true },
-  RETRIES: { type: 'int', required: true, min: 0, max: 5 },
   DEBUG: { type: 'boolean' },
   API_URL: { type: 'url', required: true },
   MODE: { type: 'string', default: 'dev' },
   NAME: { type: 'string' },
+  FEATURE_FLAGS: { type: 'json', required: true },
+  API_TOKEN: { type: 'string', minLength: 10, required: true },
 });
 
 // required keys: exact types
 const port: number = env.PORT;
 const count: number = env.COUNT;
-const retries: number = env.RETRIES;
 const url: string = env.API_URL;
 const mode: string = env.MODE;
 // optional keys: value ya undefined
 const debug: boolean | undefined = env.DEBUG;
 const name: string | undefined = env.NAME;
+// json values are parsed JSON of unknown shape
+const flags: unknown = env.FEATURE_FLAGS;
+// minLength/maxLength are rule options — the value stays a string
+const token: string = env.API_TOKEN;
 
 // number methods chalne chahiye (issue #7 ka asli gap)
 const doubled: number = env.PORT * 2;
@@ -44,4 +48,4 @@ const looseSchema: EnvSchema = { PORT: { type: 'port', required: true } };
 const loose = validateEnv(looseSchema);
 const looseValue: string | number | boolean = loose.ANYTHING;
 
-export { port, count, retries, url, mode, debug, name, doubled, fixed, wrongType, typo, debugStrict, myPort, myDebug, looseValue };
+export { port, count, url, mode, debug, name, doubled, fixed, wrongType, typo, debugStrict, myPort, myDebug, looseValue, flags, token };

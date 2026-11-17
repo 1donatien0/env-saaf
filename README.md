@@ -85,6 +85,17 @@ const env = validateEnv({
 
 `int` is like `number` but rejects fractional values (`3.5` fails, `42` and `1e3` pass). `min` and `max` work on `number`, `int` and `port`; either one can be used alone, and an out-of-range value is rejected with an error naming the allowed range.
 
+### `json` type and `minLength`/`maxLength` — structured values and string lengths
+
+```js
+const env = validateEnv({
+  FEATURE_FLAGS: { type: 'json', default: { beta: false } },
+  API_TOKEN:     { type: 'string', minLength: 10, maxLength: 64, required: true },
+});
+```
+
+`json` parses the value with `JSON.parse` — objects, arrays and primitives all come back parsed; invalid JSON is rejected with an error naming the key. A `default` may be given as an already-parsed object. `minLength` and `maxLength` work on string values (`string`, `email`, `url`); either one can be used alone, and a too-short or too-long value is rejected with an error naming the allowed length. They combine with `pattern` — length is checked first, then the pattern.
+
 ### Loading a real `.env` file
 
 One call does it — read the file, parse it, validate it:

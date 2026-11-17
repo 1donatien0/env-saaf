@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Added: `json` type — parse JSON values from env strings (objects, arrays, primitives); invalid JSON is rejected with an error naming the key, and a `default` may be given as an already-parsed object (fixes #32)
+- Added: `minLength`/`maxLength` options for string values — too-short or too-long values are rejected with an error naming the allowed length; either option works alone and they combine with `pattern` (fixes #48)
+
 ## 1.2.0 — 2026-11-16
 
 - Added: `int` type — whole numbers only (`42` and `1e3` pass, `3.5` fails); plus `min`/`max` options for numeric values (`number`, `int`, `port`) — either alone or together, out-of-range values are rejected with an error naming the allowed range (fixes #45, fixes #47)
