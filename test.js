@@ -74,8 +74,27 @@ assert.deepStrictEqual(maskSecrets({ KEY: 'sk_live_123456' }), { KEY: 'sk***56' 
 // v1.0.0: generateExample — placeholders/defaults only, never a real secret
 const ex = generateExample({ PORT: { type: 'port', required: true }, API_KEY: { type: 'string', required: true } });
 assert.ok(ex.includes('PORT=3000'));
-assert.ok(ex.includes('API_KEY=your_value_here'));
+assert.ok(ex.includes('API_KEY=\n'));
 assert.ok(!ex.includes('sk_live'));
+
+// Issue #56: secret-looking keys get an empty placeholder in the generated example.
+{
+  const { generateExample } = require('./index');
+  const ex2 = generateExample({
+    API_KEY: { type: 'string', required: true },
+    DB_PASSWORD: { type: 'string' },
+    MONKEY: { type: 'string' },
+    PORT: { type: 'port' },
+    TOKEN_WITH_DEFAULT: { type: 'string', default: 'abc' },
+  });
+  assert.ok(ex2.includes('API_KEY=\n'));
+  assert.ok(ex2.includes('DB_PASSWORD=\n'));
+  // 'KEY' inside another word does not count as a secret-looking key.
+  assert.ok(ex2.includes('MONKEY=your_value_here'));
+  assert.ok(ex2.includes('PORT=3000'));
+  // An explicit default wins over the secret rule.
+  assert.ok(ex2.includes('TOKEN_WITH_DEFAULT=abc'));
+}
 
 // Issue #84: trim: false keeps leading/trailing whitespace for string-like types.
 {
