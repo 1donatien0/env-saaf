@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Fixed: `parseEnvFile` now throws a clear error when passed a file path by mistake (e.g. `parseEnvFile('.env')`) instead of silently returning `{}`; the message points at `loadEnv(schema, { path: ... })`. Normal .env text still parses as before (fixes #82)
 - Added: `json` type — parse JSON values from env strings (objects, arrays, primitives); invalid JSON is rejected with an error naming the key, and a `default` may be given as an already-parsed object (fixes #32)
 - Added: `minLength`/`maxLength` options for string values — too-short or too-long values are rejected with an error naming the allowed length; either option works alone and they combine with `pattern` (fixes #48)
 

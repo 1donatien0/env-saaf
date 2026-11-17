@@ -218,9 +218,27 @@ function loadEnv(schema, options = {}) {
 /** Parse .env text -> { KEY: value }. Handles quotes, `export `, comments,
  * multiline quoted values, and ${VAR} interpolation. */
 function parseEnvFile(text) {
+  // A file path passed by mistake (e.g. parseEnvFile('.env')) used to silently
+  // return {} because no line matched KEY=VALUE. Detect that confusion: a
+  // single-line string with no '=' that looks like a path is almost certainly
+  // a path, not .env content. Real .env text has '=' or a newline (or is empty),
+  // so none of those trip this guard.
+  const input = String(text);
+  if (!input.includes('\n') && !input.includes('=')) {
+    const pathLike = input.startsWith('.')
+      || input.startsWith('/') || input.startsWith('\\')
+      || input.includes('/') || input.includes('\\')
+      || /^[A-Za-z]:[\\/]/.test(input)
+      || /\.(env|local|properties|config)$/i.test(input);
+    if (pathLike) {
+      throw new Error(
+        "parseEnvFile expects .env text, not a file path — did you mean loadEnv(schema, { path: '.env' })?"
+      );
+    }
+  }
   const raw = {};     // key -> value with quotes removed and comments stripped
   const quoteOf = {}; // key -> 'single' | 'double' | 'none'
-  const lines = String(text).split(/\r?\n/);
+  const lines = input.split(/\r?\n/);
   for (let i = 0; i < lines.length; i++) {
     const t = lines[i].trim();
     if (!t || t.startsWith('#')) continue;
