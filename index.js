@@ -16,8 +16,14 @@ class EnvSaafError extends Error {
   }
 }
 
-function coerce(key, raw, type) {
-  const v = typeof raw === 'string' ? raw.trim() : raw;
+function coerce(key, raw, type, trim = true) {
+  // trim: false (issue #84) keeps the raw value exactly as provided — for
+  // values where the whitespace IS the value (a password with a significant
+  // trailing space). The default stays true: stray spaces from pasted
+  // secrets are trimmed. Numbers and booleans are unaffected either way —
+  // Number() ignores surrounding whitespace, and the boolean spellings are
+  // matched on the trimmed value below.
+  const v = typeof raw === 'string' ? (trim ? raw.trim() : raw) : raw;
   switch (type) {
     case 'string': return String(v);
     case 'email': {
@@ -55,7 +61,7 @@ function coerce(key, raw, type) {
     }
     case 'boolean': {
       if (typeof v === 'boolean') return v;
-      const s = String(v).toLowerCase();
+      const s = String(v).trim().toLowerCase();
       if (['true', '1', 'yes', 'on', 'y'].includes(s)) return true;
       if (['false', '0', 'no', 'off', 'n'].includes(s)) return false;
       throw new Error(`${key}: expected a boolean (true/false, yes/no, on/off, 1/0, y/n), got "${raw}"`);
@@ -94,7 +100,7 @@ function validateEnv(schema, env = process.env, options = {}) {
       continue;
     }
     try {
-      const val = coerce(key, raw, rule.type || 'string');
+      const val = coerce(key, raw, rule.type || 'string', rule.trim !== false);
       // min/max: allowed range for numeric values (number, int, port).
       // Runs right after coercion, before choices/pattern/transform; the
       // error names the allowed range. min alone or max alone both work.

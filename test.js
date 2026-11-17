@@ -77,6 +77,25 @@ assert.ok(ex.includes('PORT=3000'));
 assert.ok(ex.includes('API_KEY=your_value_here'));
 assert.ok(!ex.includes('sk_live'));
 
+// Issue #84: trim: false keeps leading/trailing whitespace for string-like types.
+{
+  const { validateEnv } = require('./index');
+  assert.strictEqual(validateEnv({ T: { type: 'string', trim: false } }, { T: '  abc  ' }).T, '  abc  ');
+  // Default behaviour is unchanged: values are trimmed.
+  assert.strictEqual(validateEnv({ T: { type: 'string' } }, { T: '  abc  ' }).T, 'abc');
+  // With trim: false a padded URL is kept exactly as provided (the URL parser itself tolerates the spaces).
+  assert.strictEqual(validateEnv({ U: { type: 'url', trim: false } }, { U: ' https://example.com ' }).U, ' https://example.com ');
+  assert.strictEqual(validateEnv({ U: { type: 'url', trim: false } }, { U: 'https://example.com' }).U, 'https://example.com');
+  // A padded email is kept as-is, so it fails the no-whitespace rule instead of being silently fixed.
+  assert.throws(() => validateEnv({ E: { type: 'email', trim: false } }, { E: ' a@example.com ' }), /expected a valid email/);
+  // Numeric and boolean coercion is unaffected by trim: false.
+  assert.strictEqual(validateEnv({ N: { type: 'number', trim: false } }, { N: ' 42 ' }).N, 42);
+  assert.strictEqual(validateEnv({ B: { type: 'boolean', trim: false } }, { B: ' true ' }).B, true);
+  // Choices and length checks see the kept whitespace.
+  assert.throws(() => validateEnv({ M: { type: 'string', trim: false, choices: ['dev'] } }, { M: ' dev ' }), /expected one of/);
+  assert.throws(() => validateEnv({ S: { type: 'string', trim: false, maxLength: 3 } }, { S: '  ab  ' }), /at most 3 characters/);
+}
+
 // scanDir also scans .mts/.cts files
 {
   const fs = require('node:fs');

@@ -96,6 +96,19 @@ const env = validateEnv({
 
 `json` parses the value with `JSON.parse` — objects, arrays and primitives all come back parsed; invalid JSON is rejected with an error naming the key. A `default` may be given as an already-parsed object. `minLength` and `maxLength` work on string values (`string`, `email`, `url`); either one can be used alone, and a too-short or too-long value is rejected with an error naming the allowed length. They combine with `pattern` — length is checked first, then the pattern.
 
+### `trim: false` — keep whitespace when it matters
+
+Values are trimmed before validation by default — handy for secrets pasted from dashboards with stray spaces. When the whitespace *is* the value, switch trimming off for that key:
+
+```js
+const env = validateEnv({
+  TOKEN: { type: 'string', trim: false, required: true },
+});
+// TOKEN: '  secret  ' stays '  secret  '
+```
+
+`trim: false` only affects string-like types; numbers and booleans are unaffected (`' 42 '` still parses as `42`, `' true '` still parses as `true`).
+
 ### Loading a real `.env` file
 
 One call does it — read the file, parse it, validate it:

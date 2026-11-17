@@ -35,6 +35,13 @@ export interface EnvRule {
    * array). Runs only on values actually provided, not on `default`s.
    */
   transform?: (value: any) => any;
+  /**
+   * Whether to trim surrounding whitespace before validation (default
+   * true). Set `trim: false` for values where the whitespace is part of
+   * the value (e.g. a password with a significant trailing space).
+   * Only affects string-like types; numbers and booleans are unaffected.
+   */
+  trim?: boolean;
 }
 
 export type EnvSchema = Record<string, EnvRule>;
