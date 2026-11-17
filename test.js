@@ -600,4 +600,18 @@ assert.deepStrictEqual(
   assert.throws(() => validateEnv({ S: { type: 'string', maxLength: 2.5 } }, { S: 'abc' }), /non-negative integers/);
 }
 
+// Issue #82: parseEnvFile takes .env TEXT, not a file path. Passing a path
+// silently returned {}; now it throws a clear error pointing at loadEnv.
+{
+  const helpful = /parseEnvFile expects \.env text, not a file path.*did you mean loadEnv\(schema, \{ path:/;
+  assert.throws(() => parseEnvFile('.env'), helpful);
+  assert.throws(() => parseEnvFile('config/.env.local'), helpful);
+  assert.throws(() => parseEnvFile('/etc/app.env'), helpful);
+  // Normal .env text still parses as before — including a single line with
+  // no trailing newline and an empty file.
+  assert.deepStrictEqual(parseEnvFile('A=1'), { A: '1' });
+  assert.deepStrictEqual(parseEnvFile('FOO=bar'), { FOO: 'bar' });
+  assert.deepStrictEqual(parseEnvFile(''), {});
+}
+
 console.log('env-saaf v1.2.0: all tests passed');
