@@ -156,6 +156,21 @@ assert.ok(!ex.includes('sk_live'));
   fs.rmSync(dir, { recursive: true, force: true });
 }
 
+// Issue #83: reject a misplaced path or other non-schema argument up front.
+{
+  const { loadEnv } = require('./index');
+  const message = "loadEnv expects a schema object as the first argument — did you mean loadEnv(schema, { path: '.env' })?";
+  assert.throws(() => loadEnv('.env', { PORT: { type: 'port' } }), { name: 'TypeError', message });
+  for (const schema of [null, undefined, [], 42, false, 1n, Symbol('schema'), () => {}, new Date(), new Map(), new (class Schema {})()]) {
+    assert.throws(() => loadEnv(schema), { name: 'TypeError', message });
+  }
+  // Argument validation must happen before reading options or files.
+  assert.throws(() => loadEnv('.env', { get path() { throw new Error('options read too soon'); } }), { name: 'TypeError', message });
+  assert.deepStrictEqual(loadEnv({}, { paths: [], env: {} }), {});
+  const schema = Object.assign(Object.create(null), { PORT: { type: 'port' } });
+  assert.strictEqual(loadEnv(schema, { paths: [], env: { PORT: '3000' } }).PORT, 3000);
+}
+
 // feat: strict mode — flag variables that are set but not in the schema (fixes #4)
 {
   const schema = { PORT: { type: 'port', required: true } };
