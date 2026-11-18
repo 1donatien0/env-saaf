@@ -910,4 +910,21 @@ assert.deepStrictEqual(
   fs.rmSync(dir, { recursive: true, force: true });
 }
 
+// Issue #117: parseEnvFile — a backslash-escaped quote inside a quoted value
+// is part of the value, not the end of it. Single and double quotes behave the
+// same way; a plain backslash (C:\path) is not an escape and stays literal.
+{
+  assert.deepStrictEqual(parseEnvFile(String.raw`B='it\'s'`), { B: "it's" });
+  assert.deepStrictEqual(parseEnvFile(String.raw`D="it\"s"`), { D: 'it"s' });
+  assert.deepStrictEqual(
+    parseEnvFile(String.raw`E='C:\path\to'`),
+    { E: String.raw`C:\path\to` }
+  );
+  // The escaped quote on the first line must not close a multiline value.
+  assert.deepStrictEqual(
+    parseEnvFile("G='line1\\'s\nline2'\n"),
+    { G: "line1's\nline2" }
+  );
+}
+
 console.log('env-saaf v1.3.0: all tests passed');
