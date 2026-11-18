@@ -271,7 +271,7 @@ CLI output is plain text by default, including in pipes and CI. For scripts that
 ```bash
 npx env-saaf --version      # print the installed version
 npx env-saaf scan ./src     # every env var your code actually uses
-npx env-saaf check .        # code vs .env.example diff — exit 1 if undocumented vars exist (CI-ready)
+npx env-saaf check .        # code vs .env.example diff — exit 1 on any finding (CI-ready)
 npx env-saaf check . --file .env.sample  # compare against a differently-named template file instead
 npx env-saaf check . --json # machine-readable JSON output (ok/missing/extra) for CI or tooling
 npx env-saaf scan ./src --json  # JSON list of used vars
@@ -279,6 +279,8 @@ npx env-saaf example ./src  # draft a .env.example from a code scan
 ```
 
 When a real `.env` sits next to the template, `check` also compares their keys: a key in `.env` that is not documented (`EXTRA in .env: FOO (not in .env.example)`) is usually a typo, and a template key with no local value is reported as `MISSING in .env: BAR (in .env.example, not set locally)`. `--file` selects the template for both comparisons; with no `.env` file this extra check is skipped. In `--json` mode the findings appear as `envExtra` and `envMissing` alongside the existing `missing`, `extra` and `invalid` fields.
+
+`check` exits 1 whenever it prints any finding, and `--json` `ok` carries the same value, so a CI job fails exactly when the output reports a problem; a fully clean project exits 0. `UNUSED` counts as a finding too: a key left in the template after its code usage is gone fails the run, so remove it from the template when you remove the last usage.
 
 ### Generate `.env.example` from a schema
 

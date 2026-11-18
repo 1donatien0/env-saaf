@@ -7,6 +7,7 @@
 - Added: `env-saaf example --write[=<file>]` writes the draft straight to `.env.example` (or the file named) instead of printing it, with a short confirmation; an existing file is only overwritten when `--force` is also passed (fixes #102)
 - Fixed: CLI now recognises `--help` / `-h` after a subcommand (e.g. `env-saaf scan --help`), printing usage and exiting 0 instead of treating the flag as a directory (fixes #97)
 - Fixed: `port` accepts 0 so a server can ask the operating system for an available port (fixes #101).
+- Fixed: `env-saaf check` exits 1 on every finding it prints, including `EXTRA in .env` / `MISSING in .env` (they used to print and still exit 0), and `--json` `ok` now matches the exit code; `UNUSED` counts as a finding too (fixes #113)
 
 ## 1.3.0 — 2026-11-18
 

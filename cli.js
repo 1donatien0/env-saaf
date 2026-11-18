@@ -82,10 +82,11 @@ if (cmd === 'scan') {
     envExtra = envDiff.usedNotDocumented;
     envMissing = envDiff.documentedNotUsed;
   }
+  const ok = usedNotDocumented.length === 0 && documentedNotUsed.length === 0
+    && envExtra.length === 0 && envMissing.length === 0;
   if (jsonMode) {
     const result = {
-      ok: usedNotDocumented.length === 0 && documentedNotUsed.length === 0
-        && envExtra.length === 0 && envMissing.length === 0,
+      ok,
       missing: usedNotDocumented,
       extra: documentedNotUsed,
       invalid: [],
@@ -102,7 +103,10 @@ if (cmd === 'scan') {
       console.log(`env-saaf: all clean — code and ${fileOpt} match.`);
     }
   }
-  process.exit(usedNotDocumented.length ? 1 : 0);
+  // Issue #113: the exit code follows the same `ok` the JSON output reports, so a
+  // typo'd key in .env (EXTRA / MISSING), or a documented-but-unused key, can no
+  // longer print a finding and still pass a CI job. UNUSED counts as a finding.
+  process.exit(ok ? 0 : 1);
 } else if (cmd === 'example') {
   // v1.0.0: draft a .env.example from a code scan (placeholder values only)
   const used = scanDir(dir);
