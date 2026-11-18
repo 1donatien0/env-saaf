@@ -12,6 +12,19 @@ assert.strictEqual(env.PORT + 1, 3001);
 assert.strictEqual(env.DEBUG, false);
 assert.throws(() => validateEnv({ A: { required: true } }, {}), EnvSaafError);
 
+// Port zero requests an ephemeral listener. Blank values still fail validation.
+{
+  const schema = { PORT: { type: 'port', required: true } };
+  assert.strictEqual(validateEnv(schema, { PORT: '0' }).PORT, 0);
+  assert.strictEqual(validateEnv(schema, { PORT: '65535' }).PORT, 65535);
+  for (const raw of ['-1', '65536', '3.5', 'abc', ' \t ', null, false]) {
+    assert.throws(() => validateEnv(schema, { PORT: raw }), /expected a port \(0-65535\)/);
+  }
+  const untrimmed = { PORT: { ...schema.PORT, trim: false } };
+  assert.throws(() => validateEnv(untrimmed, { PORT: ' \t ' }), /expected a port \(0-65535\)/);
+  assert.throws(() => validateEnv(schema, { PORT: '' }), /missing required variable/);
+}
+
 // v0.2.0
 assert.deepStrictEqual(parseEnvFile('PORT=3000\nNAME="my app"\n'), { PORT: '3000', NAME: 'my app' });
 assert.deepStrictEqual(scanCode('process.env.API_URL; const { PORT } = process.env;'), ['API_URL', 'PORT']);

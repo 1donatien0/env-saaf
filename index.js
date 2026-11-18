@@ -94,7 +94,11 @@ function coerce(key, raw, type, trim = true) {
     }
     case 'port': {
       const n = Number(v);
-      if (!Number.isInteger(n) || n < 1 || n > 65535) throw new Error(`${key}: expected a port (1-65535), got "${raw}"`);
+      const zeroWithoutValue = n === 0 && typeof v !== 'number'
+        && (typeof v !== 'string' || v.trim() === '');
+      if (zeroWithoutValue || !Number.isInteger(n) || n < 0 || n > 65535) {
+        throw new Error(`${key}: expected a port (0-65535), got "${raw}"`);
+      }
       return n;
     }
     default: throw new Error(`${key}: unknown type "${type}"`);

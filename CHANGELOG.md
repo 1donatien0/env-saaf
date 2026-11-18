@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Fixed: `port` accepts 0 so a server can ask the operating system for an available port (fixes #101).
+
 ## 1.3.0 — 2026-11-18
 
 - Added: `uuid` type — validates canonical UUIDs (8-4-4-4-12 hex groups, upper- and lowercase); malformed values are rejected with an error naming the key (fixes #37)
