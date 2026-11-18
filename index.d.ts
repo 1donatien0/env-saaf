@@ -1,4 +1,4 @@
-export type EnvType = 'string' | 'number' | 'int' | 'boolean' | 'url' | 'port' | 'email' | 'json';
+export type EnvType = 'string' | 'number' | 'int' | 'boolean' | 'url' | 'port' | 'email' | 'json' | 'uuid' | 'hex';
 
 export interface EnvRule {
   type?: EnvType;
@@ -15,7 +15,7 @@ export interface EnvRule {
   /** See `min`. */
   max?: number;
   /**
-   * Allowed length for string values (`string`, `email`, `url`).
+   * Allowed length for string values (`string`, `email`, `url`, `uuid`, `hex`).
    * `minLength` alone or `maxLength` alone both work; a too-short or
    * too-long value is rejected with an error naming the allowed length.
    * Checked after coercion, before `pattern`.
@@ -23,6 +23,12 @@ export interface EnvRule {
   minLength?: number;
   /** See `minLength`. */
   maxLength?: number;
+  /**
+   * Exact length in characters for `hex` values (e.g. a 64-character
+   * hash). A wrong-length value is rejected with an error naming the
+   * expected length. Ignored for other types.
+   */
+  length?: number;
   /**
    * A regular expression a string value must match (e.g. a slug, or a
    * prefixed key like `sk_...`). Checked after coercion and `choices`,
@@ -50,7 +56,7 @@ export type EnvSchema = Record<string, EnvRule>;
  * The value type of a rule, from the schema's `type` field:
  * 'number' / 'int' / 'port' -> number, 'boolean' -> boolean,
  * 'json' -> unknown (parsed JSON can be any shape),
- * everything else (string / url / email / no type given) -> string.
+ * everything else (string / url / email / uuid / hex / no type given) -> string.
  * A rule with a `transform` returns the transform's return type instead.
  */
 export type EnvValue<R extends EnvRule> =

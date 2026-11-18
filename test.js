@@ -653,6 +653,48 @@ assert.deepStrictEqual(
   assert.throws(() => validateEnv({ S: { type: 'string', maxLength: 2.5 } }, { S: 'abc' }), /non-negative integers/);
 }
 
+// Issues #37 + #42: 'uuid' type (canonical UUIDs) and 'hex' type
+// (hex strings, with an optional exact `length` for fixed-size values).
+{
+  // uuid: lowercase, uppercase and mixed-case hex all pass, returned unchanged.
+  assert.strictEqual(
+    validateEnv({ ID: { type: 'uuid' } }, { ID: '550e8400-e29b-41d4-a716-446655440000' }).ID,
+    '550e8400-e29b-41d4-a716-446655440000');
+  assert.strictEqual(
+    validateEnv({ ID: { type: 'uuid' } }, { ID: '550E8400-E29B-41D4-A716-446655440000' }).ID,
+    '550E8400-E29B-41D4-A716-446655440000');
+  assert.strictEqual(
+    validateEnv({ ID: { type: 'uuid' } }, { ID: '550e8400-E29B-41d4-A716-446655440000' }).ID,
+    '550e8400-E29B-41d4-A716-446655440000');
+  // Malformed UUIDs are rejected with an error naming the key.
+  for (const bad of [
+    '550e8400e29b41d4a716446655440000', // no dashes
+    '550e8400-e29b-41d4-a716', // too short
+    '550e8400-e29b-41d4-a716-44665544000g', // non-hex character
+    '550e8400-e29b-41d4-a716-446655440000-extra', // too long
+    'not-a-uuid',
+  ]) {
+    assert.throws(() => validateEnv({ ID: { type: 'uuid' } }, { ID: bad }), /expected a valid UUID/);
+  }
+  assert.throws(() => validateEnv({ ID: { type: 'uuid', required: true } }, {}), EnvSaafError);
+
+  // hex: mixed-case hex passes, returned unchanged.
+  assert.strictEqual(validateEnv({ H: { type: 'hex' } }, { H: 'deadBEEF42' }).H, 'deadBEEF42');
+  assert.strictEqual(validateEnv({ H: { type: 'hex' } }, { H: '00ff' }).H, '00ff');
+  for (const bad of ['deadbeefzz', '0x1234', '12 34', 'café']) {
+    assert.throws(() => validateEnv({ H: { type: 'hex' } }, { H: bad }), /expected a hexadecimal string/);
+  }
+  // length: an exact-length value passes, anything else fails naming the length.
+  assert.strictEqual(validateEnv({ H: { type: 'hex', length: 6 } }, { H: 'a1b2c3' }).H, 'a1b2c3');
+  assert.throws(() => validateEnv({ H: { type: 'hex', length: 6 } }, { H: 'a1b2' }), /6 characters long/);
+  assert.throws(() => validateEnv({ H: { type: 'hex', length: 6 } }, { H: 'a1b2c3d4' }), /6 characters long/);
+  // A bad length option is a clear rule error, not a crash.
+  assert.throws(() => validateEnv({ H: { type: 'hex', length: -1 } }, { H: 'a1' }), /"length" must be a non-negative integer/);
+  assert.throws(() => validateEnv({ H: { type: 'hex', length: 2.5 } }, { H: 'a1' }), /"length" must be a non-negative integer/);
+  // minLength/maxLength also work on hex values — they are strings.
+  assert.throws(() => validateEnv({ H: { type: 'hex', maxLength: 2 } }, { H: 'a1b2' }), /at most 2 characters/);
+}
+
 // Issue #82: parseEnvFile takes .env TEXT, not a file path. Passing a path
 // silently returned {}; now it throws a clear error pointing at loadEnv.
 {
