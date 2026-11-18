@@ -60,7 +60,7 @@ const env = validateEnv({
 // env.ALLOWED_ORIGINS is an array, env.SHOUTY_NAME is upper-cased
 ```
 
-The transform runs after coercion and after the `choices` check; if it throws, the error is collected like any other validation error (with the key named). It runs only on values actually provided — not on `default` values. In TypeScript the result type for that key is inferred from the transform's return type.
+The transform runs after coercion and after the `choices` check; if it throws, the error is collected like any other validation error (with the key named). It runs only on values actually provided — not on `default` values (defaults are still coerced and validated like any value, so a bad default fails with an error naming the key). In TypeScript the result type for that key is inferred from the transform's return type.
 
 ### `email` type and `pattern` — validate formats
 

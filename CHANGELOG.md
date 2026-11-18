@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Fixed: `validateEnv` now runs a `default` through the same coercion and checks (type, `min`/`max`, `choices`, `pattern`, length) as a provided value, so a bad default such as `{ type: 'port', default: 99999 }` throws an error naming the key; a supplied value still overrides the default, and `transform` still runs only on provided values (fixes #114)
 - Added: CLI `check` now compares the keys in a real `.env` with the template when the file is present, reporting typo'd keys (`EXTRA in .env`) and unset template keys (`MISSING in .env`); `--json` output gains `envExtra` and `envMissing` fields (fixes #100)
 - Added: CLI `--version` / `-v` prints the installed version from `package.json` and exits 0, before or after a subcommand (fixes #98)
 - Added: `env-saaf example --write[=<file>]` writes the draft straight to `.env.example` (or the file named) instead of printing it, with a short confirmation; an existing file is only overwritten when `--force` is also passed (fixes #102)
