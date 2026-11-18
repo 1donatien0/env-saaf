@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Added: CLI `check` now compares the keys in a real `.env` with the template when the file is present, reporting typo'd keys (`EXTRA in .env`) and unset template keys (`MISSING in .env`); `--json` output gains `envExtra` and `envMissing` fields (fixes #100)
+
 ## 1.3.0 — 2026-11-18
 
 - Added: `uuid` type — validates canonical UUIDs (8-4-4-4-12 hex groups, upper- and lowercase); malformed values are rejected with an error naming the key (fixes #37)
