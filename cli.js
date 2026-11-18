@@ -72,18 +72,35 @@ if (cmd === 'scan') {
   const documented = Object.keys(parseEnvFile(fs.readFileSync(examplePath, 'utf8')));
   const used = scanDir(dir);
   const { usedNotDocumented, documentedNotUsed } = diffEnv(used, documented);
+  // The real .env is not committed, so only compare keys when it is actually present
+  const envPath = path.join(dir, '.env');
+  let envExtra = [];
+  let envMissing = [];
+  if (fs.existsSync(envPath)) {
+    const envKeys = Object.keys(parseEnvFile(fs.readFileSync(envPath, 'utf8')));
+    const envDiff = diffEnv(envKeys, documented);
+    envExtra = envDiff.usedNotDocumented;
+    envMissing = envDiff.documentedNotUsed;
+  }
   if (jsonMode) {
     const result = {
-      ok: usedNotDocumented.length === 0 && documentedNotUsed.length === 0,
+      ok: usedNotDocumented.length === 0 && documentedNotUsed.length === 0
+        && envExtra.length === 0 && envMissing.length === 0,
       missing: usedNotDocumented,
       extra: documentedNotUsed,
       invalid: [],
+      envExtra,
+      envMissing,
     };
     console.log(JSON.stringify(result));
   } else {
     usedNotDocumented.forEach(k => console.log(`MISSING in ${fileOpt}: ${k} (used in code)`));
     documentedNotUsed.forEach(k => console.log(`UNUSED: ${k} (in ${fileOpt}, never used in code)`));
-    if (!usedNotDocumented.length && !documentedNotUsed.length) console.log(`env-saaf: all clean — code and ${fileOpt} match.`);
+    envExtra.forEach(k => console.log(`EXTRA in .env: ${k} (not in ${fileOpt})`));
+    envMissing.forEach(k => console.log(`MISSING in .env: ${k} (in ${fileOpt}, not set locally)`));
+    if (!usedNotDocumented.length && !documentedNotUsed.length && !envExtra.length && !envMissing.length) {
+      console.log(`env-saaf: all clean — code and ${fileOpt} match.`);
+    }
   }
   process.exit(usedNotDocumented.length ? 1 : 0);
 } else if (cmd === 'example') {

@@ -278,6 +278,8 @@ npx env-saaf scan ./src --json  # JSON list of used vars
 npx env-saaf example ./src  # draft a .env.example from a code scan
 ```
 
+When a real `.env` sits next to the template, `check` also compares their keys: a key in `.env` that is not documented (`EXTRA in .env: FOO (not in .env.example)`) is usually a typo, and a template key with no local value is reported as `MISSING in .env: BAR (in .env.example, not set locally)`. `--file` selects the template for both comparisons; with no `.env` file this extra check is skipped. In `--json` mode the findings appear as `envExtra` and `envMissing` alongside the existing `missing`, `extra` and `invalid` fields.
+
 ### Generate `.env.example` from a schema
 
 The schema already knows every key — generate the example file from it instead of writing it by hand:

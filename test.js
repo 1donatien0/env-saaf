@@ -491,6 +491,65 @@ assert.ok(!ex.includes('sk_live'));
   fs.rmSync(dir, { recursive: true, force: true });
 }
 
+// Issue #100: CLI check also compares the real .env with the template keys.
+{
+  const { spawnSync } = require('node:child_process');
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const path = require('node:path');
+  const cli = path.join(__dirname, 'cli.js');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'env-saaf-envkeys-'));
+
+  try {
+    fs.writeFileSync(path.join(dir, 'app.js'), 'const db = process.env.DATABASE_URL;');
+    fs.writeFileSync(path.join(dir, '.env.example'), 'DATABASE_URL=\n');
+    fs.writeFileSync(path.join(dir, '.env'), 'DATABSE_URL=postgres://localhost/app\n');
+
+    const human = spawnSync(process.execPath, [cli, 'check', dir], { encoding: 'utf8' });
+    assert.ok(human.stdout.includes('EXTRA in .env: DATABSE_URL (not in .env.example)'), human.stdout);
+    assert.ok(human.stdout.includes('MISSING in .env: DATABASE_URL (in .env.example, not set locally)'), human.stdout);
+
+    const json = spawnSync(process.execPath, [cli, 'check', dir, '--json'], { encoding: 'utf8' });
+    assert.deepStrictEqual(JSON.parse(json.stdout), {
+      ok: false,
+      missing: [],
+      extra: [],
+      invalid: [],
+      envExtra: ['DATABSE_URL'],
+      envMissing: ['DATABASE_URL'],
+    });
+
+    // A matching .env is clean; the existing all-clean message still applies.
+    fs.writeFileSync(path.join(dir, '.env'), 'DATABASE_URL=postgres://localhost/app\n');
+    const clean = spawnSync(process.execPath, [cli, 'check', dir], { encoding: 'utf8' });
+    assert.strictEqual(clean.status, 0);
+    assert.ok(clean.stdout.includes('all clean'));
+    assert.ok(!clean.stdout.includes('in .env:'));
+
+    // Without .env the comparison is skipped and the old shape is unchanged except for empty fields.
+    fs.rmSync(path.join(dir, '.env'));
+    const noEnv = spawnSync(process.execPath, [cli, 'check', dir, '--json'], { encoding: 'utf8' });
+    assert.deepStrictEqual(JSON.parse(noEnv.stdout), {
+      ok: true,
+      missing: [],
+      extra: [],
+      invalid: [],
+      envExtra: [],
+      envMissing: [],
+    });
+
+    // --file selects the template used for the comparison too.
+    fs.writeFileSync(path.join(dir, '.env.sample'), 'SAMPLE_KEY=\n');
+    fs.writeFileSync(path.join(dir, '.env'), 'SAMPLE_KEY=set\nTYPO_KEY=oops\n');
+    const custom = spawnSync(process.execPath, [cli, 'check', dir, '--file', '.env.sample', '--json'], { encoding: 'utf8' });
+    assert.deepStrictEqual(JSON.parse(custom.stdout).envExtra, ['TYPO_KEY']);
+    assert.deepStrictEqual(JSON.parse(custom.stdout).envMissing, []);
+    assert.deepStrictEqual(JSON.parse(custom.stdout).missing, ['DATABASE_URL']);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+}
+
 // Issue #70: CLI scan finds literal env reads in TypeScript modules.
 {
   const { execFileSync } = require('node:child_process');
