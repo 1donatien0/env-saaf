@@ -13,11 +13,16 @@ const path = require('node:path');
 const { scanDir, parseEnvFile, diffEnv } = require('./index');
 
 const argv = process.argv.slice(2);
+// --version / -v is global: report the installed version wherever it appears, before anything else runs
+if (argv.includes('--version') || argv.includes('-v')) {
+  console.log(`env-saaf ${require('./package.json').version}`);
+  process.exit(0);
+}
 // Output is already plain in every mode, including when NO_COLOR is set.
 while (argv[0] === '--no-color') argv.shift();
 const cmd = argv[0];
 const USAGE = 'Usage: env-saaf check [dir] [--file name] [--json] | env-saaf scan [dir] [--json] | env-saaf example [dir]\n'
-  + 'Global option: --no-color (before or after the command).';
+  + 'Global options: --no-color, --version / -v (before or after the command).';
 // --help / -h / help: print usage and exit 0 (asking for help is not an error — this used to exit 2)
 if (cmd === '--help' || cmd === '-h' || cmd === 'help') {
   console.log(USAGE);

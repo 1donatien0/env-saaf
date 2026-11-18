@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Added: CLI `--version` / `-v` prints the installed version from `package.json` and exits 0, before or after a subcommand (fixes #98)
+
 ## 1.3.0 — 2026-11-18
 
 - Added: `uuid` type — validates canonical UUIDs (8-4-4-4-12 hex groups, upper- and lowercase); malformed values are rejected with an error naming the key (fixes #37)
