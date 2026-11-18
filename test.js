@@ -756,4 +756,4 @@ assert.deepStrictEqual(
   fs.rmSync(dir, { recursive: true, force: true });
 }
 
-console.log('env-saaf v1.2.0: all tests passed');
+console.log('env-saaf v1.3.0: all tests passed');

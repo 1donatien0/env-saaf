@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 1.3.0 — 2026-11-18
+
 - Added: `uuid` type — validates canonical UUIDs (8-4-4-4-12 hex groups, upper- and lowercase); malformed values are rejected with an error naming the key (fixes #37)
 - Added: `hex` type — validates hexadecimal strings, with an optional `length` option for fixed-size values (e.g. hashes); wrong-length values are rejected with an error naming the expected length (fixes #42)
 - Fixed: `loadEnv` with `assign: true` now JSON-stringifies object/array values (e.g. the `json` type) instead of writing `"[object Object]"`; strings, numbers, booleans and `null` keep their existing `String(value)` behaviour (fixes #88)
