@@ -424,6 +424,31 @@ assert.ok(!ex.includes('sk_live'));
   }
 }
 
+// Issue #98: global --version / -v flag — print the installed version and exit 0.
+{
+  const { spawnSync } = require('node:child_process');
+  const path = require('node:path');
+  const cli = path.join(__dirname, 'cli.js');
+  const expected = `env-saaf ${require('./package.json').version}\n`;
+
+  const commands = [
+    ['--version'],
+    ['-v'],
+    ['check', '--version'],
+    ['scan', '-v'],
+    ['--no-color', '--version'],
+  ];
+  for (const args of commands) {
+    const run = spawnSync(process.execPath, [cli, ...args], { encoding: 'utf8' });
+    assert.strictEqual(run.status, 0, args.join(' '));
+    assert.strictEqual(run.stdout, expected, args.join(' '));
+    assert.strictEqual(run.stderr, '', args.join(' '));
+  }
+
+  const help = spawnSync(process.execPath, [cli, '--help'], { encoding: 'utf8' });
+  assert.ok(help.stdout.includes('--version'));
+}
+
 // Issue #24: CLI --json output for check and scan
 {
   const { execFileSync } = require('node:child_process');
