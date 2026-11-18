@@ -273,6 +273,55 @@ assert.ok(!ex.includes('sk_live'));
   fs.rmSync(dir, { recursive: true, force: true });
 }
 
+// Issue #113: 'check' exits 1 whenever it reports a finding — including EXTRA /
+// MISSING keys in .env, which used to print a line and still exit 0 — and
+// --json 'ok' matches the exit code in every case. A clean project still exits 0.
+// Decision: UNUSED (documented but never referenced in code) is a finding too.
+{
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const path = require('node:path');
+  const { spawnSync } = require('node:child_process');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'env-saaf-check-'));
+  const cli = path.join(__dirname, 'cli.js');
+  const run = (args) => spawnSync('node', [cli, ...args], { encoding: 'utf8' });
+  const write = (name, text) => fs.writeFileSync(path.join(dir, name), text);
+
+  write('app.js', 'const flag = process.env.KNOWN;');
+  write('.env.example', 'KNOWN=1\n');
+
+  // Clean project: exit 0, ok true.
+  write('.env', 'KNOWN=1\n');
+  const clean = run(['check', dir]);
+  assert.strictEqual(clean.status, 0);
+  assert.strictEqual(JSON.parse(run(['check', dir, '--json']).stdout.trim()).ok, true);
+
+  // The only finding is EXTRA in .env: exit 1, and --json agrees.
+  write('.env', 'KNOWN=1\nTYPO_KEY=2\n');
+  const extra = run(['check', dir]);
+  assert.strictEqual(extra.status, 1);
+  assert.ok(extra.stdout.includes('EXTRA in .env: TYPO_KEY'));
+  const extraJson = JSON.parse(run(['check', dir, '--json']).stdout.trim());
+  assert.strictEqual(extraJson.ok, false);
+  assert.deepStrictEqual(extraJson.envExtra, ['TYPO_KEY']);
+  assert.strictEqual(run(['check', dir, '--json']).status, 1);
+
+  // The only finding is MISSING in .env: exit 1.
+  write('.env', '');
+  const missing = run(['check', dir]);
+  assert.strictEqual(missing.status, 1);
+  assert.ok(missing.stdout.includes('MISSING in .env: KNOWN'));
+
+  // UNUSED (documented, never used in code): exit 1 as well.
+  write('.env.example', 'KNOWN=1\nUNUSED_KEY=2\n');
+  write('.env', 'KNOWN=1\nUNUSED_KEY=2\n');
+  const unused = run(['check', dir]);
+  assert.strictEqual(unused.status, 1);
+  assert.ok(unused.stdout.includes('UNUSED: UNUSED_KEY'));
+
+  fs.rmSync(dir, { recursive: true, force: true });
+}
+
 // Issue #102: CLI 'example --write' — save the draft to a file instead of printing it
 {
   const fs = require('node:fs');

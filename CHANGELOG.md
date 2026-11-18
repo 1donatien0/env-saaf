@@ -8,6 +8,7 @@
 - Fixed: CLI now recognises `--help` / `-h` after a subcommand (e.g. `env-saaf scan --help`), printing usage and exiting 0 instead of treating the flag as a directory (fixes #97)
 - Fixed: `parseEnvFile` no longer ends a quoted value at an escaped quote — `B='it\'s'` parses to `it's` and `D="it\"s"` to `it"s`; other backslashes (e.g. `C:\path`) stay literal (fixes #117)
 - Fixed: `port` accepts 0 so a server can ask the operating system for an available port (fixes #101).
+- Fixed: `env-saaf check` exits 1 on every finding it prints, including `EXTRA in .env` / `MISSING in .env` (they used to print and still exit 0), and `--json` `ok` now matches the exit code; `UNUSED` counts as a finding too (fixes #113)
 
 ## 1.3.0 — 2026-11-18
 
