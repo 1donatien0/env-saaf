@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Fixed: `loadEnv` with `assign: true` now JSON-stringifies object/array values (e.g. the `json` type) instead of writing `"[object Object]"`; strings, numbers, booleans and `null` keep their existing `String(value)` behaviour (fixes #88)
 - Fixed: `loadEnv` infers return type from schema (`EnvResult<S>`) like `validateEnv` does, rather than returning a loose `Record<string, string | number | boolean>` (fixes #91)
 - Fixed: `generateExample` leaves an empty placeholder for secret-looking keys (`API_KEY`, `DB_PASSWORD`, …) instead of `your_value_here` — an explicit `default` still wins (fixes #56)
 - Added: `trim: false` option — keep leading/trailing whitespace for values where it is part of the value (e.g. a password with a significant space); trimming stays the default, and numbers/booleans are unaffected (fixes #84)
