@@ -242,7 +242,7 @@ app.<span class="fn">listen</span>(env.PORT);</pre>
         <div class="bar">when something is wrong</div>
         <pre><span class="e">✗ EnvSaafError: 2 problems with your environment</span>
 
-  • PORT — expected a port (1–65535), got <span class="s">"abc"</span>
+  • PORT — expected a port (0–65535), got <span class="s">"abc"</span>
   • API_KEY — missing (required)
 
 <span class="c">Every problem is listed in one error —
@@ -461,7 +461,7 @@ var scenes = [
   [
     '<span class="p">$</span> node server.js',
     '<span class="err">✗ EnvSaafError: 3 problems with your environment</span>',
-    '  • <span class="key">PORT</span> — expected a port (1–65535), got <span class="str">"abc"</span>',
+    '  • <span class="key">PORT</span> — expected a port (0–65535), got <span class="str">"abc"</span>',
     '  • <span class="key">API_KEY</span> — missing (required)',
     '  • <span class="key">MODE</span> — expected development | production, got <span class="str">"prod"</span>',
     '<span class="dim">Fix all three in one pass — no crash-fix-crash loop.</span>'
@@ -497,7 +497,7 @@ function pgValidate(){
   var errors = [], out = {};
   var portRaw = get('pgPORT');
   if (!portRaw) { errors.push(['PORT', 'missing (required)']); }
-  else if (!/^\d+$/.test(portRaw) || +portRaw < 1 || +portRaw > 65535) { errors.push(['PORT', 'expected a port (1–65535), got "' + esc(portRaw) + '"']); }
+  else if (!/^\d+$/.test(portRaw) || +portRaw > 65535) { errors.push(['PORT', 'expected a port (0–65535), got "' + esc(portRaw) + '"']); }
   else { out.PORT = +portRaw; }
   var dbgRaw = get('pgDEBUG'), dbg = dbgRaw.toLowerCase();
   if (!dbgRaw) { out.DEBUG = false; }
