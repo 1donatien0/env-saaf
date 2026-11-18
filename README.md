@@ -333,8 +333,6 @@ env-saaf exists thanks to everyone who has contributed code, fixes and ideas —
   <img src="https://contrib.rocks/image?repo=abhi478jeetur-rgb/env-saaf" alt="env-saaf contributors" />
 </a>
 
-Want to see your face here? Pick a [`good first issue`](https://github.com/abhi478jeetur-rgb/env-saaf/labels/good%20first%20issue) and send a pull request.
-
 ## License
 
 MIT © Abhijeet Kumar
