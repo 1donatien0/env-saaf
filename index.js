@@ -74,6 +74,24 @@ function coerce(key, raw, type, trim = true) {
       catch { throw new Error(`${key}: expected a valid URL, got "${raw}"`); }
       return String(v);
     }
+    case 'uuid': {
+      // Canonical UUID: 8-4-4-4-12 hex groups. Upper- and lowercase hex
+      // are both accepted, and the value is returned exactly as provided.
+      const s = String(v);
+      if (!/^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/.test(s)) {
+        throw new Error(`${key}: expected a valid UUID (xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx), got "${raw}"`);
+      }
+      return s;
+    }
+    case 'hex': {
+      // Hex strings only: API tokens, colour codes, hashes. An empty
+      // value never reaches here (it counts as missing), so '+' is right.
+      const s = String(v);
+      if (!/^[0-9a-fA-F]+$/.test(s)) {
+        throw new Error(`${key}: expected a hexadecimal string, got "${raw}"`);
+      }
+      return s;
+    }
     case 'port': {
       const n = Number(v);
       if (!Number.isInteger(n) || n < 1 || n > 65535) throw new Error(`${key}: expected a port (1-65535), got "${raw}"`);
@@ -115,7 +133,7 @@ function validateEnv(schema, env = process.env, options = {}) {
         }
       }
       // minLength/maxLength: allowed length for string values (string,
-      // email, url). Checked after coercion, before choices/pattern; the
+      // email, url, uuid, hex). Checked after coercion, before choices/pattern; the
       // error names the allowed length. Either option works alone, and
       // non-string values skip the check entirely.
       if (typeof val === 'string' && (rule.minLength !== undefined || rule.maxLength !== undefined)) {
@@ -130,6 +148,19 @@ function validateEnv(schema, env = process.env, options = {}) {
           const range = rule.minLength !== undefined && rule.maxLength !== undefined ? `${rule.minLength}–${rule.maxLength} characters`
             : rule.minLength !== undefined ? `at least ${rule.minLength} characters` : `at most ${rule.maxLength} characters`;
           errors.push(`${key}: expected a string ${range} long, got "${raw}"`);
+          continue;
+        }
+      }
+      // length: exact length in characters for the hex type (fixed-size
+      // tokens and hashes). Checked after coercion, before choices/pattern;
+      // the error names the expected length.
+      if (rule.type === 'hex' && rule.length !== undefined) {
+        if (!Number.isInteger(rule.length) || rule.length < 0) {
+          errors.push(`${key}: "length" must be a non-negative integer`);
+          continue;
+        }
+        if (typeof val === 'string' && val.length !== rule.length) {
+          errors.push(`${key}: expected a string ${rule.length} characters long, got "${raw}"`);
           continue;
         }
       }

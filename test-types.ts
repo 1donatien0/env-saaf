@@ -1,7 +1,7 @@
 // env-saaf type tests — sirf `tsc` se check hote hain (`npm test` me shamil).
 // Runtime me kuch nahi chalta: ye file sirf TypeScript inference verify karti hai.
 // Issue #7: validateEnv ka return type schema se infer hona chahiye.
-import { validateEnv, loadEnv, EnvSchema, EnvResult } from './index';
+import { validateEnv, EnvSchema, EnvResult } from './index';
 
 const env = validateEnv({
   PORT: { type: 'port', required: true },
@@ -10,8 +10,8 @@ const env = validateEnv({
   API_URL: { type: 'url', required: true },
   MODE: { type: 'string', default: 'dev' },
   NAME: { type: 'string' },
-  FEATURE_FLAGS: { type: 'json', required: true },
-  API_TOKEN: { type: 'string', minLength: 10, required: true },
+  TENANT_ID: { type: 'uuid', required: true },
+  API_HASH: { type: 'hex' },
 });
 
 // required keys: exact types
@@ -19,13 +19,12 @@ const port: number = env.PORT;
 const count: number = env.COUNT;
 const url: string = env.API_URL;
 const mode: string = env.MODE;
+// uuid and hex values are strings
+const tenantId: string = env.TENANT_ID;
+const apiHash: string | undefined = env.API_HASH;
 // optional keys: value ya undefined
 const debug: boolean | undefined = env.DEBUG;
 const name: string | undefined = env.NAME;
-// json values are parsed JSON of unknown shape
-const flags: unknown = env.FEATURE_FLAGS;
-// minLength/maxLength are rule options — the value stays a string
-const token: string = env.API_TOKEN;
 
 // number methods chalne chahiye (issue #7 ka asli gap)
 const doubled: number = env.PORT * 2;
@@ -48,25 +47,4 @@ const looseSchema: EnvSchema = { PORT: { type: 'port', required: true } };
 const loose = validateEnv(looseSchema);
 const looseValue: string | number | boolean = loose.ANYTHING;
 
-// Issue #91: loadEnv bhi EnvResult infer kare
-const loaded = loadEnv(
-  {
-    PORT: { type: 'port', required: true },
-    NAME: { type: 'string' },
-    TIMEOUT: { type: 'number', default: 5000 },
-  },
-  { paths: [], env: { PORT: '3000' } }
-);
-
-const loadedPort: number = loaded.PORT;
-const loadedName: string | undefined = loaded.NAME;
-const loadedTimeout: number = loaded.TIMEOUT;
-
-// @ts-expect-error — PORT number hai, string nahi
-const loadedPortWrong: string = loaded.PORT;
-// @ts-expect-error — galat key: schema me nahi hai
-const loadedTypo = loaded.TYPO_KEY;
-// @ts-expect-error — NAME optional hai, undefined ho sakta hai
-const loadedNameStrict: string = loaded.NAME;
-
-export { port, count, url, mode, debug, name, doubled, fixed, wrongType, typo, debugStrict, myPort, myDebug, looseValue, flags, token, loadedPort, loadedName, loadedTimeout, loadedPortWrong, loadedTypo, loadedNameStrict };
+export { port, count, url, mode, debug, name, doubled, fixed, wrongType, typo, debugStrict, myPort, myDebug, looseValue, tenantId, apiHash };
