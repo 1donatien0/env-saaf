@@ -270,6 +270,20 @@ function loadEnv(schema, options = {}) {
 
 /** Parse .env text -> { KEY: value }. Handles quotes, `export `, comments,
  * multiline quoted values, and ${VAR} interpolation. */
+/**
+ * Index of the first `quote` in `text` that is not escaped by a backslash,
+ * starting at `from`; -1 when the value is still unterminated (multiline).
+ * A backslash escapes the single character after it, so `\\` before a quote
+ * still lets that quote close the value.
+ */
+function closingQuoteIndex(text, quote, from = 1) {
+  for (let i = from; i < text.length; i++) {
+    if (text[i] === '\\') { i++; continue; }
+    if (text[i] === quote) return i;
+  }
+  return -1;
+}
+
 function parseEnvFile(text) {
   // A file path passed by mistake (e.g. parseEnvFile('.env')) used to silently
   // return {} because no line matched KEY=VALUE. Detect that confusion: a
@@ -306,16 +320,20 @@ function parseEnvFile(text) {
       // (NAME="x # y" -> x # y; NAME="x" # note -> x)
       quote = val[0] === '"' ? 'double' : 'single';
       const q = val[0];
-      let end = val.indexOf(q, 1);
+      let end = closingQuoteIndex(val, q);
       // Multiline value: the closing quote is not on this line, so keep
       // consuming lines (with their newlines) until it appears
       // (PRIVATE_KEY="-----BEGIN-----\n...\n-----END-----")
       while (end === -1 && i + 1 < lines.length) {
         i++;
         val += '\n' + lines[i];
-        end = val.indexOf(q, 1);
+        end = closingQuoteIndex(val, q);
       }
-      val = end === -1 ? val.slice(1) : val.slice(1, end);
+      // A backslash-escaped quote is part of the value, not the end of it
+      // (B='it\'s' -> it's; D="it\"s" -> it"s). Both quote styles behave the
+      // same way; other backslashes are left untouched (C:\path stays literal).
+      const escapedQuote = String.fromCharCode(92) + q;
+      val = end === -1 ? val.slice(1) : val.slice(1, end).split(escapedQuote).join(q);
     } else {
       // Unquoted value: a '#' at the start of the value or after whitespace begins an inline comment
       // (PORT=3000 # my port -> 3000; a '#frag' inside a URL without a preceding space is safe)
