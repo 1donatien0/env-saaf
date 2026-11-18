@@ -317,6 +317,25 @@ assert.ok(!ex.includes('sk_live'));
   assert.ok(outNone.includes('Usage: env-saaf'));
 }
 
+// Issue #97: --help / -h recognised after a subcommand, not treated as a directory
+{
+  const { spawnSync } = require('node:child_process');
+  const path = require('node:path');
+  const cli = path.join(__dirname, 'cli.js');
+  for (const args of [
+    ['scan', '--help'],
+    ['check', '--help'],
+    ['example', '--help'],
+    ['scan', '-h'],
+    ['scan', '--help', 'some-dir'],
+  ]) {
+    const run = spawnSync(process.execPath, [cli, ...args], { encoding: 'utf8' });
+    assert.strictEqual(run.status, 0, args.join(' ') + ' should exit 0: ' + run.stderr);
+    assert.ok(run.stdout.includes('Usage: env-saaf'), args.join(' ') + ' should print usage');
+    assert.ok(!/ENOENT|not found/.test(run.stderr + run.stdout), args.join(' ') + ' must not treat --help as a path');
+  }
+}
+
 // Issue #62: --no-color is accepted globally and the CLI keeps its output plain.
 {
   const { spawnSync } = require('node:child_process');

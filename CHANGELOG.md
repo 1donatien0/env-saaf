@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Fixed: CLI now recognises `--help` / `-h` after a subcommand (e.g. `env-saaf scan --help`), printing usage and exiting 0 instead of treating the flag as a directory (fixes #97)
+
 ## 1.3.0 — 2026-11-18
 
 - Added: `uuid` type — validates canonical UUIDs (8-4-4-4-12 hex groups, upper- and lowercase); malformed values are rejected with an error naming the key (fixes #37)
