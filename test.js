@@ -976,4 +976,30 @@ assert.deepStrictEqual(
   );
 }
 
+// Issue #114: a default goes through the same coercion and validation as a
+// provided value; a bad default fails with the key named, a supplied value wins.
+{
+  const bad = (schema, key) => assert.throws(
+    () => validateEnv(schema, {}),
+    (e) => e instanceof EnvSaafError && e.errors.some((m) => m.startsWith(key + ':'))
+  );
+  bad({ P: { type: 'port', default: 99999 } }, 'P');
+  bad({ M: { choices: ['a', 'b'], default: 'c' } }, 'M');
+  bad({ N: { type: 'number', default: 'notanumber' } }, 'N');
+  bad({ R: { type: 'int', min: 1, max: 5, default: 9 } }, 'R');
+  // An empty value counts as missing, so the default is checked then too.
+  assert.throws(() => validateEnv({ P: { type: 'port', default: 99999 } }, { P: '' }), /P:/);
+  // Valid defaults still work, and are coerced like real values.
+  assert.deepStrictEqual({ ...validateEnv({
+    P: { type: 'port', default: 3000 },
+    L: { choices: ['info', 'warn'], default: 'info' },
+    B: { type: 'boolean', default: 'yes' },
+    J: { type: 'json', default: { a: 1 } },
+  }, {}) }, { P: 3000, L: 'info', B: true, J: { a: 1 } });
+  // A supplied value overrides the default (and a bad default is never checked then).
+  assert.strictEqual(validateEnv({ P: { type: 'port', default: 99999 } }, { P: '8080' }).P, 8080);
+  // transform still runs only on provided values.
+  assert.strictEqual(validateEnv({ T: { default: 'a', transform: (v) => v + '!' } }, {}).T, 'a');
+}
+
 console.log('env-saaf v1.3.0: all tests passed');

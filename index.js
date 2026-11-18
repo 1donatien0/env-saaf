@@ -115,11 +115,17 @@ function validateEnv(schema, env = process.env, options = {}) {
     }
   }
   for (const [key, rule] of Object.entries(schema)) {
-    const raw = env[key];
+    let raw = env[key];
+    // A default goes through the same coercion and checks as a real value,
+    // so a typo in it fails startup with the key named. A supplied value
+    // still wins; transform is skipped for defaults (see below).
+    let usingDefault = false;
     if (raw === undefined || raw === '') {
-      if (rule.default !== undefined) { out[key] = rule.default; continue; }
-      if (rule.required) errors.push(`${key}: missing required variable`);
-      continue;
+      if (rule.default !== undefined) { raw = rule.default; usingDefault = true; }
+      else {
+        if (rule.required) errors.push(`${key}: missing required variable`);
+        continue;
+      }
     }
     try {
       const val = coerce(key, raw, rule.type || 'string', rule.trim !== false);
@@ -186,10 +192,11 @@ function validateEnv(schema, env = process.env, options = {}) {
         }
       }
       // transform: one custom step after coercion and the choices check.
-      // It runs only on values actually provided (not on defaults). A
+      // It runs only on values actually provided (not on defaults, which are
+      // still coerced and validated). A
       // throwing transform is collected like any other validation error,
       // with the key named — never thrown raw.
-      if (rule.transform !== undefined) {
+      if (rule.transform !== undefined && !usingDefault) {
         if (typeof rule.transform !== 'function') {
           errors.push(`${key}: "transform" must be a function`);
           continue;
