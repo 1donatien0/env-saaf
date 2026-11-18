@@ -325,6 +325,16 @@ console.log(maskSecrets(process.env)); // values masked: sk***56
 
 Issues and pull requests are welcome — including tiny ones. Start with the issues labelled [`good first issue`](https://github.com/abhi478jeetur-rgb/env-saaf/labels/good%20first%20issue), and please read [CONTRIBUTING.md](CONTRIBUTING.md) first: it explains the zero-dependency rule and how to run the tests.
 
+## Contributors
+
+env-saaf exists thanks to everyone who has contributed code, fixes and ideas — this wall grows on its own as new pull requests land:
+
+<a href="https://github.com/abhi478jeetur-rgb/env-saaf/graphs/contributors">
+  <img src="https://contrib.rocks/image?repo=abhi478jeetur-rgb/env-saaf" alt="env-saaf contributors" />
+</a>
+
+Want to see your face here? Pick a [`good first issue`](https://github.com/abhi478jeetur-rgb/env-saaf/labels/good%20first%20issue) and send a pull request.
+
 ## License
 
 MIT © Abhijeet Kumar
