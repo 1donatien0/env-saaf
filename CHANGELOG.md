@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Fixed: `env-saaf check` with no template file now names the fix instead of stopping at "not found" — the message points at `env-saaf example`, and `--json` carries the same hint in a `hint` field so stdout stays parseable and stderr stays empty; exit code is still 2 (fixes #89)
+
 - Fixed: `scanCode` (and so `scan`, `check` and `example`) reads code, not the text inside comments, strings and template literals — a `process.env.FOO` named only in a doc comment or a test string no longer counts as a usage, while reads inside a template's `${...}`, bracket access and destructuring still do (fixes #115)
 
 - Fixed: `validateEnv` now runs a `default` through the same coercion and checks (type, `min`/`max`, `choices`, `pattern`, length) as a provided value, so a bad default such as `{ type: 'port', default: 99999 }` throws an error naming the key; a supplied value still overrides the default, and `transform` still runs only on provided values (fixes #114)

@@ -66,7 +66,14 @@ if (cmd === 'scan') {
 } else if (cmd === 'check') {
   const examplePath = path.join(dir, fileOpt);
   if (!fs.existsSync(examplePath)) {
-    console.error(`env-saaf: ${fileOpt} not found in ` + dir);
+    // Issue #89: point at the command that drafts the file instead of dead-ending
+    // a new user. --json keeps stdout parseable, so the hint travels as a field.
+    const hint = `run \`env-saaf example\` to draft one, or generate it from your schema with generateExample()`;
+    if (jsonMode) {
+      console.log(JSON.stringify({ ok: false, error: `${fileOpt} not found in ${dir}`, hint }));
+    } else {
+      console.error(`env-saaf: ${fileOpt} not found in ${dir} — ${hint}`);
+    }
     process.exit(2);
   }
   const documented = Object.keys(parseEnvFile(fs.readFileSync(examplePath, 'utf8')));

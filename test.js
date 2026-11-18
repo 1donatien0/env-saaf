@@ -1030,3 +1030,32 @@ assert.deepStrictEqual(
 }
 
 console.log('env-saaf v1.3.0: all tests passed');
+
+// Issue #89: a missing template file must point at the command that drafts one,
+// and --json must carry that hint instead of plain text on stderr.
+{
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const path = require('node:path');
+  const { spawnSync } = require('node:child_process');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'env-saaf-hint-'));
+  fs.writeFileSync(path.join(dir, 'app.js'), 'const known = process.env.KNOWN;');
+  const cli = path.join(__dirname, 'cli.js');
+  const run = (args) => spawnSync('node', [cli, ...args], { encoding: 'utf8' });
+
+  const plain = run(['check', dir]);
+  assert.strictEqual(plain.status, 2);
+  assert.match(plain.stderr, /not found in/);
+  assert.match(plain.stderr, /env-saaf example/);
+  assert.strictEqual(plain.stdout, '');
+
+  const json = run(['check', dir, '--json']);
+  assert.strictEqual(json.status, 2);
+  const payload = JSON.parse(json.stdout.trim());
+  assert.strictEqual(payload.ok, false);
+  assert.match(payload.error, /not found in/);
+  assert.match(payload.hint, /env-saaf example/);
+  assert.strictEqual(json.stderr, '');
+
+  fs.rmSync(dir, { recursive: true, force: true });
+}
