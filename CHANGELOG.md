@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Fixed: CLI now recognises `--help` / `-h` after a subcommand (e.g. `env-saaf scan --help`), printing usage and exiting 0 instead of treating the flag as a directory (fixes #97)
 - Fixed: `port` accepts 0 so a server can ask the operating system for an available port (fixes #101).
 
 ## 1.3.0 — 2026-11-18
