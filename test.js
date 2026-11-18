@@ -273,6 +273,44 @@ assert.ok(!ex.includes('sk_live'));
   fs.rmSync(dir, { recursive: true, force: true });
 }
 
+// Issue #102: CLI 'example --write' — save the draft to a file instead of printing it
+{
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const path = require('node:path');
+  const { spawnSync } = require('node:child_process');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'env-saaf-cli-'));
+  fs.writeFileSync(path.join(dir, 'app.js'), 'const x = process.env.MY_FLAG;');
+  const cli = path.join(__dirname, 'cli.js');
+  const run = (args) => spawnSync('node', [cli, ...args], { encoding: 'utf8' });
+  // without --write: draft still goes to stdout and no file is created
+  const plain = run(['example', dir]);
+  assert.strictEqual(plain.status, 0);
+  assert.ok(plain.stdout.includes('MY_FLAG='));
+  assert.ok(!fs.existsSync(path.join(dir, '.env.example')));
+  // --write: draft lands in .env.example, with a confirmation on stdout
+  const wrote = run(['example', dir, '--write']);
+  assert.strictEqual(wrote.status, 0);
+  assert.ok(wrote.stdout.includes('wrote .env.example'));
+  const saved = fs.readFileSync(path.join(dir, '.env.example'), 'utf8');
+  assert.ok(saved.includes('MY_FLAG='));
+  // --write again without --force: refuses, exit 1, file untouched
+  const again = run(['example', dir, '--write']);
+  assert.strictEqual(again.status, 1);
+  assert.ok(again.stderr.includes('--force'));
+  assert.strictEqual(fs.readFileSync(path.join(dir, '.env.example'), 'utf8'), saved);
+  // --write --force: overwrites with a fresh scan
+  fs.writeFileSync(path.join(dir, 'app.js'), 'const x = process.env.MY_FLAG; const y = process.env.OTHER;');
+  const forced = run(['example', dir, '--write', '--force']);
+  assert.strictEqual(forced.status, 0);
+  assert.ok(fs.readFileSync(path.join(dir, '.env.example'), 'utf8').includes('OTHER='));
+  // --write=<file>: writes to the named file instead
+  const named = run(['example', dir, '--write=.env.local.example']);
+  assert.strictEqual(named.status, 0);
+  assert.ok(fs.readFileSync(path.join(dir, '.env.local.example'), 'utf8').includes('MY_FLAG='));
+  fs.rmSync(dir, { recursive: true, force: true });
+}
+
 // Issue #15: scanCode — let aur var destructuring of process.env (previously only const)
 {
   assert.deepStrictEqual(
