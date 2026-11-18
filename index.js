@@ -376,8 +376,108 @@ function parseEnvFile(text) {
   return out;
 }
 
+// A masked character: a position inside a comment or a literal. It is neither
+// code nor whitespace, so nothing matches across it and it never looks like code.
+const MASKED = '\u0000';
+
+// Keywords after which a `/` opens a regular expression literal, not a division.
+const REGEX_AFTER = new Set(['return', 'typeof', 'instanceof', 'in', 'of', 'new', 'delete', 'void', 'case',
+  'do', 'else', 'yield', 'await', 'throw']);
+
+// Punctuation after which a `/` opens a regular expression literal.
+const REGEX_PUNCTUATION = '([{,;:=!&|?+-*%<>~^';
+
+/**
+ * The text of `src` with every comment and every literal's content turned into
+ * MASKED, at the same offsets, so what is left is the code. A template literal's
+ * `${...}` bodies stay code (a read inside one is a real read), and a newline
+ * always survives, so the mask has the text's shape. A `/` where an expression
+ * may start is read as a regular expression literal, so a quote inside it cannot
+ * open a string (fixes #115).
+ */
+function codeOnly(src) {
+  const out = src.split('');   // rewritten in place, so every offset stays where it was
+  const stack = [{ mode: 'code', braces: 0 }];
+  const top = () => stack[stack.length - 1];
+  const mayStartRegex = (prev, word) => REGEX_AFTER.has(word)
+    || (!word && (!prev || REGEX_PUNCTUATION.includes(prev)));
+  // A newline is never masked: the mask keeps the text's shape for anything that
+  // reads it line by line.
+  const mask = (at) => {
+    if (at < src.length && src[at] !== '\n' && src[at] !== '\r') out[at] = MASKED;
+  };
+  let prev = '';   // the last code character
+  let word = '';   // the identifier or keyword just read in code
+  let i = 0;
+  while (i < src.length) {
+    const c = src[i];
+    const n = src[i + 1];
+    if (c === '\n' || c === '\r') { i++; continue; }
+    if (top().mode === 'template') {
+      if (c === '\\') { mask(i); mask(i + 1); i += 2; continue; }
+      if (c === '`') { stack.pop(); mask(i); i++; prev = '`'; word = ''; continue; }
+      if (c === '$' && n === '{') {
+        stack.push({ mode: 'code', braces: 0 }); i += 2; prev = '{'; word = ''; continue;
+      }
+      mask(i); i++; continue;
+    }
+    if (c === '/' && n === '/') {
+      while (i < src.length && src[i] !== '\n') { mask(i); i++; }
+      continue;
+    }
+    if (c === '/' && n === '*') {
+      mask(i); mask(i + 1); i += 2;
+      while (i < src.length && !(src[i] === '*' && src[i + 1] === '/')) { mask(i); i++; }
+      if (i < src.length) { mask(i); mask(i + 1); i += 2; }
+      continue;
+    }
+    if (c === '"' || c === "'") {
+      const quote = c;
+      mask(i); i++;
+      while (i < src.length) {
+        if (src[i] === '\n') break;   // an unterminated string ends at the line
+        if (src[i] === '\\') { mask(i); mask(i + 1); i += 2; continue; }
+        const ch = src[i]; mask(i); i++;
+        if (ch === quote) break;
+      }
+      prev = quote; word = ''; continue;
+    }
+    if (c === '`') { stack.push({ mode: 'template' }); mask(i); i++; prev = '`'; word = ''; continue; }
+    if (c === '/' && mayStartRegex(prev, word)) {
+      mask(i); i++;
+      let inClass = false;
+      while (i < src.length) {
+        const ch = src[i];
+        if (ch === '\n') break;
+        if (ch === '\\') { mask(i); mask(i + 1); i += 2; continue; }
+        mask(i); i++;
+        if (ch === '[') inClass = true;
+        else if (ch === ']') inClass = false;
+        else if (ch === '/' && !inClass) break;
+      }
+      prev = '/'; word = ''; continue;
+    }
+    if (c === '{') { top().braces++; i++; prev = c; word = ''; continue; }
+    if (c === '}') {
+      if (top().braces === 0 && stack.length > 1) stack.pop();   // the end of a `${...}`
+      else top().braces = Math.max(0, top().braces - 1);
+      i++; prev = c; word = ''; continue;
+    }
+    if (/[A-Za-z0-9_$]/.test(c)) { word += c; prev = c; }
+    else if (!/\s/.test(c)) { word = ''; prev = c; }   // whitespace leaves both as they were
+    i++;
+  }
+  return out.join('');
+}
+
 /** Find every process.env.KEY usage in JS/TS source text. Returns sorted unique names. */
 function scanCode(text) {
+  const src = String(text);
+  const code = codeOnly(src);
+  const isCode = (start, end) => {
+    for (let i = start; i < end; i++) if (code[i] === MASKED) return false;
+    return true;
+  };
   const found = new Set();
   const patterns = [
     /process\.env\.([A-Za-z_][A-Za-z0-9_]*)/g,
@@ -387,9 +487,17 @@ function scanCode(text) {
     // stays unmatched (the identifier charset excludes $ and {).
     /process\.env\[`([A-Za-z_][A-Za-z0-9_]*)`\]/g,
   ];
-  for (const re of patterns) for (const m of String(text).matchAll(re)) found.add(m[1]);
+  // The read itself must be code: a `process.env.X` in a comment or a string is
+  // not a read. Bracket and destructured reads keep their key in a literal, so
+  // only the `process.env` they hang off has to be code.
+  for (const re of patterns) {
+    for (const m of src.matchAll(re)) {
+      if (isCode(m.index, m.index + 'process.env'.length)) found.add(m[1]);
+    }
+  }
+  const codeView = code.split(MASKED).join(' ');
   const destructure = /(?:const|let|var)\s*\{([^}]+)\}\s*=\s*process\.env/g;
-  for (const m of String(text).matchAll(destructure)) {
+  for (const m of codeView.matchAll(destructure)) {
     for (const part of m[1].split(',')) {
       const name = part.split(':')[0].split('=')[0].trim();
       if (/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) found.add(name);
