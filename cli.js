@@ -30,6 +30,11 @@ let jsonMode = false;
 const positional = [];
 for (let i = 1; i < argv.length; i++) {
   const a = argv[i];
+  // --help / -h anywhere after the command: asking for help is never a directory
+  if (a === '--help' || a === '-h') {
+    console.log(USAGE);
+    process.exit(0);
+  }
   if (a === '--file' && argv[i + 1]) fileOpt = argv[++i];
   else if (a.startsWith('--file=')) fileOpt = a.slice('--file='.length);
   else if (a === '--json') jsonMode = true;
