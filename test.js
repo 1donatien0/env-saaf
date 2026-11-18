@@ -1002,4 +1002,31 @@ assert.deepStrictEqual(
   assert.strictEqual(validateEnv({ T: { default: 'a', transform: (v) => v + '!' } }, {}).T, 'a');
 }
 
+// Issue #115: scanCode reads code, not the text inside comments or literals.
+{
+  // A mention in a comment or a literal is not a read.
+  assert.deepStrictEqual(scanCode('// set process.env.FOO first'), []);
+  assert.deepStrictEqual(scanCode('/* use process.env.BAR */'), []);
+  assert.deepStrictEqual(scanCode('const s = "see process.env.BAZ in docs"'), []);
+  assert.deepStrictEqual(scanCode("const t = 'process.env.QUX'"), []);
+  assert.deepStrictEqual(scanCode('const u = `see process.env.QUUX in docs`'), []);
+  assert.deepStrictEqual(scanCode('const r = /process.env.REGEX/;'), []);   // a regex literal, not a read
+  // A block comment spanning lines is masked across lines.
+  assert.deepStrictEqual(scanCode('const a = 1; /* process.env.L\nprocess.env.M */ const b = 2;'), []);
+  // A read inside a template's ${...} is a read; the literal text around it is not.
+  assert.deepStrictEqual(scanCode('const v = `k=${process.env.REAL} and process.env.FAKE`'), ['REAL']);
+  // The reads that must keep working: dot, bracket with a string or template, destructuring.
+  assert.deepStrictEqual(scanCode("process.env.A; process.env['B']; process.env[`C`]"), ['A', 'B', 'C']);
+  assert.deepStrictEqual(scanCode('const { D, E: alias = 1, F = "x" } = process.env;'), ['D', 'E', 'F']);
+  // A real read and a decoy on the same line: only the read counts.
+  assert.deepStrictEqual(scanCode('const g = process.env.G; // process.env.H is not read'), ['G']);
+  // Destructuring that only appears in a comment is not a read.
+  assert.deepStrictEqual(scanCode('// const { I } = process.env'), []);
+  // An escaped quote doesn't end the literal early and expose what follows it.
+  assert.deepStrictEqual(scanCode("const j = 'it\\'s process.env.J'; process.env.K"), ['K']);
+  // The library's own doc comment mentions process.env.KEY: scanning index.js is not a read of KEY.
+  const own = require('node:fs').readFileSync(require('node:path').join(__dirname, 'index.js'), 'utf8');
+  assert.ok(!scanCode(own).includes('KEY'));
+}
+
 console.log('env-saaf v1.3.0: all tests passed');
