@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Docs: README gains a copy-pasteable GitHub Actions workflow that runs `npx env-saaf check .`, with the optional `.env`-from-secrets step and a note that real secrets come from Actions secrets, never from the repo (fixes #67)
 - Added: CLI `scan` now also reports the reverse drift: keys declared in `.env.example` (or the `--file` template) that no code reads. They are listed as `UNUSED: KEY (in .env.example, never used in code)` warnings on stderr, and as an `unused` array in `--json` output; the list of used variables on stdout, `ok` and the exit code (still 0) are unchanged, and without a template file the output is exactly as before (fixes #63)
 
 - Fixed: `env-saaf check` with no template file now names the fix instead of stopping at "not found" — the message points at `env-saaf example`, and `--json` carries the same hint in a `hint` field so stdout stays parseable and stderr stays empty; exit code is still 2 (fixes #89)
