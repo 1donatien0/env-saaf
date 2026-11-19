@@ -692,6 +692,63 @@ assert.deepStrictEqual(
   parseEnvFile('B=x${MISSING_VAR}y\n'),
   { B: 'xy' });
 
+// Issue #136: unset and empty values have different defaults.
+{
+  const missing = 'ENV_SAAF_TEST_MISSING_DEFAULT';
+  const external = 'ENV_SAAF_TEST_PROCESS_DEFAULT';
+  const priorMissing = process.env[missing];
+  const priorExternal = process.env[external];
+  try {
+    delete process.env[missing];
+    process.env[external] = 'process-value';
+    const values = parseEnvFile([
+      'SET=value',
+      'EMPTY=',
+      'ALIAS=${ENV_SAAF_TEST_MISSING_DEFAULT}',
+      'UNSET_COLON=${ENV_SAAF_TEST_MISSING_DEFAULT:-fallback}',
+      'UNSET_DASH=${ENV_SAAF_TEST_MISSING_DEFAULT-fallback}',
+      'SET_COLON="${SET:-ignored}"',
+      'SET_DASH=${SET-ignored}',
+      'EMPTY_COLON=${EMPTY:-fallback}',
+      'EMPTY_DASH=${EMPTY-ignored}',
+      'EXPANDED_EMPTY=${ALIAS:-fallback}',
+      'EMPTY_DEFAULT=x${ENV_SAAF_TEST_MISSING_DEFAULT:-}y',
+      'PROCESS=${ENV_SAAF_TEST_PROCESS_DEFAULT:-fallback}',
+      'NESTED=${ENV_SAAF_TEST_MISSING_DEFAULT:-${SET}}',
+      'UNUSED_NESTED=${SET:-${ENV_SAAF_TEST_MISSING_DEFAULT:-ignored}}',
+      'ESCAPED=\\${SET:-ignored}',
+      'NESTED_ESCAPED=${ENV_SAAF_TEST_MISSING_DEFAULT:-\\${SET}}',
+      "SINGLE='${SET:-ignored}'",
+      'UNTERMINATED=${SET} ${SET:-fallback',
+    ].join('\n'));
+    assert.deepStrictEqual(values, {
+      SET: 'value',
+      EMPTY: '',
+      ALIAS: '',
+      UNSET_COLON: 'fallback',
+      UNSET_DASH: 'fallback',
+      SET_COLON: 'value',
+      SET_DASH: 'value',
+      EMPTY_COLON: 'fallback',
+      EMPTY_DASH: '',
+      EXPANDED_EMPTY: 'fallback',
+      EMPTY_DEFAULT: 'xy',
+      PROCESS: 'process-value',
+      NESTED: 'value',
+      UNUSED_NESTED: 'value',
+      ESCAPED: '${SET:-ignored}',
+      NESTED_ESCAPED: '${SET}',
+      SINGLE: '${SET:-ignored}',
+      UNTERMINATED: 'value ${SET:-fallback',
+    });
+  } finally {
+    if (priorMissing === undefined) delete process.env[missing];
+    else process.env[missing] = priorMissing;
+    if (priorExternal === undefined) delete process.env[external];
+    else process.env[external] = priorExternal;
+  }
+}
+
 // Issue #25: loadEnv — multiple files; later files override earlier ones,
 // via `paths: [...]` or `path` as an array.
 {

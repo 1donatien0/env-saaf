@@ -470,27 +470,55 @@ function parseEnvFile(text) {
     raw[key] = val;
     quoteOf[key] = quote;
   }
-  // Interpolation: ${VAR} inside double-quoted and unquoted values expands
-  // from values defined in this file first, then process.env. Single-quoted
-  // values stay literal. \${VAR} is an escape and also stays literal. Unknown
-  // names expand to an empty string. Expansion repeats (at most 5 rounds) so
-  // a value may reference another interpolated value; cycles stop at the cap.
-  const ESC = String.fromCharCode(92) + '${'; // literal backslash + ${ — an escaped reference
-  const PH = String.fromCharCode(1); // placeholder char that cannot appear in real .env text
-  const expandRefs = (s) => s.replace(/\$\{([A-Za-z_][A-Za-z0-9_]*)\}/g, (_, name) =>
-    Object.prototype.hasOwnProperty.call(raw, name) ? raw[name].split(ESC).join(PH)
-      : (process.env[name] !== undefined ? process.env[name] : ''));
+  // Interpolation uses file values before process.env. Keep escaped references
+  // protected until all expansion rounds are complete.
+  const ESC = String.fromCharCode(92) + '${';
+  const PH = String.fromCharCode(1);
+  const openRef = /\$\{([A-Za-z_][A-Za-z0-9_]*)(:-|-|(?=\}))/g;
+  const expandRefs = (text, remaining) => {
+    let result = '';
+    let cursor = 0;
+    for (const match of text.matchAll(openRef)) {
+      if (match.index < cursor) continue;
+      const [, name, operator] = match;
+      const start = match.index + match[0].length;
+      let end = start;
+      let depth = 0;
+      // A default may contain nested references, including protected escapes.
+      for (; end < text.length; end++) {
+        if (text[end] === '{' || text[end] === PH) depth++;
+        else if (text[end] === '}') {
+          if (depth === 0) break;
+          depth--;
+        }
+      }
+      if (end === text.length) break; // Leave an unterminated reference literal.
+
+      const value = Object.prototype.hasOwnProperty.call(raw, name)
+        ? raw[name].split(ESC).join(PH)
+        : process.env[name];
+      const useDefault = operator && (value === undefined
+        || (operator === ':-' && expandValue(value, remaining) === ''));
+      result += text.slice(cursor, match.index) + (useDefault
+        ? text.slice(start, end)
+        : (value ?? ''));
+      cursor = end + 1;
+    }
+    return result + text.slice(cursor);
+  };
+  // Share the existing five-round budget with checks of interpolated values.
+  const expandValue = (value, rounds) => {
+    for (let remaining = rounds; remaining > 0; remaining--) {
+      const next = expandRefs(value, remaining - 1);
+      if (next === value) break;
+      value = next;
+    }
+    return value;
+  };
   const out = {};
   for (const [key, val] of Object.entries(raw)) {
     if (quoteOf[key] === 'single') { out[key] = val; continue; }
-    // Escapes are protected BEFORE the rounds and restored only AFTER them,
-    // so a restored ${VAR} is never re-expanded by a later round.
-    let v = val.split(ESC).join(PH);
-    for (let round = 0; round < 5; round++) {
-      const next = expandRefs(v);
-      if (next === v) break;
-      v = next;
-    }
+    const v = expandValue(val.split(ESC).join(PH), 5);
     out[key] = v.split(PH).join('${');
   }
   return out;
