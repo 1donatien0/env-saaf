@@ -58,6 +58,24 @@ for (let i = 1; i < argv.length; i++) {
 }
 const dir = positional[0] || process.cwd();
 
+// Issue #133: validate the directory argument before any command uses it.
+// scanDir's readdirSync otherwise throws a raw Node stack trace for a file
+// path or a missing directory. Report a clear message and exit 2 instead.
+if (cmd === 'scan' || cmd === 'check' || cmd === 'example') {
+  const invalidDir = !fs.existsSync(dir)
+    ? `${dir} does not exist`
+    : !fs.statSync(dir).isDirectory() ? `${dir} is not a directory` : null;
+  if (invalidDir) {
+    const message = `env-saaf: ${invalidDir}`;
+    if (jsonMode) {
+      console.log(JSON.stringify({ ok: false, error: message }));
+    } else {
+      console.error(message);
+    }
+    process.exit(2);
+  }
+}
+
 if (cmd === 'scan') {
   const vars = scanDir(dir);
   // Issue #63: the reverse drift — keys declared in the template that no code reads any more.

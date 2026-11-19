@@ -1159,3 +1159,45 @@ console.log('env-saaf v1.4.0: all tests passed');
   // Valid rules still validate and coerce exactly as before.
   assert.strictEqual(validateEnv({ OK: { type: 'int', required: true } }, { OK: '42' }).OK, 42);
 }
+
+// Issue #133: a directory argument that is a file or does not exist must be
+// reported clearly with exit 2, never a raw Node stack trace.
+{
+  const { spawnSync } = require('node:child_process');
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const path = require('node:path');
+  const cli = path.join(__dirname, 'cli.js');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'env-saaf-baddir-'));
+  const file = path.join(dir, 'index.js');
+  fs.writeFileSync(file, 'process.env.X;');
+
+  try {
+    for (const command of ['scan', 'check', 'example']) {
+      // missing directory
+      const missing = spawnSync(process.execPath, [cli, command, path.join(dir, 'nope')], { encoding: 'utf8' });
+      assert.strictEqual(missing.status, 2, `${command} missing`);
+      assert.ok(missing.stderr.includes('does not exist'), `${command} missing: ${missing.stderr}`);
+      assert.ok(!/at .*readdirSync|ENOENT: no such file or directory, scandir/.test(missing.stderr), 'no stack trace');
+
+      // a file where a directory is expected
+      const asFile = spawnSync(process.execPath, [cli, command, file], { encoding: 'utf8' });
+      assert.strictEqual(asFile.status, 2, `${command} file`);
+      assert.ok(asFile.stderr.includes('is not a directory'), `${command} file: ${asFile.stderr}`);
+      assert.ok(!/at .*readdirSync|ENOTDIR/.test(asFile.stderr), 'no stack trace');
+    }
+
+    // --json keeps stdout parseable with an error field and the same exit code.
+    const json = spawnSync(process.execPath, [cli, 'scan', file, '--json'], { encoding: 'utf8' });
+    assert.strictEqual(json.status, 2);
+    assert.strictEqual(JSON.parse(json.stdout).ok, false);
+    assert.ok(JSON.parse(json.stdout).error.includes('is not a directory'));
+
+    // A real directory is still scanned normally.
+    const ok = spawnSync(process.execPath, [cli, 'scan', dir], { encoding: 'utf8' });
+    assert.strictEqual(ok.status, 0);
+    assert.strictEqual(ok.stdout.trim(), 'X');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+}
