@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Fixed: CLI `scan` reports no process.env usage on stderr with empty stdout and exit 0; JSON and non-empty scans are unchanged (fixes #146).
+
 - Added: `date` type — parses an ISO 8601 date (`2026-01-31`) or datetime (`2026-01-31T10:00:00Z`, with optional seconds, fractional seconds and a `Z` or `±HH:MM` offset) into a JavaScript `Date`; impossible dates such as `2026-02-31` are rejected instead of rolling over to the next month, and a `Date` given as a `default` passes through. `generateExample` suggests `2026-01-31` for it (fixes #40)
 - Fixed: CLI `example --write` refuses when the scan finds no `process.env` usage — it prints a warning on stderr and exits 1 instead of writing a header-only `.env.example` (a mistyped directory no longer produces a useless file). Plain `example` (stdout) is unchanged (fixes #116)
 - Added: CLI `check --schema <file>` validates the values of the real `.env` file against the schema the file exports (`module.exports = { PORT: { type: 'port', required: true } }`); failures are reported as `INVALID: <key>: ...`, appear in the existing `invalid` field in `--json` output, and make the exit code 1 like a missing key. The flag is opt-in (presence-only checks are unchanged without it); an explicit `--file` names the file to validate, and with no `.env` file the schema step is skipped instead of flagging the template's placeholders (fixes #90)

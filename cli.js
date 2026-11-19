@@ -100,7 +100,8 @@ if (cmd === 'scan') {
     if (unused) result.unused = unused;
     console.log(JSON.stringify(result));
   } else {
-    console.log(vars.join('\n'));
+    if (vars.length) console.log(vars.join('\n'));
+    else console.error('No process.env usage found.');
     if (unused) unused.forEach(k => console.error(`UNUSED: ${k} (in ${fileOpt}, never used in code)`));
   }
 } else if (cmd === 'check') {
