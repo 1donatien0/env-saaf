@@ -14,6 +14,8 @@
 - Fixed: the `scan`, `check` and `example` commands now validate the directory argument up front — a missing path reports `env-saaf: <path> does not exist` and a file reports `env-saaf: <path> is not a directory`, both exiting 2 with no raw Node stack trace (in `--json` mode the error is a field on stdout). Normal runs on a real directory are unchanged (fixes #133)
 - Fixed: `validateEnv` now rejects an invalid schema up front, so a typo like `type: 'emial'` (or a non-RegExp `pattern`, non-function `transform`, and non-numeric `min`/`max`/length options) throws an error naming the key even when the variable is absent — previously an absent optional key skipped coercion and the typo passed silently (fixes #134)
 
+- Docs: add a runnable Express example that validates configuration before startup (fixes #64).
+
 ## 1.4.0 — 2026-11-19
 
 - Added: `ipv4`, `semver` and `base64` types — dotted-quad addresses (each octet 0–255, no leading zeroes), semantic versions (`MAJOR.MINOR.PATCH`, optional pre-release/build suffixes, no leading `v`) and standard base64 strings; all three return the value unchanged, and `minLength`/`maxLength` work on them. `generateExample` suggests `192.168.0.1` for `ipv4` and `1.0.0` for `semver` (fixes #38, fixes #39, fixes #43)
