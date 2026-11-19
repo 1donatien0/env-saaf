@@ -174,6 +174,8 @@ HOST=example.com
 API_URL=https://${HOST}/api
 ```
 
+Use `${VAR:-fallback}` to supply a fallback when a value is unset or expands to an empty string. Use `${VAR-fallback}` to supply it only when the name is unset. For example, `API_URL=https://${HOST:-localhost}/api` uses `localhost` when `HOST` has no value. Defaults can include references such as `${HOST:-${DEFAULT_HOST}}`.
+
 Quoted values may also span several lines (PEM keys, JSON blobs) — parsing continues until the closing quote. A backslash-escaped quote (`\'` inside single quotes, `\"` inside double quotes) stays part of the value, so `B='it\'s'` is `it's`; other backslashes, such as a Windows path, are kept as-is.
 
 A bare line without `=` raises a syntax error with its line number. Use `KEY=` for an empty value.
