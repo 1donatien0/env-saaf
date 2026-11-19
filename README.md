@@ -46,6 +46,7 @@ Environment inputs are strings. Output below is before an optional `transform`.
 | `int` | Numeric text resolving to an integer, e.g. `42`, `1e3` | `number` | `trim`, `min`, `max` |
 | `boolean` | Case-insensitive `true/false`, `1/0`, `yes/no`, `on/off`, `y/n` | `boolean` | None |
 | `url` | Absolute URL accepted by `new URL()`, without normalization | `string` | `trim`, `minLength`, `maxLength`, `pattern` |
+| `file` | Path to an existing, readable regular file. Relative paths use the process working directory. | `string` | `trim`, `minLength`, `maxLength`, `pattern` |
 | `port` | Numeric text resolving to an integer from 0 to 65535 | `number` | `min`, `max` |
 | `email` | One `@`, non-empty local part, domain with an interior dot, no leading or trailing domain dot, no whitespace | `string` | `trim`, `minLength`, `maxLength`, `pattern` |
 | `json` | Valid JSON text (object, array or primitive). Accepts already-parsed defaults. | Parsed JSON value | `trim`. For numeric results, `min` and `max`. For string results, `minLength`, `maxLength` and `pattern`. |

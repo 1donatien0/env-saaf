@@ -1,4 +1,4 @@
-export type EnvType = 'string' | 'number' | 'int' | 'boolean' | 'url' | 'port' | 'email' | 'json' | 'uuid' | 'hex' | 'ipv4' | 'semver' | 'base64' | 'date';
+export type EnvType = 'string' | 'number' | 'int' | 'boolean' | 'url' | 'port' | 'email' | 'json' | 'uuid' | 'hex' | 'ipv4' | 'semver' | 'base64' | 'date' | 'file';
 
 export interface EnvRule {
   type?: EnvType;
@@ -15,7 +15,7 @@ export interface EnvRule {
   /** See `min`. */
   max?: number;
   /**
-   * Allowed length for string values (`string`, `email`, `url`, `uuid`, `hex`,
+   * Allowed length for string values (`string`, `email`, `url`, `file`, `uuid`, `hex`,
    * `ipv4`, `semver`, `base64`).
    * `minLength` alone or `maxLength` alone both work; a too-short or
    * too-long value is rejected with an error naming the allowed length.
@@ -57,7 +57,7 @@ export type EnvSchema = Record<string, EnvRule>;
  * The value type of a rule, from the schema's `type` field:
  * 'number' / 'int' / 'port' -> number, 'boolean' -> boolean,
  * 'json' -> unknown (parsed JSON can be any shape), 'date' -> Date,
- * everything else (string / url / email / uuid / hex / ipv4 / semver / base64
+ * everything else (string / url / file / email / uuid / hex / ipv4 / semver / base64
  * / no type given) -> string.
  * A rule with a `transform` returns the transform's return type instead.
  */

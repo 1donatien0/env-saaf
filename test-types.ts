@@ -8,6 +8,7 @@ const env = validateEnv({
   COUNT: { type: 'number', required: true },
   DEBUG: { type: 'boolean' },
   API_URL: { type: 'url', required: true },
+  CONFIG_FILE: { type: 'file', required: true },
   MODE: { type: 'string', default: 'dev' },
   NAME: { type: 'string' },
   TENANT_ID: { type: 'uuid', required: true },
@@ -18,6 +19,7 @@ const env = validateEnv({
 const port: number = env.PORT;
 const count: number = env.COUNT;
 const url: string = env.API_URL;
+export const configFile: string = env.CONFIG_FILE;
 const mode: string = env.MODE;
 // uuid and hex values are strings
 const tenantId: string = env.TENANT_ID;

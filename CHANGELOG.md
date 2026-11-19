@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Added: `file` validates that a path points to a readable regular file and returns the path string (fixes #57).
+
 - Docs: add a README types reference table covering inputs, outputs and rule options (fixes #135).
 - Added: `validateEnv(..., { throwOnError: false })` — a non-throwing mode that returns `{ env, errors }` instead of throwing, where `env` carries every value that validated and `errors` is the same list `EnvSaafError` would carry (empty when the environment is clean). The default stays fail-fast, a malformed schema still throws, and `loadEnv` keeps throwing because it can write into the real environment with `assign: true` (fixes #55)
 - Fixed: bare `.env` lines now report the line number. CLI `check` and `scan` report the file and line, including in `--json` output (fixes #145).
