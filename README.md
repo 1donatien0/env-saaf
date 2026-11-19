@@ -325,7 +325,7 @@ jobs:
       - run: npx env-saaf check .
 ```
 
-Real secrets come from the repository's Actions secrets (Settings, Secrets and variables, Actions), never from the repo: commit only `.env.example` and keep `.env` in `.gitignore`. The `.env` above exists only inside the job's temporary checkout. `check` compares key names only and never prints values, so a secret does not end up in the log. Without a `.env` the job still compares code and `.env.example`; with one it also reports `EXTRA in .env` / `MISSING in .env` keys (this `.env` comparison needs a release newer than 1.3.0; with 1.3.0 `check` compares code and `.env.example` only). Any finding exits 1 and fails the job.
+Real secrets come from the repository's Actions secrets (Settings, Secrets and variables, Actions), never from the repo: commit only `.env.example` and keep `.env` in `.gitignore`. The `.env` above exists only inside the job's temporary checkout. `check` compares key names only and never prints values, so a secret does not end up in the log. Without a `.env` the job still compares code and `.env.example`; with one it also reports `EXTRA in .env` / `MISSING in .env` keys (available since 1.4.0; with 1.3.0 `check` compares code and `.env.example` only). Any finding exits 1 and fails the job.
 
 Two limits of the optional `.env` step: a key is only *missing* when it is absent, so a secret that is not set still writes `API_KEY=` with an empty value and passes the key check (`check` is not a value check; use `validateEnv` at startup for that). And `printf` writes each secret verbatim, so keep every secret on a single line; a multi-line secret would be read as extra `NAME=value` entries.
 
@@ -366,6 +366,7 @@ console.log(maskSecrets(process.env)); // values masked: sk***56
 - **v1.0.0** — secret masking, `.env.example` generation from schema and from code scan, TypeScript definitions, stable API.
 - **v1.1.0** — CLI `--help` exits 0, boolean `on`/`off`/`y`/`n`, `scanCode` finds `let`/`var` destructuring, inline comments stripped in `parseEnvFile`, `.mts`/`.cts` files scanned.
 - **v1.2.0** — `email` type and `pattern` option, CLI `--json` output, per-key `transform`, `${VAR}` interpolation, multi-file `loadEnv`, multiline quoted values, CLI `--no-color`, `int` type with `min`/`max`, README recipes.
+- **v1.4.0** — `ipv4`, `semver` and `base64` types, CLI `check` compares real `.env` keys, CLI `--version`, `example --write`, `scan` UNUSED warnings, `check` exits 1 on every finding, `scanCode` ignores comments/strings, defaults validated like provided values, `--help` after a subcommand, escaped quotes in `parseEnvFile`, `port` accepts 0, GitHub Actions workflow docs.
 - **v1.3.0** — `json`, `uuid` and `hex` types, `minLength`/`maxLength` and `hex` `length` options, `trim: false`, `loadEnv` return-type inference, safer `.env.example` generation for secret keys, `assign: true` JSON fix.
 
 ## Contributing
