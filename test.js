@@ -75,7 +75,11 @@ assert.deepStrictEqual(diffEnv(['A', 'B'], ['A', 'C']), { usedNotDocumented: ['B
     assert.doesNotThrow(() => { parsed = parseEnvFile(valid); }, JSON.stringify(valid));
     assert.deepStrictEqual(parsed, expected, JSON.stringify(valid));
 
-    const mixed = [pick(noise), ...lines.slice(0, 5), pick(noise), ...lines.slice(5), pick(noise)].join(newline);
+    const pickDistinctNoise = (position) => pick(noise).replace('UNCLOSED', 'UNCLOSED_' + position);
+    const mixed = [
+      pickDistinctNoise('START'), ...lines.slice(0, 5),
+      pickDistinctNoise('MIDDLE'), ...lines.slice(5), pickDistinctNoise('END'),
+    ].join(newline);
     assert.doesNotThrow(() => parseEnvFile(mixed), JSON.stringify(mixed));
   }
 }
@@ -1323,6 +1327,35 @@ console.log('env-saaf v1.4.0: all tests passed');
     const ok = spawnSync(process.execPath, [cli, 'scan', dir], { encoding: 'utf8' });
     assert.strictEqual(ok.status, 0);
     assert.strictEqual(ok.stdout.trim(), 'X');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+// Issue #144: duplicates fail through the public entry points without values.
+{
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const { loadEnv } = require('./index');
+  const duplicate = '# comment\r\nPORT=synthetic_first\r\nexport PORT=synthetic_second\r\n';
+  const check = (error) => {
+    assert.strictEqual(error.message, 'env-saaf: duplicate key PORT at line 3 (first defined at line 2)');
+    return true;
+  };
+  assert.throws(() => parseEnvFile(duplicate), check);
+  assert.throws(() => parseEnvFile('A="first\nsecond"\nA=third'), /duplicate key A at line 3 .*line 1/);
+  assert.deepStrictEqual(parseEnvFile('A="first\nA=inside"\nB=ok'), { A: 'first\nA=inside', B: 'ok' });
+  for (const key of ['constructor', 'toString', 'hasOwnProperty']) {
+    assert.strictEqual(parseEnvFile(key + '=ok')[key], 'ok');
+    assert.throws(() => parseEnvFile(key + '=one\n' + key + '=two'), /duplicate key/);
+  }
+  const dir = fs.mkdtempSync(path.join(__dirname, 'duplicate-test-'));
+  const file = path.join(dir, '.env');
+  try {
+    fs.writeFileSync(file, duplicate);
+    assert.throws(() => loadEnv({}, { path: file, env: {} }), check);
+    fs.writeFileSync(file, 'PORT=3000\nNAME=example\n');
+    assert.strictEqual(loadEnv({ PORT: { type: 'port' } }, { path: file, env: {} }).PORT, 3000);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }

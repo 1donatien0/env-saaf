@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Fixed: `parseEnvFile` and `loadEnv` reject duplicate keys with first and repeated line numbers, without including values (fixes #144).
 - Fixed: CLI `scan` reports no process.env usage on stderr with empty stdout and exit 0; JSON and non-empty scans are unchanged (fixes #146).
 
 - Added: `date` type — parses an ISO 8601 date (`2026-01-31`) or datetime (`2026-01-31T10:00:00Z`, with optional seconds, fractional seconds and a `Z` or `±HH:MM` offset) into a JavaScript `Date`; impossible dates such as `2026-02-31` are rejected instead of rolling over to the next month, and a `Date` given as a `default` passes through. `generateExample` suggests `2026-01-31` for it (fixes #40)
