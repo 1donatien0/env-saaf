@@ -20,7 +20,7 @@ class EnvSaafError extends Error {
 // validation and coercion cannot drift apart when a new type is added.
 const KNOWN_TYPES = new Set([
   'string', 'email', 'number', 'int', 'json', 'boolean', 'url',
-  'uuid', 'hex', 'ipv4', 'semver', 'base64', 'port',
+  'uuid', 'hex', 'ipv4', 'semver', 'base64', 'port', 'date',
 ]);
 
 // Validate the shape of the schema itself, independent of any env values.
@@ -164,6 +164,39 @@ function coerce(key, raw, type, trim = true) {
         throw new Error(`${key}: expected a valid base64 string, got "${raw}"`);
       }
       return s;
+    }
+    case 'date': {
+      // ISO 8601 dates and datetimes: '2026-01-31' or
+      // '2026-01-31T10:00:00Z' (seconds, fractional seconds and a Z or
+      // ±HH:MM offset are optional). Returns a Date. Impossible dates are
+      // rejected — new Date() would silently roll '2026-02-31' over to
+      // March, so the components are checked against the calendar first
+      // (leap years included). A Date passed directly (e.g. as a default)
+      // passes through when it is valid.
+      if (v instanceof Date) {
+        if (Number.isNaN(v.getTime())) throw new Error(`${key}: expected a valid ISO 8601 date (e.g. 2026-01-31), got "${raw}"`);
+        return v;
+      }
+      const s = String(v);
+      const m = /^(\d{4})-(\d{2})-(\d{2})(?:T(\d{2}):(\d{2})(?::(\d{2})(?:\.\d+)?)?(Z|[+-]\d{2}:?\d{2})?)?$/.exec(s);
+      if (!m) {
+        throw new Error(`${key}: expected a valid ISO 8601 date (e.g. 2026-01-31), got "${raw}"`);
+      }
+      const year = Number(m[1]), month = Number(m[2]), day = Number(m[3]);
+      const hour = m[4] === undefined ? 0 : Number(m[4]);
+      const minute = m[5] === undefined ? 0 : Number(m[5]);
+      const second = m[6] === undefined ? 0 : Number(m[6]);
+      const leap = (year % 4 === 0 && year % 100 !== 0) || year % 400 === 0;
+      const daysInMonth = [31, leap ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][month - 1];
+      if (month < 1 || month > 12 || day < 1 || day > (daysInMonth || 0)
+        || hour > 23 || minute > 59 || second > 59) {
+        throw new Error(`${key}: expected a valid ISO 8601 date (e.g. 2026-01-31), got "${raw}"`);
+      }
+      const d = new Date(s);
+      if (Number.isNaN(d.getTime())) {
+        throw new Error(`${key}: expected a valid ISO 8601 date (e.g. 2026-01-31), got "${raw}"`);
+      }
+      return d;
     }
     case 'port': {
       const n = Number(v);
@@ -635,7 +668,8 @@ function generateExample(schema) {
     const placeholder = rule.default !== undefined ? rule.default
       : looksSecret ? ''
       : (rule.type === 'port' ? 3000 : rule.type === 'url' ? 'https://example.com'
-        : rule.type === 'ipv4' ? '192.168.0.1' : rule.type === 'semver' ? '1.0.0' : 'your_value_here');
+        : rule.type === 'ipv4' ? '192.168.0.1' : rule.type === 'semver' ? '1.0.0'
+        : rule.type === 'date' ? '2026-01-31' : 'your_value_here');
     lines.push(`${key}=${placeholder}`);
   }
   return lines.join('\n') + '\n';
