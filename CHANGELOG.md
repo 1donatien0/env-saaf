@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Docs: add a runnable Express example that validates configuration before startup (fixes #64).
+
 - Fixed: `parseEnvFile` and `loadEnv` reject duplicate keys with first and repeated line numbers, without including values (fixes #144).
 - Fixed: CLI `scan` reports no process.env usage on stderr with empty stdout and exit 0; JSON and non-empty scans are unchanged (fixes #146).
 
