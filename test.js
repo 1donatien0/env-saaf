@@ -1140,3 +1140,22 @@ console.log('env-saaf v1.4.0: all tests passed');
     fs.rmSync(dir, { recursive: true, force: true });
   }
 }
+
+// Issue #134: invalid schema rules must be rejected up front, even when no
+// value is present to coerce (an absent optional key must not hide a typo).
+{
+  const unknown = validateEnv.bind(null, { TYPO: { type: 'emial' } }, {});
+  assert.throws(unknown, EnvSaafError);
+  assert.throws(unknown, /TYPO/);
+  assert.throws(unknown, /emial/);
+
+  // The invalid option is reported before any environment value is read.
+  assert.throws(() => validateEnv({ K: { type: 'string', pattern: 'not-a-regexp' } }, {}), /"pattern" must be a RegExp/);
+  assert.throws(() => validateEnv({ K: { type: 'string', transform: 'nope' } }, {}), /"transform" must be a function/);
+  assert.throws(() => validateEnv({ K: { type: 'number', min: 'x' } }, {}), /"min"/);
+  assert.throws(() => validateEnv({ K: { type: 'number', max: 'x' } }, {}), /"max"/);
+  assert.throws(() => validateEnv({ K: { type: 'hex', length: 'x' } }, {}), /"length"/);
+
+  // Valid rules still validate and coerce exactly as before.
+  assert.strictEqual(validateEnv({ OK: { type: 'int', required: true } }, { OK: '42' }).OK, 42);
+}

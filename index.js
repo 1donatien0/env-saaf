@@ -16,6 +16,47 @@ class EnvSaafError extends Error {
   }
 }
 
+// The types coerce() knows how to handle. Kept in one place so schema
+// validation and coercion cannot drift apart when a new type is added.
+const KNOWN_TYPES = new Set([
+  'string', 'email', 'number', 'int', 'json', 'boolean', 'url',
+  'uuid', 'hex', 'ipv4', 'semver', 'base64', 'port',
+]);
+
+// Validate the shape of the schema itself, independent of any env values.
+// These checks used to live only inside the per-key coercion loop, so an
+// invalid rule on an absent optional key was never reached and slipped through
+// silently (issue #134). Errors name the key and the offending option.
+function validateSchema(schema) {
+  const errors = [];
+  for (const [key, rule] of Object.entries(schema)) {
+    if (rule === null || typeof rule !== 'object' || Array.isArray(rule)) continue;
+    if (rule.type !== undefined && !KNOWN_TYPES.has(rule.type)) {
+      errors.push(`${key}: unknown type "${rule.type}"`);
+    }
+    if (rule.pattern !== undefined && !(rule.pattern instanceof RegExp)) {
+      errors.push(`${key}: "pattern" must be a RegExp`);
+    }
+    if (rule.transform !== undefined && typeof rule.transform !== 'function') {
+      errors.push(`${key}: "transform" must be a function`);
+    }
+    for (const opt of ['min', 'max']) {
+      if (rule[opt] !== undefined && (typeof rule[opt] !== 'number' || !Number.isFinite(rule[opt]))) {
+        errors.push(`${key}: "${opt}" must be a number`);
+      }
+    }
+    for (const opt of ['minLength', 'maxLength']) {
+      if (rule[opt] !== undefined && (!Number.isInteger(rule[opt]) || rule[opt] < 0)) {
+        errors.push(`${key}: "minLength" and "maxLength" must be non-negative integers`);
+      }
+    }
+    if (rule.length !== undefined && (!Number.isInteger(rule.length) || rule.length < 0)) {
+      errors.push(`${key}: "length" must be a non-negative integer`);
+    }
+  }
+  if (errors.length) throw new EnvSaafError(errors);
+}
+
 function coerce(key, raw, type, trim = true) {
   // trim: false (issue #84) keeps the raw value exactly as provided — for
   // values where the whitespace IS the value (a password with a significant
@@ -139,6 +180,9 @@ function coerce(key, raw, type, trim = true) {
 
 function validateEnv(schema, env = process.env, options = {}) {
   const out = {}; const errors = [];
+  // Reject a malformed schema before looking at any values, so a typo on an
+  // absent optional key fails immediately instead of passing silently.
+  validateSchema(schema);
   if (options.strict) {
     for (const key of Object.keys(env)) {
       if (!Object.prototype.hasOwnProperty.call(schema, key) && env[key] !== undefined && env[key] !== '') {
