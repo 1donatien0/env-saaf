@@ -199,6 +199,13 @@ if (cmd === 'scan') {
   if (writeOpt === null) {
     console.log(lines.join('\n'));
   } else {
+    // Issue #116: refuse to write a header-only file. A scan that finds
+    // nothing usually means a mistyped directory, and a useless file plus
+    // exit 0 hides that. Plain `example` (stdout) is unchanged.
+    if (used.length === 0) {
+      console.error(`env-saaf: no process.env usage found in ${dir} — nothing to write; check the directory and try again`);
+      process.exit(1);
+    }
     const target = path.join(dir, writeOpt);
     if (fs.existsSync(target) && !forceOpt) {
       console.error(`env-saaf: ${writeOpt} already exists in ${dir} — pass --force to overwrite it`);
