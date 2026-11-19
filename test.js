@@ -533,7 +533,7 @@ assert.ok(!ex.includes('sk_live'));
   assert.deepStrictEqual(scanParsed.vars.sort(), ['MISSING_KEY', 'OK_KEY']);
 
   // human output still default (no --json)
-  const humanOut = execFileSync('node', [cli, 'scan', dir], { encoding: 'utf8' });
+  const humanOut = execFileSync('node', [cli, 'scan', dir], { encoding: 'utf8', stdio: 'pipe' });
   assert.ok(humanOut.includes('MISSING_KEY'));
   assert.ok(!humanOut.includes('{'));
 
@@ -1058,4 +1058,54 @@ console.log('env-saaf v1.3.0: all tests passed');
   assert.strictEqual(json.stderr, '');
 
   fs.rmSync(dir, { recursive: true, force: true });
+}
+// Issue #63: CLI scan also lists keys declared in the template that no code reads, as a
+// warning only: stdout stays the plain list, the exit code stays 0.
+{
+  const { spawnSync } = require('node:child_process');
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const path = require('node:path');
+  const cli = path.join(__dirname, 'cli.js');
+  const run = (args) => spawnSync(process.execPath, [cli, ...args], { encoding: 'utf8' });
+
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'env-saaf-scan-unused-'));
+  try {
+    fs.writeFileSync(path.join(dir, 'app.js'), 'const a = process.env.USED_KEY;\n');
+    fs.writeFileSync(path.join(dir, '.env.example'), 'USED_KEY=1\nOLD_KEY=2\n');
+    fs.writeFileSync(path.join(dir, '.env.sample'), 'USED_KEY=1\nSAMPLE_ONLY=3\n');
+
+    // Text mode: used vars on stdout (unchanged), the unused key as a warning on stderr
+    const plain = run(['scan', dir]);
+    assert.strictEqual(plain.status, 0);
+    assert.strictEqual(plain.stdout.trim(), 'USED_KEY');
+    assert.match(plain.stderr, /UNUSED: OLD_KEY \(in \.env\.example, never used in code\)/);
+    assert.ok(!plain.stderr.includes('USED_KEY (in'));
+
+    // --json: an `unused` field next to `vars`, still ok: true and exit 0
+    const json = run(['scan', dir, '--json']);
+    assert.strictEqual(json.status, 0);
+    assert.deepStrictEqual(JSON.parse(json.stdout), { ok: true, vars: ['USED_KEY'], unused: ['OLD_KEY'] });
+    assert.strictEqual(json.stderr, '');
+
+    // --file picks another template
+    const sample = run(['scan', dir, '--file', '.env.sample', '--json']);
+    assert.deepStrictEqual(JSON.parse(sample.stdout).unused, ['SAMPLE_ONLY']);
+
+    // A template where every key is read produces no warning at all
+    fs.writeFileSync(path.join(dir, '.env.example'), 'USED_KEY=1\n');
+    const clean = run(['scan', dir]);
+    assert.strictEqual(clean.status, 0);
+    assert.strictEqual(clean.stderr, '');
+    assert.deepStrictEqual(JSON.parse(run(['scan', dir, '--json']).stdout), { ok: true, vars: ['USED_KEY'], unused: [] });
+
+    // No template file: nothing to compare, output exactly as before
+    fs.rmSync(path.join(dir, '.env.example'));
+    const none = run(['scan', dir, '--json']);
+    assert.deepStrictEqual(JSON.parse(none.stdout), { ok: true, vars: ['USED_KEY'] });
+    assert.strictEqual(none.stderr, '');
+    assert.strictEqual(run(['scan', dir]).stderr, '');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 }
