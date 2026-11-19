@@ -311,7 +311,9 @@ jobs:
       - run: npx env-saaf check .
 ```
 
-Real secrets come from the repository's Actions secrets (Settings, Secrets and variables, Actions), never from the repo: commit only `.env.example` and keep `.env` in `.gitignore`. The `.env` above exists only inside the job's temporary checkout. `check` compares key names only and never prints values, so a secret does not end up in the log. Without a `.env` the job still compares code and `.env.example`; with one it also reports `EXTRA in .env` / `MISSING in .env` keys. Any finding exits 1 and fails the job.
+Real secrets come from the repository's Actions secrets (Settings, Secrets and variables, Actions), never from the repo: commit only `.env.example` and keep `.env` in `.gitignore`. The `.env` above exists only inside the job's temporary checkout. `check` compares key names only and never prints values, so a secret does not end up in the log. Without a `.env` the job still compares code and `.env.example`; with one it also reports `EXTRA in .env` / `MISSING in .env` keys (this `.env` comparison needs a release newer than 1.3.0; with 1.3.0 `check` compares code and `.env.example` only). Any finding exits 1 and fails the job.
+
+Two limits of the optional `.env` step: a key is only *missing* when it is absent, so a secret that is not set still writes `API_KEY=` with an empty value and passes the key check (`check` is not a value check; use `validateEnv` at startup for that). And `printf` writes each secret verbatim, so keep every secret on a single line; a multi-line secret would be read as extra `NAME=value` entries.
 
 ### Generate `.env.example` from a schema
 
