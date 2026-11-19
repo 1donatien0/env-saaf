@@ -419,6 +419,7 @@ function parseEnvFile(text) {
       );
     }
   }
+  const seen = new Map();
   const raw = {};     // key -> value with quotes removed and comments stripped
   const quoteOf = {}; // key -> 'single' | 'double' | 'none'
   const lines = input.split(/\r?\n/);
@@ -434,6 +435,10 @@ function parseEnvFile(text) {
       continue;
     }
     const key = m[1];
+    if (seen.has(key)) {
+      throw new Error(`env-saaf: duplicate key ${key} at line ${i + 1} (first defined at line ${seen.get(key)})`);
+    }
+    seen.set(key, i + 1);
     let val = m[2].trim();
     let quote = 'none';
     if (val.startsWith('"') || val.startsWith("'")) {
