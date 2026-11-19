@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 1.4.0 — 2026-11-19
+
 - Added: `ipv4`, `semver` and `base64` types — dotted-quad addresses (each octet 0–255, no leading zeroes), semantic versions (`MAJOR.MINOR.PATCH`, optional pre-release/build suffixes, no leading `v`) and standard base64 strings; all three return the value unchanged, and `minLength`/`maxLength` work on them. `generateExample` suggests `192.168.0.1` for `ipv4` and `1.0.0` for `semver` (fixes #38, fixes #39, fixes #43)
 - Docs: README gains a copy-pasteable GitHub Actions workflow that runs `npx env-saaf check .`, with the optional `.env`-from-secrets step and a note that real secrets come from Actions secrets, never from the repo (fixes #67)
 - Added: CLI `scan` now also reports the reverse drift: keys declared in `.env.example` (or the `--file` template) that no code reads. They are listed as `UNUSED: KEY (in .env.example, never used in code)` warnings on stderr, and as an `unused` array in `--json` output; the list of used variables on stdout, `ok` and the exit code (still 0) are unchanged, and without a template file the output is exactly as before (fixes #63)
