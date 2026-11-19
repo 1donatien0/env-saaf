@@ -92,6 +92,38 @@ function coerce(key, raw, type, trim = true) {
       }
       return s;
     }
+    case 'ipv4': {
+      // Dotted-quad IPv4: four decimal octets, each 0-255. A leading zero
+      // is rejected (except a lone '0') because '010.0.0.1' is ambiguous —
+      // some systems read it as octal. The value is returned unchanged.
+      const s = String(v);
+      const parts = s.split('.');
+      const badOctet = parts.some(p => !/^(0|[1-9][0-9]*)$/.test(p) || Number(p) > 255);
+      if (parts.length !== 4 || badOctet) {
+        throw new Error(`${key}: expected a valid IPv4 address (e.g. 192.168.0.1), got "${raw}"`);
+      }
+      return s;
+    }
+    case 'semver': {
+      // Semantic version: MAJOR.MINOR.PATCH, no leading 'v', no leading
+      // zeroes in the numeric parts; pre-release and build suffixes are
+      // allowed (1.2.3-beta.1, 1.2.3+build.5). Returned unchanged.
+      const s = String(v);
+      if (!/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-((?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*)(?:\.(?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*))*))?(?:\+([0-9a-zA-Z-]+(?:\.[0-9a-zA-Z-]+)*))?$/.test(s)) {
+        throw new Error(`${key}: expected a valid semantic version (e.g. 1.2.3), got "${raw}"`);
+      }
+      return s;
+    }
+    case 'base64': {
+      // Standard base64 only: A-Za-z0-9+/ with '=' padding, total length
+      // a multiple of 4. Base64url ('-' and '_') is not accepted. The
+      // value is returned unchanged.
+      const s = String(v);
+      if (!/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(s) || s.length === 0) {
+        throw new Error(`${key}: expected a valid base64 string, got "${raw}"`);
+      }
+      return s;
+    }
     case 'port': {
       const n = Number(v);
       const zeroWithoutValue = n === 0 && typeof v !== 'number'
@@ -143,7 +175,7 @@ function validateEnv(schema, env = process.env, options = {}) {
         }
       }
       // minLength/maxLength: allowed length for string values (string,
-      // email, url, uuid, hex). Checked after coercion, before choices/pattern; the
+      // email, url, uuid, hex, ipv4, semver, base64). Checked after coercion, before choices/pattern; the
       // error names the allowed length. Either option works alone, and
       // non-string values skip the check entirely.
       if (typeof val === 'string' && (rule.minLength !== undefined || rule.maxLength !== undefined)) {
@@ -558,7 +590,8 @@ function generateExample(schema) {
     const looksSecret = key.split('_').some(part => SECRET_WORDS.has(part.toUpperCase()));
     const placeholder = rule.default !== undefined ? rule.default
       : looksSecret ? ''
-      : (rule.type === 'port' ? 3000 : rule.type === 'url' ? 'https://example.com' : 'your_value_here');
+      : (rule.type === 'port' ? 3000 : rule.type === 'url' ? 'https://example.com'
+        : rule.type === 'ipv4' ? '192.168.0.1' : rule.type === 'semver' ? '1.0.0' : 'your_value_here');
     lines.push(`${key}=${placeholder}`);
   }
   return lines.join('\n') + '\n';
