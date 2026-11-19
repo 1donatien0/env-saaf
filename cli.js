@@ -84,6 +84,18 @@ if (cmd === 'scan' || cmd === 'check' || cmd === 'example') {
   }
 }
 
+function readEnvFile(filePath) {
+  const input = fs.readFileSync(filePath, 'utf8');
+  try {
+    return parseEnvFile(input);
+  } catch (error) {
+    const message = `${path.relative(dir, filePath)}: ${error.message}`;
+    if (jsonMode) console.log(JSON.stringify({ ok: false, error: message }));
+    else console.error(`env-saaf: ${message}`);
+    process.exit(2);
+  }
+}
+
 if (cmd === 'scan') {
   const vars = scanDir(dir);
   // Issue #63: the reverse drift — keys declared in the template that no code reads any more.
@@ -92,7 +104,7 @@ if (cmd === 'scan') {
   const templatePath = path.join(dir, fileOpt);
   let unused = null;
   if (fs.existsSync(templatePath) && fs.statSync(templatePath).isFile()) {
-    const declared = Object.keys(parseEnvFile(fs.readFileSync(templatePath, 'utf8')));
+    const declared = Object.keys(readEnvFile(templatePath));
     unused = diffEnv(vars, declared).documentedNotUsed;
   }
   if (jsonMode) {
@@ -117,7 +129,7 @@ if (cmd === 'scan') {
     }
     process.exit(2);
   }
-  const documented = Object.keys(parseEnvFile(fs.readFileSync(examplePath, 'utf8')));
+  const documented = Object.keys(readEnvFile(examplePath));
   const used = scanDir(dir);
   const { usedNotDocumented, documentedNotUsed } = diffEnv(used, documented);
   // The real .env is not committed, so only compare keys when it is actually present
@@ -125,7 +137,7 @@ if (cmd === 'scan') {
   let envExtra = [];
   let envMissing = [];
   if (fs.existsSync(envPath)) {
-    const envKeys = Object.keys(parseEnvFile(fs.readFileSync(envPath, 'utf8')));
+    const envKeys = Object.keys(readEnvFile(envPath));
     const envDiff = diffEnv(envKeys, documented);
     envExtra = envDiff.usedNotDocumented;
     envMissing = envDiff.documentedNotUsed;
@@ -157,7 +169,7 @@ if (cmd === 'scan') {
     }
     const targetName = fileExplicit ? fileOpt : (fs.existsSync(envPath) ? '.env' : null);
     if (targetName) {
-      const values = parseEnvFile(fs.readFileSync(path.join(dir, targetName), 'utf8'));
+      const values = readEnvFile(path.join(dir, targetName));
       try {
         validateEnv(schema, values);
       } catch (e) {
