@@ -1060,6 +1060,79 @@ assert.deepStrictEqual(
   assert.ok(!scanCode(own).includes('KEY'));
 }
 
+// Issue #90: CLI check --schema validates values against a schema, not just presence.
+{
+  const { spawnSync } = require('node:child_process');
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const path = require('node:path');
+  const cli = path.join(__dirname, 'cli.js');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'env-saaf-schema-'));
+
+  try {
+    fs.writeFileSync(path.join(dir, 'app.js'), 'const p = process.env.PORT;\nconst d = process.env.DEBUG;');
+    fs.writeFileSync(path.join(dir, '.env.example'), 'PORT=\nDEBUG=\n');
+    fs.writeFileSync(path.join(dir, '.env'), 'PORT=not-a-port\nDEBUG=yes\n');
+    fs.writeFileSync(path.join(dir, 'env.schema.js'),
+      "'use strict';\nmodule.exports = { PORT: { type: 'port', required: true }, DEBUG: { type: 'boolean' } };\n");
+
+    // A wrong-typed value in the real .env fails the check, naming the key, exit 1.
+    const bad = spawnSync(process.execPath, [cli, 'check', dir, '--schema', 'env.schema.js'], { encoding: 'utf8' });
+    assert.strictEqual(bad.status, 1);
+    assert.ok(bad.stdout.includes('INVALID: PORT: expected a port (0-65535), got "not-a-port"'), bad.stdout);
+    assert.ok(!bad.stdout.includes('DEBUG'), bad.stdout);
+
+    // --json reports the failure in the existing `invalid` field.
+    const json = spawnSync(process.execPath, [cli, 'check', dir, '--schema', 'env.schema.js', '--json'], { encoding: 'utf8' });
+    assert.strictEqual(json.status, 1);
+    assert.deepStrictEqual(JSON.parse(json.stdout), {
+      ok: false,
+      missing: [],
+      extra: [],
+      invalid: ['PORT: expected a port (0-65535), got "not-a-port"'],
+      envExtra: [],
+      envMissing: [],
+    });
+
+    // Valid values pass, and presence-only (no --schema) never flags values.
+    fs.writeFileSync(path.join(dir, '.env'), 'PORT=3000\nDEBUG=yes\n');
+    const good = spawnSync(process.execPath, [cli, 'check', dir, '--schema', 'env.schema.js'], { encoding: 'utf8' });
+    assert.strictEqual(good.status, 0);
+    assert.ok(good.stdout.includes('all clean'));
+    fs.writeFileSync(path.join(dir, '.env'), 'PORT=not-a-port\nDEBUG=yes\n');
+    const presenceOnly = spawnSync(process.execPath, [cli, 'check', dir], { encoding: 'utf8' });
+    assert.strictEqual(presenceOnly.status, 0);
+    assert.ok(presenceOnly.stdout.includes('all clean'));
+    assert.ok(!presenceOnly.stdout.includes('INVALID'));
+
+    // The template's placeholders are not real values: with no .env the schema
+    // step is skipped instead of flagging .env.example.
+    fs.rmSync(path.join(dir, '.env'));
+    fs.writeFileSync(path.join(dir, '.env.example'), 'PORT=not-a-port\nDEBUG=\n');
+    const skipped = spawnSync(process.execPath, [cli, 'check', dir, '--schema', 'env.schema.js'], { encoding: 'utf8' });
+    assert.strictEqual(skipped.status, 0);
+    assert.ok(!skipped.stdout.includes('INVALID'));
+
+    // An explicit --file names the file to validate.
+    fs.writeFileSync(path.join(dir, '.env.example'), 'PORT=\nDEBUG=\n');
+    fs.writeFileSync(path.join(dir, 'custom.env'), 'PORT=not-a-port\nDEBUG=yes\n');
+    const custom = spawnSync(process.execPath, [cli, 'check', dir, '--schema', 'env.schema.js', '--file', 'custom.env'], { encoding: 'utf8' });
+    assert.strictEqual(custom.status, 1);
+    assert.ok(custom.stdout.includes('INVALID: PORT: expected a port (0-65535), got "not-a-port"'), custom.stdout);
+
+    // A schema file that cannot be loaded is a usage error (exit 2), not a finding.
+    const missing = spawnSync(process.execPath, [cli, 'check', dir, '--schema', 'nope.js'], { encoding: 'utf8' });
+    assert.strictEqual(missing.status, 2);
+    assert.ok(missing.stderr.includes('cannot load schema nope.js'), missing.stderr);
+    fs.writeFileSync(path.join(dir, 'bad.schema.js'), "'use strict';\nmodule.exports = 'nope';\n");
+    const notObject = spawnSync(process.execPath, [cli, 'check', dir, '--schema', 'bad.schema.js'], { encoding: 'utf8' });
+    assert.strictEqual(notObject.status, 2);
+    assert.ok(notObject.stderr.includes('must export a schema object'), notObject.stderr);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+}
+
 console.log('env-saaf v1.4.0: all tests passed');
 
 // Issue #89: a missing template file must point at the command that drafts one,
