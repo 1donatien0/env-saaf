@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Docs: README gains a copy-pasteable GitHub Actions workflow that runs `npx env-saaf check .`, with the optional `.env`-from-secrets step and a note that real secrets come from Actions secrets, never from the repo (fixes #67)
+
 - Fixed: `env-saaf check` with no template file now names the fix instead of stopping at "not found" — the message points at `env-saaf example`, and `--json` carries the same hint in a `hint` field so stdout stays parseable and stderr stays empty; exit code is still 2 (fixes #89)
 
 - Fixed: `scanCode` (and so `scan`, `check` and `example`) reads code, not the text inside comments, strings and template literals — a `process.env.FOO` named only in a doc comment or a test string no longer counts as a usage, while reads inside a template's `${...}`, bracket access and destructuring still do (fixes #115)
