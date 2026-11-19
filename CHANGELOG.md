@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Added: CLI `check --schema <file>` validates the values of the real `.env` file against the schema the file exports (`module.exports = { PORT: { type: 'port', required: true } }`); failures are reported as `INVALID: <key>: ...`, appear in the existing `invalid` field in `--json` output, and make the exit code 1 like a missing key. The flag is opt-in (presence-only checks are unchanged without it); an explicit `--file` names the file to validate, and with no `.env` file the schema step is skipped instead of flagging the template's placeholders (fixes #90)
 - Fixed: the `scan`, `check` and `example` commands now validate the directory argument up front — a missing path reports `env-saaf: <path> does not exist` and a file reports `env-saaf: <path> is not a directory`, both exiting 2 with no raw Node stack trace (in `--json` mode the error is a field on stdout). Normal runs on a real directory are unchanged (fixes #133)
 - Fixed: `validateEnv` now rejects an invalid schema up front, so a typo like `type: 'emial'` (or a non-RegExp `pattern`, non-function `transform`, and non-numeric `min`/`max`/length options) throws an error naming the key even when the variable is absent — previously an absent optional key skipped coercion and the typo passed silently (fixes #134)
 
