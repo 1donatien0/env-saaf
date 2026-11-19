@@ -278,6 +278,8 @@ npx env-saaf scan ./src --json  # JSON list of used vars
 npx env-saaf example ./src  # draft a .env.example from a code scan
 ```
 
+When `.env.example` (or the file given with `--file`) sits in the scanned directory, `scan` also warns about keys declared there that no code reads, one per line on stderr: `UNUSED: OLD_KEY (in .env.example, never used in code)`. With `--json` they are listed in an `unused` array next to `vars`. It is only a warning: stdout still holds just the used variables, and `scan` still exits 0 (use `check` to fail a CI job on drift). Without a template file, nothing changes.
+
 A scan reads code, not comments or the text inside string and template literals: a variable named only in a comment (`// set process.env.FOO first`), a string (`'see process.env.BAR'`) or a template's text isn't reported, so it can't quietly satisfy `check` or land in an `example` draft. A read inside a template's `${...}` is still a read, and so are `process.env['X']`, ``process.env[`X`]`` and destructuring.
 
 When a real `.env` sits next to the template, `check` also compares their keys: a key in `.env` that is not documented (`EXTRA in .env: FOO (not in .env.example)`) is usually a typo, and a template key with no local value is reported as `MISSING in .env: BAR (in .env.example, not set locally)`. `--file` selects the template for both comparisons; with no `.env` file this extra check is skipped. In `--json` mode the findings appear as `envExtra` and `envMissing` alongside the existing `missing`, `extra` and `invalid` fields.

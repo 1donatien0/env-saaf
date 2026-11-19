@@ -5,7 +5,9 @@
  *   env-saaf check [dir] [--file name] [--json] — scan code for process.env usage, compare with
  *                           .env.example (or the --file given); exit 1 if anything
  *                           used is not documented. --json emits machine-readable output.
- *   env-saaf scan  [dir] [--json]  — just list the env vars your code uses
+ *   env-saaf scan  [dir] [--file name] [--json]  — just list the env vars your code uses; keys in
+ *                           .env.example (or the --file given) that no code reads are reported
+ *                           as UNUSED warnings (stderr; `unused` in --json), never an exit code
  *   env-saaf example [dir] [--write[=file]] [--force] — print a .env.example draft from code
  *                           usage (v1.0.0); --write saves it to .env.example (or the file
  *                           named) instead, refusing to overwrite unless --force is given
@@ -23,14 +25,14 @@ if (argv.includes('--version') || argv.includes('-v')) {
 // Output is already plain in every mode, including when NO_COLOR is set.
 while (argv[0] === '--no-color') argv.shift();
 const cmd = argv[0];
-const USAGE = 'Usage: env-saaf check [dir] [--file name] [--json] | env-saaf scan [dir] [--json] | env-saaf example [dir] [--write[=file]] [--force]\n'
+const USAGE = 'Usage: env-saaf check [dir] [--file name] [--json] | env-saaf scan [dir] [--file name] [--json] | env-saaf example [dir] [--write[=file]] [--force]\n'
   + 'Global options: --no-color, --version / -v (before or after the command).';
 // --help / -h / help: print usage and exit 0 (asking for help is not an error — this used to exit 2)
 if (cmd === '--help' || cmd === '-h' || cmd === 'help') {
   console.log(USAGE);
   process.exit(0);
 }
-// --file <name> or --file=<name> ('check' only): which file to compare against
+// --file <name> or --file=<name> ('check' and 'scan'): which template file to compare against
 // --json: machine-readable output for check and scan
 // --write / --write=<file> ('example' only): save the draft to .env.example (or the file
 // named) instead of printing it; --force allows overwriting an existing file
@@ -58,10 +60,22 @@ const dir = positional[0] || process.cwd();
 
 if (cmd === 'scan') {
   const vars = scanDir(dir);
+  // Issue #63: the reverse drift — keys declared in the template that no code reads any more.
+  // Only a warning: stdout stays the plain list of used vars and the exit code is unchanged.
+  // Without a template file there is nothing to compare, so the output is exactly as before.
+  const templatePath = path.join(dir, fileOpt);
+  let unused = null;
+  if (fs.existsSync(templatePath) && fs.statSync(templatePath).isFile()) {
+    const declared = Object.keys(parseEnvFile(fs.readFileSync(templatePath, 'utf8')));
+    unused = diffEnv(vars, declared).documentedNotUsed;
+  }
   if (jsonMode) {
-    console.log(JSON.stringify({ ok: true, vars }));
+    const result = { ok: true, vars };
+    if (unused) result.unused = unused;
+    console.log(JSON.stringify(result));
   } else {
     console.log(vars.join('\n'));
+    if (unused) unused.forEach(k => console.error(`UNUSED: ${k} (in ${fileOpt}, never used in code)`));
   }
 } else if (cmd === 'check') {
   const examplePath = path.join(dir, fileOpt);
