@@ -2,8 +2,7 @@
 
 ## Unreleased
 
-- Docs: add a runnable Express example that validates configuration before startup (fixes #64).
-
+- Fixed: bare `.env` lines now report the line number. CLI `check` and `scan` report the file and line, including in `--json` output (fixes #145).
 - Fixed: `parseEnvFile` and `loadEnv` reject duplicate keys with first and repeated line numbers, without including values (fixes #144).
 - Fixed: CLI `scan` reports no process.env usage on stderr with empty stdout and exit 0; JSON and non-empty scans are unchanged (fixes #146).
 
@@ -12,6 +11,8 @@
 - Added: CLI `check --schema <file>` validates the values of the real `.env` file against the schema the file exports (`module.exports = { PORT: { type: 'port', required: true } }`); failures are reported as `INVALID: <key>: ...`, appear in the existing `invalid` field in `--json` output, and make the exit code 1 like a missing key. The flag is opt-in (presence-only checks are unchanged without it); an explicit `--file` names the file to validate, and with no `.env` file the schema step is skipped instead of flagging the template's placeholders (fixes #90)
 - Fixed: the `scan`, `check` and `example` commands now validate the directory argument up front — a missing path reports `env-saaf: <path> does not exist` and a file reports `env-saaf: <path> is not a directory`, both exiting 2 with no raw Node stack trace (in `--json` mode the error is a field on stdout). Normal runs on a real directory are unchanged (fixes #133)
 - Fixed: `validateEnv` now rejects an invalid schema up front, so a typo like `type: 'emial'` (or a non-RegExp `pattern`, non-function `transform`, and non-numeric `min`/`max`/length options) throws an error naming the key even when the variable is absent — previously an absent optional key skipped coercion and the typo passed silently (fixes #134)
+
+- Docs: add a runnable Express example that validates configuration before startup (fixes #64).
 
 ## 1.4.0 — 2026-11-19
 
