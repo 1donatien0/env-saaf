@@ -320,6 +320,12 @@ function validateEnv(schema, env = process.env, options = {}) {
       out[key] = val;
     } catch (e) { errors.push(e.message); }
   }
+  // Non-throwing mode (issue #55): a health check, CLI or server that wants to
+  // log every config problem and keep booting asks for the values that did
+  // validate plus the list the exception would have carried — empty when the
+  // environment is clean. Only an explicit false opts in; anything else
+  // (undefined, true) keeps the fail-fast default.
+  if (options.throwOnError === false) return { env: Object.freeze(out), errors };
   if (errors.length) throw new EnvSaafError(errors);
   return Object.freeze(out);
 }
@@ -372,7 +378,11 @@ function loadEnv(schema, options = {}) {
     }
   }
   const merged = override ? { ...env, ...fileEnv } : { ...fileEnv, ...env };
-  const validated = validateEnv(schema, merged, rest);
+  // loadEnv always throws. It can write into the caller's env with
+  // `assign: true`, and a half-applied write is not a degraded mode anyone
+  // asked for, so `throwOnError: false` is accepted but ignored here — call
+  // validateEnv directly when you want to collect the errors (issue #55).
+  const validated = validateEnv(schema, merged, { ...rest, throwOnError: true });
   if (assign) {
     for (const [key, value] of Object.entries(validated)) {
       // A json value (or a transform returning an object/array) must be written
