@@ -1492,3 +1492,63 @@ console.log('env-saaf v1.4.0: all tests passed');
     fs.rmSync(dir, { recursive: true, force: true });
   }
 }
+
+// Issue #55: non-throwing mode — return { env, errors } instead of throwing,
+// so a health check or a CLI can log every config problem and keep booting.
+{
+  const schema = {
+    PORT: { type: 'port', required: true },
+    NAME: { type: 'string' },
+    DEBUG: { type: 'boolean', default: false },
+  };
+
+  // Default behaviour is unchanged: invalid values still throw.
+  assert.throws(() => validateEnv(schema, { PORT: 'not-a-port' }), EnvSaafError);
+  assert.throws(() => validateEnv(schema, { PORT: 'not-a-port' }, { throwOnError: true }), EnvSaafError);
+
+  // Invalid values are collected; the values that did validate are returned.
+  const partial = validateEnv(schema, { PORT: 'abc', NAME: 'ok', DEBUG: 'yes' }, { throwOnError: false });
+  assert.deepStrictEqual(partial.env, { NAME: 'ok', DEBUG: true });
+  assert.deepStrictEqual(partial.errors, ['PORT: expected a port (0-65535), got "abc"']);
+
+  // A clean environment returns the env the throwing API would and no errors.
+  const clean = validateEnv(schema, { PORT: '3000', DEBUG: 'false' }, { throwOnError: false });
+  assert.deepStrictEqual(clean.env, { PORT: 3000, DEBUG: false });
+  assert.deepStrictEqual(clean.errors, []);
+
+  // The returned list is the EnvSaafError contents, one-to-one.
+  const bad = { PORT: 'x', DEBUG: 'maybe' };
+  let thrown;
+  try { validateEnv(schema, bad); } catch (e) { thrown = e; }
+  assert.ok(thrown instanceof EnvSaafError);
+  const collected = validateEnv(schema, bad, { throwOnError: false });
+  assert.deepStrictEqual(collected.errors, thrown.errors);
+  assert.strictEqual(collected.errors.length, 2);
+
+  // strict-mode findings are collected the same way.
+  const strict = validateEnv(schema, { PORT: '3000', TYPO: 'x' }, { strict: true, throwOnError: false });
+  assert.deepStrictEqual(strict.env, { PORT: 3000, DEBUG: false });
+  assert.deepStrictEqual(strict.errors, ['TYPO: set but not in schema (strict mode)']);
+
+  // The returned env is frozen exactly like the throwing API's result.
+  assert.ok(Object.isFrozen(strict.env));
+  assert.deepStrictEqual(validateEnv({}, {}, { throwOnError: false }), { env: {}, errors: [] });
+
+  // A malformed schema is a bug in the code, not a config problem: it throws
+  // even in non-throwing mode, where no result could be trusted.
+  assert.throws(() => validateEnv({ TYPO: { type: 'emial' } }, {}, { throwOnError: false }), /emial/);
+
+  // loadEnv keeps throwing: with assign: true it writes into the real env, so
+  // a partial result must not be accepted there.
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const { loadEnv } = require('./index');
+  const dir = fs.mkdtempSync(path.join(__dirname, 'non-throwing-test-'));
+  try {
+    const file = path.join(dir, '.env');
+    fs.writeFileSync(file, 'PORT=not-a-port\n');
+    assert.throws(() => loadEnv({ PORT: { type: 'port' } }, { path: file, env: {}, throwOnError: false }), EnvSaafError);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+}

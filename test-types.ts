@@ -47,4 +47,23 @@ const looseSchema: EnvSchema = { PORT: { type: 'port', required: true } };
 const loose = validateEnv(looseSchema);
 const looseValue: string | number | boolean = loose.ANYTHING;
 
-export { port, count, url, mode, debug, name, doubled, fixed, wrongType, typo, debugStrict, myPort, myDebug, looseValue, tenantId, apiHash };
+// Issue #55: non-throwing mode returns { env, errors } instead of throwing.
+const collected = validateEnv(
+  { PORT: { type: 'port', required: true }, DEBUG: { type: 'boolean' } },
+  { PORT: '3000' },
+  { throwOnError: false }
+);
+const collectedPort: number = collected.env.PORT;
+const collectedDebug: boolean | undefined = collected.env.DEBUG;
+const collectedErrors: string[] = collected.errors;
+// @ts-expect-error — the non-throwing result is { env, errors }, not the env itself
+const collectedAsEnv: number = collected.PORT;
+
+// The default (throwing) return type is unchanged by the new option.
+const throwingPort: number = validateEnv(
+  { PORT: { type: 'port', required: true } },
+  { PORT: '3000' },
+  { strict: true }
+).PORT;
+
+export { port, count, url, mode, debug, name, doubled, fixed, wrongType, typo, debugStrict, myPort, myDebug, looseValue, tenantId, apiHash, collectedPort, collectedDebug, collectedErrors, collectedAsEnv, throwingPort };

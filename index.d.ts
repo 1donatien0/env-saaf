@@ -96,8 +96,24 @@ export class EnvSaafError extends Error {
 export interface ValidateOptions {
   /** Report variables that are set but not in the schema (default false). */
   strict?: boolean;
+  /**
+   * Throw an `EnvSaafError` when a value fails validation (default true).
+   * Pass `false` to get `{ env, errors }` back instead of an exception
+   * (issue #55). A malformed schema still throws: that is a bug in the code,
+   * not a problem in the environment.
+   */
+  throwOnError?: boolean;
 }
 
+/** The result of `validateEnv(..., { throwOnError: false })`. */
+export interface ValidateResult<S extends EnvSchema> {
+  /** Every value that validated — the same object the throwing API returns. */
+  env: EnvResult<S>;
+  /** The same messages `EnvSaafError.errors` would carry, in the same order. */
+  errors: string[];
+}
+
+export function validateEnv<S extends EnvSchema>(schema: S, env: Record<string, string | undefined> | undefined, options: ValidateOptions & { throwOnError: false }): ValidateResult<S>;
 export function validateEnv<S extends EnvSchema>(schema: S, env?: Record<string, string | undefined>, options?: ValidateOptions): EnvResult<S>;
 
 export interface LoadEnvOptions {

@@ -57,6 +57,31 @@ Environment inputs are strings. Output below is before an optional `transform`.
 | `date` | Valid `YYYY-MM-DD` or datetime with `T` and hours/minutes; optional seconds, fraction and `Z` or numeric offset. Accepts valid `Date` defaults. | `Date` | `trim` |
 
 All types support `required`, `default` and `transform`. Transforms run on provided values after validation. Missing optional keys are omitted and defaults are validated. The `choices` option matches coerced strings, numbers or booleans. A parsed JSON value can match a choice when it has one of those three types. String input is trimmed by default. Setting `trim: false` leaves whitespace in place for string-like types. For `number` and `int`, whitespace around a numeric value is accepted either way, but whitespace-only text is rejected by default and converts to `0` with `trim: false`. Boolean matching always ignores surrounding whitespace. The `length` option applies only to `hex`. See the sections below for examples.
+### Non-throwing mode — collect errors instead of throwing
+
+A health check, a CLI, or a server that wants to boot in a degraded mode cannot use an API that throws on the first bad value. Pass `{ throwOnError: false }` and `validateEnv` returns `{ env, errors }` instead: `env` holds every value that validated, and `errors` is the same list `EnvSaafError` would have carried.
+
+```js
+const { validateEnv } = require('env-saaf');
+
+const { env, errors } = validateEnv(
+  {
+    PORT:  { type: 'port', required: true },
+    DEBUG: { type: 'boolean', default: false },
+  },
+  process.env,
+  { throwOnError: false }
+);
+
+if (errors.length) {
+  console.warn('config problems:', errors);
+  // keep booting: env.DEBUG is still usable, env.PORT is absent
+}
+```
+
+The default is unchanged: without the option, or with `{ throwOnError: true }`, an invalid value still throws one `EnvSaafError` listing every problem. A malformed schema still throws as well — that is a bug in the code, not in the environment. `loadEnv` keeps throwing too, because with `{ assign: true }` it writes into `process.env` and a half-applied write is worse than a failed start; call `validateEnv` when you want the error list.
+
+In TypeScript the option narrows the return type to `ValidateResult<S>` (`{ env: EnvResult<S>; errors: string[] }`), so `env.PORT` keeps the type inferred from the schema.
 
 ### Strict mode — catch typos in variable names
 
