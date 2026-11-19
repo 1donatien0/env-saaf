@@ -39,7 +39,7 @@ assert.deepStrictEqual(diffEnv(['A', 'B'], ['A', 'C']), { usedNotDocumented: ['B
   };
   const spaces = ['', ' ', '  ', '\t'];
   const fragments = ['sample', '42', 'x=y', 'with#hash', 'café', 'path\\part'];
-  const noise = ['', '# comment', 'word without equals', '? = value', "UNCLOSED='", '??=', ' \\ '];
+  const noise = ['', '# comment', '? = value', "UNCLOSED='", '??='];
 
   for (let sample = 0; sample < 128; sample++) {
     const newline = pick(['\n', '\r\n']);
@@ -996,6 +996,48 @@ assert.deepStrictEqual(
   assert.deepStrictEqual(parseEnvFile(''), {});
   // A lone comment line is not a path, even when it mentions one.
   assert.deepStrictEqual(parseEnvFile('# see config/notes'), {});
+}
+
+// Issue #145: bare lines report their position, even after multiline values.
+{
+  assert.throws(() => parseEnvFile('FOO\n'), /line 1: expected KEY=VALUE/);
+  assert.throws(
+    () => parseEnvFile('PORT=3000\r\nCERT="one\r\ntwo"\r\nFOO # example=123\r\nBAR=\r\n'),
+    /line 4: expected KEY=VALUE/
+  );
+  assert.deepStrictEqual(parseEnvFile('\r\n# comment\r\n \t\r\n'), {});
+  assert.deepStrictEqual(parseEnvFile('BAR=\n'), { BAR: '' });
+}
+
+// CLI callers retain readable errors and the machine-readable JSON contract.
+{
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const path = require('node:path');
+  const { spawnSync } = require('node:child_process');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'env-saaf-bare-line-'));
+  const run = (...args) => spawnSync(process.execPath, [path.join(__dirname, 'cli.js'), ...args], {
+    encoding: 'utf8',
+  });
+  try {
+    fs.writeFileSync(path.join(dir, '.env.example'), '# config\nFOO\n');
+    const scan = run('scan', dir, '--json');
+    assert.strictEqual(scan.status, 2);
+    assert.strictEqual(scan.stderr, '');
+    const error = JSON.parse(scan.stdout);
+    assert.strictEqual(error.ok, false);
+    assert.match(error.error, /\.env\.example: line 2: expected KEY=VALUE/);
+
+    fs.writeFileSync(path.join(dir, '.env.example'), 'FOO=\n');
+    fs.writeFileSync(path.join(dir, '.env'), 'fake secret value accidentally written on its own line\n');
+    const check = run('check', dir);
+    assert.strictEqual(check.status, 2);
+    assert.strictEqual(check.stdout, '');
+    assert.match(check.stderr, /\.env: line 1: expected KEY=VALUE/);
+    assert.doesNotMatch(check.stderr, /fake secret value/);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 }
 
 // Issue #88: loadEnv with assign: true must JSON-stringify object/array values.

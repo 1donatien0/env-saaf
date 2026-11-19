@@ -426,7 +426,13 @@ function parseEnvFile(text) {
     const t = lines[i].trim();
     if (!t || t.startsWith('#')) continue;
     const m = t.replace(/^export\s+/, '').match(/^([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$/);
-    if (!m) continue;
+    if (!m) {
+      // Ignore an equals sign in an inline comment. Avoid echoing file contents.
+      if (!t.split(/\s+#/, 1)[0].includes('=')) {
+        throw new SyntaxError(`line ${i + 1}: expected KEY=VALUE`);
+      }
+      continue;
+    }
     const key = m[1];
     let val = m[2].trim();
     let quote = 'none';
