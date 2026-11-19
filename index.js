@@ -20,7 +20,7 @@ class EnvSaafError extends Error {
 // validation and coercion cannot drift apart when a new type is added.
 const KNOWN_TYPES = new Set([
   'string', 'email', 'number', 'int', 'json', 'boolean', 'url',
-  'uuid', 'hex', 'ipv4', 'semver', 'base64', 'port', 'date',
+  'uuid', 'hex', 'ipv4', 'semver', 'base64', 'port', 'date', 'file',
 ]);
 
 // Validate the shape of the schema itself, independent of any env values.
@@ -114,6 +114,20 @@ function coerce(key, raw, type, trim = true) {
       try { new URL(String(v)); }
       catch { throw new Error(`${key}: expected a valid URL, got "${raw}"`); }
       return String(v);
+    }
+    case 'file': {
+      const s = String(v);
+      try {
+        if (fs.statSync(s).isFile()) {
+          // Open read-only so actual filesystem permissions are checked on Windows too.
+          const flags = fs.constants.O_RDONLY | (fs.constants.O_NONBLOCK || 0);
+          fs.closeSync(fs.openSync(s, flags));
+          return s;
+        }
+      } catch {
+        // Report the variable and its path consistently for filesystem failures.
+      }
+      throw new Error(`${key}: expected a readable file, got "${s}"`);
     }
     case 'uuid': {
       // Canonical UUID: 8-4-4-4-12 hex groups. Upper- and lowercase hex
@@ -252,7 +266,7 @@ function validateEnv(schema, env = process.env, options = {}) {
         }
       }
       // minLength/maxLength: allowed length for string values (string,
-      // email, url, uuid, hex, ipv4, semver, base64). Checked after coercion, before choices/pattern; the
+      // email, url, file, uuid, hex, ipv4, semver, base64). Checked after coercion, before choices/pattern; the
       // error names the allowed length. Either option works alone, and
       // non-string values skip the check entirely.
       if (typeof val === 'string' && (rule.minLength !== undefined || rule.maxLength !== undefined)) {
@@ -718,7 +732,7 @@ function generateExample(schema) {
       : looksSecret ? ''
       : (rule.type === 'port' ? 3000 : rule.type === 'url' ? 'https://example.com'
         : rule.type === 'ipv4' ? '192.168.0.1' : rule.type === 'semver' ? '1.0.0'
-        : rule.type === 'date' ? '2026-01-31' : 'your_value_here');
+        : rule.type === 'date' ? '2026-01-31' : rule.type === 'file' ? './config.json' : 'your_value_here');
     lines.push(`${key}=${placeholder}`);
   }
   return lines.join('\n') + '\n';

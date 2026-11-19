@@ -12,6 +12,40 @@ assert.strictEqual(env.PORT + 1, 3001);
 assert.strictEqual(env.DEBUG, false);
 assert.throws(() => validateEnv({ A: { required: true } }, {}), EnvSaafError);
 
+// Issue #57: a file rule validates readability and preserves the path string.
+{
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const dir = fs.mkdtempSync(path.join(__dirname, 'file-type-test-'));
+  const schema = { CONFIG_FILE: { type: 'file', required: true } };
+  const file = path.join(dir, 'my config.json');
+  function assertInvalid(input) {
+    assert.throws(
+      () => validateEnv(schema, { CONFIG_FILE: input }),
+      err => err instanceof EnvSaafError && err.errors[0].includes('expected a readable file')
+        && err.errors[0].includes(input),
+    );
+  }
+  try {
+    fs.writeFileSync(file, '{}');
+    assert.strictEqual(validateEnv(schema, { CONFIG_FILE: file }).CONFIG_FILE, file);
+    assert.strictEqual(validateEnv(schema, { CONFIG_FILE: ` ${file} ` }).CONFIG_FILE, file);
+    const relative = path.relative(process.cwd(), file);
+    assert.strictEqual(validateEnv(schema, { CONFIG_FILE: relative }).CONFIG_FILE, relative);
+    const defaults = { CONFIG_FILE: { type: 'file', default: file } };
+    assert.strictEqual(validateEnv(defaults, {}).CONFIG_FILE, file);
+    assertInvalid(path.join(dir, 'missing.json'));
+    assertInvalid(dir);
+    assert.match(generateExample(schema), /^CONFIG_FILE=\.\/config\.json$/m);
+    if (process.platform !== 'win32' && process.getuid() !== 0) {
+      fs.chmodSync(file, 0o000);
+      assertInvalid(file);
+    }
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+}
+
 // Port zero requests an ephemeral listener. Blank values still fail validation.
 {
   const schema = { PORT: { type: 'port', required: true } };
