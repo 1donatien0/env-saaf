@@ -284,6 +284,37 @@ When a real `.env` sits next to the template, `check` also compares their keys: 
 
 `check` exits 1 whenever it prints any finding, and `--json` `ok` carries the same value, so a CI job fails exactly when the output reports a problem; a fully clean project exits 0. `UNUSED` counts as a finding too: a key left in the template after its code usage is gone fails the run, so remove it from the template when you remove the last usage.
 
+### Run `check` in GitHub Actions
+
+A minimal workflow that fails a pull request when the code and `.env.example` drift apart. Copy it to `.github/workflows/env-check.yml`:
+
+```yaml
+name: env-check
+
+on: [push, pull_request]
+
+jobs:
+  env-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      # Optional: build a .env from Actions secrets so `check` can also compare its keys
+      # with the template. Leave this step out to check only code against .env.example.
+      - name: Write .env from secrets
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          API_KEY: ${{ secrets.API_KEY }}
+        run: printf 'DATABASE_URL=%s\nAPI_KEY=%s\n' "$DATABASE_URL" "$API_KEY" > .env
+      - run: npx env-saaf check .
+```
+
+Real secrets come from the repository's Actions secrets (Settings, Secrets and variables, Actions), never from the repo: commit only `.env.example` and keep `.env` in `.gitignore`. The `.env` above exists only inside the job's temporary checkout. `check` compares key names only and never prints values, so a secret does not end up in the log. Without a `.env` the job still compares code and `.env.example`; with one it also reports `EXTRA in .env` / `MISSING in .env` keys (this `.env` comparison needs a release newer than 1.3.0; with 1.3.0 `check` compares code and `.env.example` only). Any finding exits 1 and fails the job.
+
+Two limits of the optional `.env` step: a key is only *missing* when it is absent, so a secret that is not set still writes `API_KEY=` with an empty value and passes the key check (`check` is not a value check; use `validateEnv` at startup for that). And `printf` writes each secret verbatim, so keep every secret on a single line; a multi-line secret would be read as extra `NAME=value` entries.
+
 ### Generate `.env.example` from a schema
 
 The schema already knows every key — generate the example file from it instead of writing it by hand:
