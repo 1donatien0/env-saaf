@@ -94,7 +94,7 @@ const env = validateEnv({
 });
 ```
 
-`json` parses the value with `JSON.parse` — objects, arrays and primitives all come back parsed; invalid JSON is rejected with an error naming the key. A `default` may be given as an already-parsed object. `minLength` and `maxLength` work on string values (`string`, `email`, `url`, `uuid`, `hex`); either one can be used alone, and a too-short or too-long value is rejected with an error naming the allowed length. They combine with `pattern` — length is checked first, then the pattern.
+`json` parses the value with `JSON.parse` — objects, arrays and primitives all come back parsed; invalid JSON is rejected with an error naming the key. A `default` may be given as an already-parsed object. `minLength` and `maxLength` work on string values (`string`, `email`, `url`, `uuid`, `hex`, `ipv4`, `semver`, `base64`); either one can be used alone, and a too-short or too-long value is rejected with an error naming the allowed length. They combine with `pattern` — length is checked first, then the pattern.
 
 ### `uuid` and `hex` types — IDs and hex strings
 
@@ -106,6 +106,18 @@ const env = validateEnv({
 ```
 
 `uuid` accepts a canonical UUID (`8-4-4-4-12` hex groups, upper- and lowercase) and returns it unchanged; a malformed value is rejected with an error naming the key. `hex` accepts hexadecimal strings only (`deadBEEF42` passes, `0x1234` does not); the optional `length` option pins the exact size in characters, for fixed-size tokens and hashes.
+
+### `ipv4`, `semver` and `base64` types — network addresses, versions and encoded values
+
+```js
+const env = validateEnv({
+  BIND_ADDR: { type: 'ipv4', required: true },
+  APP_VERSION: { type: 'semver', required: true },
+  WEBHOOK_SECRET: { type: 'base64', required: true },
+});
+```
+
+`ipv4` accepts a dotted-quad address (`192.168.0.1` passes, `256.1.1.1` and `1.2.3` do not); an octet with a leading zero (`01.2.3.4`) is rejected because it is ambiguous. `semver` accepts `MAJOR.MINOR.PATCH` with optional pre-release and build suffixes (`1.2.3-beta.1` passes, `1.2` and `v1.2.3` do not — the leading `v` is rejected). `base64` accepts standard base64 only (`A-Za-z0-9+/` with `=` padding, length a multiple of 4); base64url (`-` and `_`) is not accepted. All three return the value unchanged, and `minLength`/`maxLength` work on them like on any other string type.
 
 ### `trim: false` — keep whitespace when it matters
 

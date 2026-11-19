@@ -898,6 +898,37 @@ assert.deepStrictEqual(
   assert.throws(() => validateEnv({ H: { type: 'hex', maxLength: 2 } }, { H: 'a1b2' }), /at most 2 characters/);
 }
 
+// Issues #38 + #39 + #43: 'ipv4', 'semver' and 'base64' types. All three
+// return the value unchanged; a bad value is rejected naming the key.
+{
+  // ipv4: four octets, each 0-255; a leading zero is rejected (except '0' itself).
+  assert.strictEqual(validateEnv({ IP: { type: 'ipv4' } }, { IP: '192.168.0.1' }).IP, '192.168.0.1');
+  assert.strictEqual(validateEnv({ IP: { type: 'ipv4' } }, { IP: '0.0.0.0' }).IP, '0.0.0.0');
+  assert.strictEqual(validateEnv({ IP: { type: 'ipv4' } }, { IP: '255.255.255.255' }).IP, '255.255.255.255');
+  for (const bad of ['256.1.1.1', '1.2.3', '1.2.3.4.5', 'example.com', '01.2.3.4', '192.168.0', '192.168.0.1/24']) {
+    assert.throws(() => validateEnv({ IP: { type: 'ipv4' } }, { IP: bad }), /expected a valid IPv4 address/);
+  }
+  assert.throws(() => validateEnv({ IP: { type: 'ipv4', required: true } }, {}), EnvSaafError);
+
+  // semver: MAJOR.MINOR.PATCH, no leading 'v'; pre-release and build suffixes pass.
+  assert.strictEqual(validateEnv({ V: { type: 'semver' } }, { V: '1.2.3' }).V, '1.2.3');
+  assert.strictEqual(validateEnv({ V: { type: 'semver' } }, { V: '1.2.3-beta.1' }).V, '1.2.3-beta.1');
+  assert.strictEqual(validateEnv({ V: { type: 'semver' } }, { V: '0.0.1+build.5' }).V, '0.0.1+build.5');
+  for (const bad of ['1.2', 'v1.2.3', '1.02.3', '1.2.3.4', 'latest', '1.2.x']) {
+    assert.throws(() => validateEnv({ V: { type: 'semver' } }, { V: bad }), /expected a valid semantic version/);
+  }
+
+  // base64: standard base64 only (A-Za-z0-9+/ with '=' padding, length a multiple of 4).
+  assert.strictEqual(validateEnv({ B: { type: 'base64' } }, { B: 'aGVsbG8=' }).B, 'aGVsbG8=');
+  assert.strictEqual(validateEnv({ B: { type: 'base64' } }, { B: 'aGVsbG8gd29ybGQ=' }).B, 'aGVsbG8gd29ybGQ=');
+  assert.strictEqual(validateEnv({ B: { type: 'base64' } }, { B: 'AA==' }).B, 'AA==');
+  for (const bad of ['not base64!', 'aGVsbG8', 'aGVsbG8===', 'aGVs-bG8=', 'aGVs_bG8=', '====']) {
+    assert.throws(() => validateEnv({ B: { type: 'base64' } }, { B: bad }), /expected a valid base64 string/);
+  }
+  // minLength/maxLength work on the new string types too.
+  assert.throws(() => validateEnv({ IP: { type: 'ipv4', minLength: 20 } }, { IP: '1.2.3.4' }), /at least 20 characters/);
+}
+
 // Issue #82: parseEnvFile takes .env TEXT, not a file path. Passing a path
 // silently returned {}; now it throws a clear error pointing at loadEnv.
 {
