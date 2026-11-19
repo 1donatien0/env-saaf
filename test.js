@@ -953,6 +953,35 @@ assert.deepStrictEqual(
   assert.throws(() => validateEnv({ IP: { type: 'ipv4', minLength: 20 } }, { IP: '1.2.3.4' }), /at least 20 characters/);
 }
 
+// Issue #40: 'date' type — ISO 8601 dates and datetimes become Date objects.
+// Impossible dates are rejected instead of rolling over to the next month.
+{
+  // date-only: parsed as a Date at UTC midnight.
+  const d = validateEnv({ D: { type: 'date' } }, { D: '2026-01-31' }).D;
+  assert.ok(d instanceof Date);
+  assert.strictEqual(d.toISOString(), '2026-01-31T00:00:00.000Z');
+  // leap day is real in a leap year, impossible otherwise.
+  assert.strictEqual(validateEnv({ D: { type: 'date' } }, { D: '2024-02-29' }).D.toISOString().slice(0, 10), '2024-02-29');
+  assert.throws(() => validateEnv({ D: { type: 'date' } }, { D: '2026-02-29' }), /expected a valid ISO 8601 date/);
+  // full datetimes: UTC, an offset, and fractional seconds all parse.
+  assert.strictEqual(validateEnv({ D: { type: 'date' } }, { D: '2026-01-31T10:00:00Z' }).D.toISOString(), '2026-01-31T10:00:00.000Z');
+  assert.strictEqual(validateEnv({ D: { type: 'date' } }, { D: '2026-01-31T10:00:00+05:30' }).D.toISOString(), '2026-01-31T04:30:00.000Z');
+  assert.strictEqual(validateEnv({ D: { type: 'date' } }, { D: '2026-01-31T10:00:00.123Z' }).D.toISOString(), '2026-01-31T10:00:00.123Z');
+  assert.strictEqual(validateEnv({ D: { type: 'date' } }, { D: '2026-01-31T10:00' }).D instanceof Date, true);
+  // impossible and malformed values are rejected, naming the key.
+  for (const bad of ['2026-02-31', '2026-13-01', '2026-00-10', '2026-01-32', '2026-01-31T25:00:00Z',
+    '2026-01-31T10:60:00Z', '31-01-2026', '2026/01/31', 'not-a-date', '2026-1-31']) {
+    assert.throws(() => validateEnv({ D: { type: 'date' } }, { D: bad }), /expected a valid ISO 8601 date/);
+  }
+  assert.throws(() => validateEnv({ D: { type: 'date', required: true } }, {}), EnvSaafError);
+  // A Date given as a default passes through; an invalid one fails like a bad value.
+  const def = new Date('2026-06-01T00:00:00.000Z');
+  assert.strictEqual(validateEnv({ D: { type: 'date', default: def } }, {}).D, def);
+  assert.throws(() => validateEnv({ D: { type: 'date', default: new Date('not a date') } }, {}), /expected a valid ISO 8601 date/);
+  // generateExample suggests a real date, not a placeholder.
+  assert.ok(generateExample({ LAUNCH: { type: 'date', required: true } }).includes('LAUNCH=2026-01-31'));
+}
+
 // Issue #82: parseEnvFile takes .env TEXT, not a file path. Passing a path
 // silently returned {}; now it throws a clear error pointing at loadEnv.
 {

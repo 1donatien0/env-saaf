@@ -119,6 +119,19 @@ const env = validateEnv({
 
 `ipv4` accepts a dotted-quad address (`192.168.0.1` passes, `256.1.1.1` and `1.2.3` do not); an octet with a leading zero (`01.2.3.4`) is rejected because it is ambiguous. `semver` accepts `MAJOR.MINOR.PATCH` with optional pre-release and build suffixes (`1.2.3-beta.1` passes, `1.2` and `v1.2.3` do not — the leading `v` is rejected). `base64` accepts standard base64 only (`A-Za-z0-9+/` with `=` padding, length a multiple of 4); base64url (`-` and `_`) is not accepted. All three return the value unchanged, and `minLength`/`maxLength` work on them like on any other string type.
 
+### `date` type — ISO 8601 dates as `Date` objects
+
+```js
+const env = validateEnv({
+  LAUNCH_DATE: { type: 'date', required: true },
+  CUTOFF:      { type: 'date' },
+}, process.env);
+
+if (env.LAUNCH_DATE < new Date()) console.log('Launched!');
+```
+
+`date` parses an ISO 8601 date (`2026-01-31`) or datetime (`2026-01-31T10:00:00Z`, with optional seconds, fractional seconds and a `Z` or `±HH:MM` offset) and returns a JavaScript `Date`, so cut-off dates, launch dates and expiry dates need no hand-rolled parsing. Impossible dates are rejected with an error naming the key — `2026-02-31` fails instead of silently rolling over to March, and so do malformed values such as `31-01-2026` or `2026/01/31`. A `Date` given as a `default` passes through unchanged, and `generateExample` suggests `2026-01-31` for the type.
+
 ### `trim: false` — keep whitespace when it matters
 
 Values are trimmed before validation by default — handy for secrets pasted from dashboards with stray spaces. When the whitespace *is* the value, switch trimming off for that key:
