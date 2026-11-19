@@ -199,6 +199,8 @@ API_URL=https://${HOST}/api
 
 Quoted values may also span several lines (PEM keys, JSON blobs) — parsing continues until the closing quote. A backslash-escaped quote (`\'` inside single quotes, `\"` inside double quotes) stays part of the value, so `B='it\'s'` is `it's`; other backslashes, such as a Windows path, are kept as-is.
 
+A bare line without `=` raises a syntax error with its line number. Use `KEY=` for an empty value.
+
 The manual way still works too — parse the file and pass it in:
 
 ```js

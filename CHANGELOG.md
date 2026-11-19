@@ -3,7 +3,7 @@
 ## Unreleased
 
 - Docs: add a README types reference table covering inputs, outputs and rule options (fixes #135).
-
+- Fixed: bare `.env` lines now report the line number. CLI `check` and `scan` report the file and line, including in `--json` output (fixes #145).
 - Fixed: `parseEnvFile` and `loadEnv` reject duplicate keys with first and repeated line numbers, without including values (fixes #144).
 - Fixed: CLI `scan` reports no process.env usage on stderr with empty stdout and exit 0; JSON and non-empty scans are unchanged (fixes #146).
 
