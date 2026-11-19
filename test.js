@@ -1327,3 +1327,36 @@ console.log('env-saaf v1.4.0: all tests passed');
     fs.rmSync(dir, { recursive: true, force: true });
   }
 }
+
+// Issue #146: empty scans explain success on stderr without polluting stdout.
+{
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const { spawnSync } = require('node:child_process');
+  const dir = fs.mkdtempSync(path.join(__dirname, 'scan-empty-test-'));
+  const run = (...args) => spawnSync(process.execPath, [path.join(__dirname, 'cli.js'), 'scan', dir, ...args], { encoding: 'utf8' });
+  try {
+    for (const source of [null, 'console.log("hello");\n']) {
+      if (source) fs.writeFileSync(path.join(dir, 'app.js'), source);
+      const plain = run();
+      assert.strictEqual(plain.status, 0);
+      assert.strictEqual(plain.stdout, '');
+      assert.strictEqual(plain.stderr, 'No process.env usage found.\n');
+      const json = run('--json');
+      assert.strictEqual(json.status, 0);
+      assert.strictEqual(json.stderr, '');
+      assert.strictEqual(json.stdout, '{"ok":true,"vars":[]}\n');
+    }
+    fs.writeFileSync(path.join(dir, 'app.js'), 'process.env.SYNTHETIC_KEY;\n');
+    const plain = run();
+    assert.strictEqual(plain.status, 0);
+    assert.strictEqual(plain.stdout, 'SYNTHETIC_KEY\n');
+    assert.strictEqual(plain.stderr, '');
+    const json = run('--json');
+    assert.strictEqual(json.status, 0);
+    assert.strictEqual(json.stderr, '');
+    assert.strictEqual(json.stdout, '{"ok":true,"vars":["SYNTHETIC_KEY"]}\n');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+}
