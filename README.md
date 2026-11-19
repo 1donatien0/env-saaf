@@ -35,6 +35,29 @@ const env = validateEnv({
 // Missing/invalid vars throw ONE error listing ALL problems
 ```
 
+### Types reference
+
+Environment inputs are strings. Output below is before an optional `transform`.
+
+| Type | Accepted input | JavaScript output | Additional rule options |
+| --- | --- | --- | --- |
+| `string` | Any non-missing text (default type) | `string` | `trim`, `minLength`, `maxLength`, `pattern` |
+| `number` | Non-empty text accepted by `Number()`, including fractions and exponent notation. Rejects `NaN`. | `number` | `trim`, `min`, `max` |
+| `int` | Numeric text resolving to an integer, e.g. `42`, `1e3` | `number` | `trim`, `min`, `max` |
+| `boolean` | Case-insensitive `true/false`, `1/0`, `yes/no`, `on/off`, `y/n` | `boolean` | None |
+| `url` | Absolute URL accepted by `new URL()`, without normalization | `string` | `trim`, `minLength`, `maxLength`, `pattern` |
+| `port` | Numeric text resolving to an integer from 0 to 65535 | `number` | `min`, `max` |
+| `email` | One `@`, non-empty local part, domain with an interior dot, no leading or trailing domain dot, no whitespace | `string` | `trim`, `minLength`, `maxLength`, `pattern` |
+| `json` | Valid JSON text (object, array or primitive). Accepts already-parsed defaults. | Parsed JSON value | `trim`. For numeric results, `min` and `max`. For string results, `minLength`, `maxLength` and `pattern`. |
+| `uuid` | Canonical 8-4-4-4-12 hexadecimal groups, either case | `string` | `trim`, `minLength`, `maxLength`, `pattern` |
+| `hex` | One or more hexadecimal characters, no `0x` prefix | `string` | `trim`, `length`, `minLength`, `maxLength`, `pattern` |
+| `ipv4` | Four decimal octets, each 0 to 255; no leading zeroes | `string` | `trim`, `minLength`, `maxLength`, `pattern` |
+| `semver` | `MAJOR.MINOR.PATCH`, optional prerelease and build suffixes. Excludes `v` prefixes and leading numeric zeroes. | `string` | `trim`, `minLength`, `maxLength`, `pattern` |
+| `base64` | Standard alphabet, length multiple of four, padding where needed. Excludes base64url. | `string` | `trim`, `minLength`, `maxLength`, `pattern` |
+| `date` | Valid `YYYY-MM-DD` or datetime with `T` and hours/minutes; optional seconds, fraction and `Z` or numeric offset. Accepts valid `Date` defaults. | `Date` | `trim` |
+
+All types support `required`, `default` and `transform`. Transforms run on provided values after validation. Missing optional keys are omitted and defaults are validated. The `choices` option matches coerced strings, numbers or booleans. A parsed JSON value can match a choice when it has one of those three types. String input is trimmed by default. Setting `trim: false` leaves whitespace in place for string-like types. For `number` and `int`, whitespace around a numeric value is accepted either way, but whitespace-only text is rejected by default and converts to `0` with `trim: false`. Boolean matching always ignores surrounding whitespace. The `length` option applies only to `hex`. See the sections below for examples.
+
 ### Strict mode — catch typos in variable names
 
 By default `validateEnv` only looks at keys in the schema. With `{ strict: true }` it also flags variables that are set but not in the schema — so a typo like `DATABSE_URL` next to the real `DATABASE_URL` no longer slips through:
