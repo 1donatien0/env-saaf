@@ -1746,6 +1746,54 @@ console.log('env-saaf v1.5.0: all tests passed');
   }
 }
 
+// Issue #169: exercise the CLI's Windows path handling with an in-memory filesystem.
+{
+  const fs = require('node:fs');
+  const path = require('node:path').win32;
+  const { runInNewContext } = require('node:vm');
+  const cli = fs.readFileSync(require.resolve('./cli'), 'utf8');
+  const dir = 'C:\\project';
+  for (const [name, schemaPath, example] of [
+    ['D:custom.js', 'D:\\schemas\\custom.js', 'npx env-saaf check . --schema D:/schemas/custom.js'],
+    ["schema files/it's custom.js", "C:\\project\\schema files\\it's custom.js",
+      `npx env-saaf check . --schema "./schema files/it's custom.js"`],
+    ['budget! draft.js', 'C:\\project\\budget! draft.js'],
+  ]) {
+    const writes = new Map();
+    const requireFromCli = id => {
+      if (id === 'node:fs') return {
+        existsSync: file => file === dir,
+        statSync: () => ({ isDirectory: () => true }),
+        writeFileSync: (file, contents) => writes.set(file, contents),
+      };
+      if (id === 'node:path') return {
+        ...path,
+        // Supply D:'s current directory without relying on the host environment.
+        resolve: (root, file) => path.resolve(file === 'D:custom.js' ? 'D:\\schemas' : root, file),
+      };
+      if (id === schemaPath) return {};
+      return require(id);
+    };
+    requireFromCli.resolve = id => id;
+    requireFromCli.cache = {};
+    runInNewContext(cli, {
+      require: requireFromCli,
+      process: { argv: ['node', 'cli.js', 'init', dir, '--schema', name], platform: 'win32' },
+    });
+    const generated = writes.get(schemaPath);
+    assert.ok(generated, schemaPath);
+    if (!example) {
+      assert.match(generated, /--schema set to this path \(JSON\): "\.\/budget! draft\.js"\n/);
+      assert.doesNotMatch(generated, /npx env-saaf check/);
+      continue;
+    }
+    const label = example.includes('"') ? ' (cmd.exe)' : '';
+    assert.ok(generated.includes(`// Validate the real .env against it${label}: ${example}\n`), generated);
+    const argument = example.split(' --schema ')[1].replace(/^"|"$/g, '');
+    assert.strictEqual(path.resolve(dir, argument), schemaPath);
+  }
+}
+
 // Issue #60: CLI 'init' — scaffold a starter schema + .env.example.
 {
   const { spawnSync } = require('node:child_process');
@@ -1781,6 +1829,7 @@ console.log('env-saaf v1.5.0: all tests passed');
     // Refuses to overwrite either file without --force, naming what exists,
     // and the files keep their content.
     const before = fs.readFileSync(schemaFile, 'utf8');
+    assert.match(before, /npx env-saaf check \. --schema \.\/env\.schema\.js$/m);
     const again = run(['init', dir]);
     assert.strictEqual(again.status, 1);
     assert.match(again.stderr, /already exist/);
@@ -1796,12 +1845,36 @@ console.log('env-saaf v1.5.0: all tests passed');
     assert.strictEqual(fs.readFileSync(exampleFile, 'utf8'), generateExample(starter));
 
     // --schema names the schema file; the .env.example is still generated.
-    const dir2 = fs.mkdtempSync(path.join(__dirname, 'init-test-named-'));
+    const dir2 = fs.mkdtempSync(path.join(dir, 'named-'));
     try {
-      const named = run(['init', dir2, '--schema', 'config.schema.js']);
-      assert.strictEqual(named.status, 0, named.stderr);
-      assert.ok(fs.existsSync(path.join(dir2, 'config.schema.js')));
+      const assertSchemaExample = (schema, argument) => {
+        const named = run(['init', dir2, '--force', '--schema', schema]);
+        assert.strictEqual(named.status, 0, named.stderr);
+        const generated = fs.readFileSync(path.resolve(dir2, schema), 'utf8');
+        assert.ok(generated.includes(`npx env-saaf check . --schema ${argument}\n`), generated);
+      };
+      assertSchemaExample('custom.js', './custom.js');
       assert.ok(fs.existsSync(path.join(dir2, '.env.example')));
+
+      assertSchemaExample('../parent.js', './../parent.js');
+      fs.mkdirSync(path.join(dir2, 'schema files'));
+      const absolute = path.join(dir2, 'schema files', 'absolute.js');
+      const absoluteArg = absolute.split(path.sep).join('/');
+      if (process.platform === 'win32') {
+        assertSchemaExample('schema files/custom.js', '"./schema files/custom.js"');
+        if (/^[\w./: '()-]+$/.test(absoluteArg)) {
+          assertSchemaExample(absolute, `"${absoluteArg}"`);
+        }
+      } else {
+        assertSchemaExample('schema files/custom.js', "'./schema files/custom.js'");
+        assertSchemaExample(absolute, `'${absoluteArg.replace(/'/g, `'"'"'`)}'`);
+      }
+
+      if (process.platform !== 'win32') {
+        assertSchemaExample("it's $config.js", "'./it'\"'\"'s $config.js'");
+        assertSchemaExample('line\nbreak.js', "$'./line\\nbreak.js'");
+        assertSchemaExample('line\u2028separator.js', "$'./line\\342\\200\\250separator.js'");
+      }
     } finally {
       fs.rmSync(dir2, { recursive: true, force: true });
     }
