@@ -2,6 +2,8 @@
 
 Zero-dependency environment variable validator for Node.js. Fail fast at startup with clear errors, and get **typed** values back.
 
+[![npm version](https://img.shields.io/npm/v/env-saaf.svg)](https://www.npmjs.com/package/env-saaf) [![npm downloads](https://img.shields.io/npm/dm/env-saaf.svg)](https://www.npmjs.com/package/env-saaf) [![GitHub stars](https://img.shields.io/github/stars/abhi478jeetur-rgb/env-saaf.svg)](https://github.com/abhi478jeetur-rgb/env-saaf/stargazers) [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://github.com/abhi478jeetur-rgb/env-saaf/blob/main/LICENSE)
+
 ## The problem
 
 Research into real developer pain points shows the same `.env` bugs again and again:
@@ -487,11 +489,32 @@ Issues and pull requests are welcome — including tiny ones. Start with the iss
 
 ## Contributors
 
-env-saaf exists thanks to everyone who has contributed code, fixes and ideas — this wall grows on its own as new pull requests land:
+env-saaf exists thanks to everyone who has contributed code, fixes and ideas. **16 people** outside the maintainer have landed merged pull requests so far:
+
+- [@abdul-karim-mia](https://github.com/abdul-karim-mia) — the first outside contributor
+- `@HarshRajSinghania` — CLI `--json` output
+- [@Golden007-prog](https://github.com/Golden007-prog)
+- [@harshit3355](https://github.com/harshit3355)
+- [@bfs2021](https://github.com/bfs2021)
+- [@enidchen0125](https://github.com/enidchen0125)
+- [@theroimasters1-dev](https://github.com/theroimasters1-dev)
+- [@kamrullab](https://github.com/kamrullab)
+- [@Veeramanikandanr48](https://github.com/Veeramanikandanr48)
+- [@rise11hx-cmyk](https://github.com/rise11hx-cmyk)
+- `@P1LOTRX` — defaults validated like provided values
+- [@emreocell](https://github.com/emreocell)
+- [@IG-ABHINAV](https://github.com/IG-ABHINAV)
+- [@flipcyde101](https://github.com/flipcyde101)
+- [@swpswpswp](https://github.com/swpswpswp)
+- [@tnalbant](https://github.com/tnalbant)
+
+This wall grows on its own as new pull requests land:
 
 <a href="https://github.com/abhi478jeetur-rgb/env-saaf/graphs/contributors">
   <img src="https://contrib.rocks/image?repo=abhi478jeetur-rgb/env-saaf" alt="env-saaf contributors" />
 </a>
+
+New guides live in the [project wiki](https://github.com/abhi478jeetur-rgb/env-saaf/wiki) — start with the CLI guide and the types reference there.
 
 ## License
 
