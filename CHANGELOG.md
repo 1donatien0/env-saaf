@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 1.5.0 — 2026-11-20
+
 - Added: `host` type — validates a hostname or an IPv4/IPv6 address (`db.internal`, `localhost`, `10.0.0.5`, `::1`) and rejects values with a scheme, path or port; `minLength`/`maxLength`/`pattern` work on it, and `generateExample` suggests `localhost` (fixes #44)
 
 - Added: `duration` type — parses human durations (`500ms`, `30s`, `15m`, `2h`, `1d`) into milliseconds; a bare number is already milliseconds, decimals and case-insensitive units are accepted, and unknown units and negatives are rejected. `min`/`max` work on the millisecond result, and `generateExample` suggests `15m` (fixes #41)
