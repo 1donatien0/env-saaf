@@ -1371,7 +1371,7 @@ assert.deepStrictEqual(
   }
 }
 
-console.log('env-saaf v1.4.0: all tests passed');
+console.log('env-saaf v1.5.0: all tests passed');
 
 // Issue #89: a missing template file must point at the command that drafts one,
 // and --json must carry that hint instead of plain text on stderr.

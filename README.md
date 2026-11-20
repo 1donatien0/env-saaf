@@ -462,6 +462,7 @@ console.log(maskSecrets(process.env)); // values masked: sk***56
 - **v1.0.0** — secret masking, `.env.example` generation from schema and from code scan, TypeScript definitions, stable API.
 - **v1.1.0** — CLI `--help` exits 0, boolean `on`/`off`/`y`/`n`, `scanCode` finds `let`/`var` destructuring, inline comments stripped in `parseEnvFile`, `.mts`/`.cts` files scanned.
 - **v1.2.0** — `email` type and `pattern` option, CLI `--json` output, per-key `transform`, `${VAR}` interpolation, multi-file `loadEnv`, multiline quoted values, CLI `--no-color`, `int` type with `min`/`max`, README recipes.
+- **v1.5.0** — `duration` and `host` types, `date` and `file` types, non-throwing mode, `${VAR:-default}` interpolation, CLI `--schema` validation, duplicate-key and bare-line errors in `.env` files, `scan`/`check`/`example` directory validation, Express example, README types reference table.
 - **v1.4.0** — `ipv4`, `semver` and `base64` types, CLI `check` compares real `.env` keys, CLI `--version`, `example --write`, `scan` UNUSED warnings, `check` exits 1 on every finding, `scanCode` ignores comments/strings, defaults validated like provided values, `--help` after a subcommand, escaped quotes in `parseEnvFile`, `port` accepts 0, GitHub Actions workflow docs.
 - **v1.3.0** — `json`, `uuid` and `hex` types, `minLength`/`maxLength` and `hex` `length` options, `trim: false`, `loadEnv` return-type inference, safer `.env.example` generation for secret keys, `assign: true` JSON fix.
 
