@@ -421,7 +421,13 @@ function loadEnv(schema, options = {}) {
     try {
       fileText = fs.readFileSync(filePath, 'utf8');
     } catch (e) {
-      if (e.code !== 'ENOENT') throw e;
+      // A missing file keeps its own behaviour (skipped in a list, reported
+      // when a required variable is missing below). Any other read failure —
+      // a directory (EISDIR), permission denied (EACCES/EPERM) — names the
+      // path instead of escaping as a raw Node error (issue #157).
+      if (e.code !== 'ENOENT') {
+        throw new Error(`env-saaf: cannot read .env file at ${filePath}: ${e.message}`);
+      }
       continue;
     }
     foundAny = true;

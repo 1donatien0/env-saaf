@@ -3,6 +3,7 @@
 ## Unreleased
 
 - Fixed: `maskValue` returns an empty string unchanged instead of `'****'`, so an empty value no longer looks set in logs; `maskSecrets` keeps empty values the same way (fixes #159)
+- Fixed: `loadEnv` reports `env-saaf: cannot read .env file at <path>: <reason>` when a file exists but cannot be read — a directory passed as `path` (or as an entry of `paths`) no longer leaks a raw `EISDIR`, and a permission-denied file no longer leaks `EACCES`; missing-file behaviour is unchanged (fixes #157)
 
 ## 1.5.0 — 2026-11-20
 

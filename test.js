@@ -249,6 +249,39 @@ assert.ok(!ex.includes('sk_live'));
   fs.rmSync(dir, { recursive: true, force: true });
 }
 
+// Issue #157: loadEnv names the path when a file exists but cannot be read —
+// a directory (EISDIR) or a permission-denied file (EACCES) — instead of
+// leaking the raw Node error. Missing files keep their behaviour above.
+{
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const path = require('node:path');
+  const { loadEnv } = require('./index');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'env-saaf-eisdir-'));
+  const schema = { PORT: { type: 'port', required: true } };
+  // a directory passed as path reports the path, not a raw EISDIR
+  assert.throws(
+    () => loadEnv(schema, { path: dir, env: {} }),
+    (e) => e.code === undefined && e.message.includes(`cannot read .env file at ${dir}`)
+  );
+  // the same applies to every entry of a paths: [...] list
+  assert.throws(
+    () => loadEnv(schema, { paths: [path.join(dir, 'nope.env'), dir], env: {} }),
+    (e) => e.code === undefined && e.message.includes(`cannot read .env file at ${dir}`)
+  );
+  // a permission-denied file reports the path instead of a raw EACCES/EPERM
+  if (process.platform !== 'win32' && process.getuid() !== 0) {
+    const file = path.join(dir, '.env.sealed');
+    fs.writeFileSync(file, 'PORT=4000\n');
+    fs.chmodSync(file, 0o000);
+    assert.throws(
+      () => loadEnv(schema, { path: file, env: {} }),
+      (e) => e.code === undefined && e.message.includes(`cannot read .env file at ${file}`)
+    );
+  }
+  fs.rmSync(dir, { recursive: true, force: true });
+}
+
 // Issue #83: reject a misplaced path or other non-schema argument up front.
 {
   const { loadEnv } = require('./index');
