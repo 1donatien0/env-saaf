@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Added: CLI `init` command scaffolds a starter `env.schema.js` — commented examples of the main types (string, int, boolean, port, url, email, duration, host) — and generates a matching `.env.example` from it with `generateExample`, refusing to overwrite either file unless `--force` is passed; `--schema <file>` names the schema file (fixes #60)
 - Fixed: `maskValue` returns an empty string unchanged instead of `'****'`, so an empty value no longer looks set in logs; `maskSecrets` keeps empty values the same way (fixes #159)
 - Fixed: `loadEnv` reports `env-saaf: cannot read .env file at <path>: <reason>` when a file exists but cannot be read — a directory passed as `path` (or as an entry of `paths`) no longer leaks a raw `EISDIR`, and a permission-denied file no longer leaks `EACCES`; missing-file behaviour is unchanged (fixes #157)
 - Fixed: `loadEnv` throws `env-saaf: .env file not found: <path>` when an explicitly passed single `path` does not exist, instead of silently returning an empty result — a typo'd path no longer boots the app with defaults; the implicit default `.env` and list forms (`paths: [...]` or `path` as an array) keep skipping missing files (fixes #158)
