@@ -118,7 +118,11 @@ function readEnvFile(filePath) {
   try {
     return parseEnvFile(input);
   } catch (error) {
-    const message = `${path.relative(dir, filePath)}: ${error.message}`;
+    // Issue #160: parseEnvFile's own errors already carry the `env-saaf: `
+    // prefix (e.g. the duplicate-key error), so strip it before wrapping —
+    // otherwise the CLI prints the prefix twice, in text and --json output.
+    const detail = error.message.replace(/^env-saaf: /, '');
+    const message = `${path.relative(dir, filePath)}: ${detail}`;
     if (jsonMode) console.log(JSON.stringify({ ok: false, error: message }));
     else console.error(`env-saaf: ${message}`);
     process.exit(2);

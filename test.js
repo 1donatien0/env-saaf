@@ -362,6 +362,32 @@ assert.ok(!ex.includes('sk_live'));
   fs.rmSync(dir, { recursive: true, force: true });
 }
 
+// Issue #160: a template parse error must print the `env-saaf: ` prefix
+// exactly once — parseEnvFile's duplicate-key error already carries it,
+// and readEnvFile used to add it again (in text and --json output).
+{
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const path = require('node:path');
+  const { spawnSync } = require('node:child_process');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'env-saaf-dbl-prefix-'));
+  const cli = path.join(__dirname, 'cli.js');
+  const run = (args) => spawnSync('node', [cli, ...args], { encoding: 'utf8' });
+  try {
+    fs.writeFileSync(path.join(dir, 'app.js'), 'const x = process.env.PORT;');
+    fs.writeFileSync(path.join(dir, '.env.example'), 'PORT=3000\nPORT=3001\n');
+    const human = run(['check', dir]);
+    assert.strictEqual(human.status, 2);
+    assert.strictEqual(human.stderr.trim(), 'env-saaf: .env.example: duplicate key PORT at line 2 (first defined at line 1)');
+    assert.ok(!human.stderr.includes('env-saaf: .env.example: env-saaf:'));
+    const json = run(['check', dir, '--json']);
+    assert.strictEqual(json.status, 2);
+    assert.strictEqual(JSON.parse(json.stdout).error, '.env.example: duplicate key PORT at line 2 (first defined at line 1)');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+}
+
 // Issue #113: 'check' exits 1 whenever it reports a finding — including EXTRA /
 // MISSING keys in .env, which used to print a line and still exit 0 — and
 // --json 'ok' matches the exit code in every case. A clean project still exits 0.

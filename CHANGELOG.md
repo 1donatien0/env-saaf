@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Fixed: CLI `check`/`scan` no longer print a doubled `env-saaf:` prefix when the template (or real `.env`) fails to parse — the duplicate-key error already carries the prefix, and the CLI added it again, in text and `--json` output alike (fixes #160)
 - Added: CLI `init` command scaffolds a starter `env.schema.js` — commented examples of the main types (string, int, boolean, port, url, email, duration, host) — and generates a matching `.env.example` from it with `generateExample`, refusing to overwrite either file unless `--force` is passed; `--schema <file>` names the schema file (fixes #60)
 - Fixed: `maskValue` returns an empty string unchanged instead of `'****'`, so an empty value no longer looks set in logs; `maskSecrets` keeps empty values the same way (fixes #159)
 - Fixed: `loadEnv` reports `env-saaf: cannot read .env file at <path>: <reason>` when a file exists but cannot be read — a directory passed as `path` (or as an entry of `paths`) no longer leaks a raw `EISDIR`, and a permission-denied file no longer leaks `EACCES`; missing-file behaviour is unchanged (fixes #157)
