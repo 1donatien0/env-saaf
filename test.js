@@ -243,9 +243,23 @@ assert.ok(!ex.includes('sk_live'));
   assert.strictEqual(untouched.DEBUG, undefined);
   // missing file + required schema -> saaf error
   assert.throws(() => loadEnv(schema, { path: path.join(dir, 'nope.env'), env: {} }), /file not found/);
-  // missing file + sab optional -> defaults, no throw
-  const env4 = loadEnv({ PORT: { type: 'port', default: 3000 } }, { path: path.join(dir, 'nope.env'), env: {} });
+  // Issue #158: an explicitly passed single `path` that does not exist throws
+  // naming the path even when every variable is optional — a typo'd path is a
+  // deliberate instruction, and ignoring it silently would boot with defaults.
+  assert.throws(
+    () => loadEnv({ PORT: { type: 'port', default: 3000 } }, { path: path.join(dir, 'nope.env'), env: {} }),
+    (e) => e.message === `env-saaf: .env file not found: ${path.join(dir, 'nope.env')}`
+  );
+  // the implicit default `.env` stays optional: nothing required -> defaults
+  const env4 = loadEnv({ PORT: { type: 'port', default: 3000 } }, { env: {} });
   assert.strictEqual(env4.PORT, 3000);
+  // list forms keep skipping missing entries (no throw, defaults apply)
+  assert.strictEqual(
+    loadEnv({ PORT: { type: 'port', default: 3000 } }, { paths: [path.join(dir, 'nope.env')], env: {} }).PORT, 3000
+  );
+  assert.strictEqual(
+    loadEnv({ PORT: { type: 'port', default: 3000 } }, { path: [path.join(dir, 'nope.env')], env: {} }).PORT, 3000
+  );
   fs.rmSync(dir, { recursive: true, force: true });
 }
 

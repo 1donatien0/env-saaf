@@ -398,8 +398,11 @@ function validateEnv(schema, env = process.env, options = {}) {
  *              (objects/arrays from the json type are JSON-stringified)
  *              (default false — process.env is never mutated silently)
  * Any other options are passed through to validateEnv (e.g. { strict: true }).
- * A missing file throws a clear error unless every schema key is optional
- * (has a default or is not required).
+ * An explicitly passed single `path` that does not exist always throws, naming
+ * the path (a typo'd path must not boot the app silently). The implicit
+ * default `.env` and list forms (`paths: [...]` or `path` as an array) skip
+ * missing files; with a list the missing-file rule throws only when NO file is
+ * found and every schema key is optional (has a default or is not required).
  */
 function loadEnv(schema, options = {}) {
   if (schema === null || typeof schema !== 'object'
@@ -408,12 +411,16 @@ function loadEnv(schema, options = {}) {
       "loadEnv expects a schema object as the first argument — did you mean loadEnv(schema, { path: '.env' })?"
     );
   }
-  const { path: pathOpt = '.env', paths: pathsOpt, env = process.env, override = false, assign = false, ...rest } = options;
+  const { path: pathOpt, paths: pathsOpt, env = process.env, override = false, assign = false, ...rest } = options;
   // One file or several: `path` may be a string or an array of strings, or
   // pass `paths: [...]`. Files are read in order and LATER files win over
   // earlier ones (e.g. ['.env', '.env.local']). Missing files in a list are
   // skipped; only when NO file is found does the missing-file rule below run.
-  const fileList = pathsOpt !== undefined ? pathsOpt : (Array.isArray(pathOpt) ? pathOpt : [pathOpt]);
+  // An explicitly passed single `path` string is a deliberate instruction, so
+  // a missing file there is reported instead of silently skipped (issue #158);
+  // the implicit default `.env` and list forms keep the skip behaviour.
+  const explicitSinglePath = pathsOpt === undefined && pathOpt !== undefined && !Array.isArray(pathOpt) ? pathOpt : undefined;
+  const fileList = pathsOpt !== undefined ? pathsOpt : (pathOpt !== undefined ? (Array.isArray(pathOpt) ? pathOpt : [pathOpt]) : ['.env']);
   const fileEnv = {};
   let foundAny = false;
   for (const filePath of fileList) {
@@ -427,6 +434,9 @@ function loadEnv(schema, options = {}) {
       // path instead of escaping as a raw Node error (issue #157).
       if (e.code !== 'ENOENT') {
         throw new Error(`env-saaf: cannot read .env file at ${filePath}: ${e.message}`);
+      }
+      if (explicitSinglePath !== undefined) {
+        throw new Error(`env-saaf: .env file not found: ${filePath}`);
       }
       continue;
     }
