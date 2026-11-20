@@ -747,9 +747,10 @@ function diffEnv(usedKeys, documentedKeys) {
   };
 }
 
-/** Mask a secret for safe logging: "sk_live_123456" -> "sk***56". Short values are fully masked. */
+/** Mask a secret for safe logging: "sk_live_123456" -> "sk***56". Short values are fully masked; an empty string is returned unchanged — there is nothing to hide. */
 function maskValue(v) {
   const s = String(v);
+  if (s.length === 0) return '';
   if (s.length <= 4) return '****';
   return s.slice(0, 2) + '***' + s.slice(-2);
 }

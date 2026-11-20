@@ -122,6 +122,10 @@ assert.deepStrictEqual(diffEnv(['A', 'B'], ['A', 'C']), { usedNotDocumented: ['B
 assert.strictEqual(maskValue('sk_live_123456'), 'sk***56');
 assert.strictEqual(maskValue('abc'), '****');
 assert.deepStrictEqual(maskSecrets({ KEY: 'sk_live_123456' }), { KEY: 'sk***56' });
+// an empty value has nothing to hide — it stays empty instead of looking set
+assert.strictEqual(maskValue(''), '');
+assert.strictEqual(maskValue('x'), '****');
+assert.deepStrictEqual(maskSecrets({ KEY: '' }), { KEY: '' });
 // v1.0.0: generateExample — placeholders/defaults only, never a real secret
 const ex = generateExample({ PORT: { type: 'port', required: true }, API_KEY: { type: 'string', required: true } });
 assert.ok(ex.includes('PORT=3000'));

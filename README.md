@@ -455,6 +455,8 @@ const { maskSecrets } = require('env-saaf');
 console.log(maskSecrets(process.env)); // values masked: sk***56
 ```
 
+An empty value stays empty — `maskValue('')` returns `''`, so an unset secret no longer looks set in logs.
+
 ## Versions
 
 - **v0.1.0** — core `validateEnv`: types (string/number/boolean/url/port), required, defaults, choices, all-errors-at-once.
