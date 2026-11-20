@@ -1077,6 +1077,33 @@ assert.deepStrictEqual(
   assert.ok(generateExample({ LAUNCH: { type: 'date', required: true } }).includes('LAUNCH=2026-01-31'));
 }
 
+// Issue #41: 'duration' type — human durations ('15m', '2h', '1d') become milliseconds.
+{
+  const schema = { TIMEOUT: { type: 'duration' } };
+  assert.strictEqual(validateEnv(schema, { TIMEOUT: '500ms' }).TIMEOUT, 500);
+  assert.strictEqual(validateEnv(schema, { TIMEOUT: '30s' }).TIMEOUT, 30000);
+  assert.strictEqual(validateEnv(schema, { TIMEOUT: '15m' }).TIMEOUT, 900000);
+  assert.strictEqual(validateEnv(schema, { TIMEOUT: '2h' }).TIMEOUT, 7200000);
+  assert.strictEqual(validateEnv(schema, { TIMEOUT: '1d' }).TIMEOUT, 86400000);
+  // A bare number is already milliseconds; decimals and case do not matter.
+  assert.strictEqual(validateEnv(schema, { TIMEOUT: '250' }).TIMEOUT, 250);
+  assert.strictEqual(validateEnv(schema, { TIMEOUT: '1.5h' }).TIMEOUT, 5400000);
+  assert.strictEqual(validateEnv(schema, { TIMEOUT: '15M' }).TIMEOUT, 900000);
+  assert.strictEqual(validateEnv(schema, { TIMEOUT: ' 30s ' }).TIMEOUT, 30000);
+  // A number passed directly (e.g. as a default) is taken as milliseconds.
+  assert.strictEqual(validateEnv({ TIMEOUT: { type: 'duration', default: 5000 } }, {}).TIMEOUT, 5000);
+  // min/max work on the millisecond result like on any other number.
+  assert.strictEqual(validateEnv({ TIMEOUT: { type: 'duration', min: 1000 } }, { TIMEOUT: '30s' }).TIMEOUT, 30000);
+  assert.throws(() => validateEnv({ TIMEOUT: { type: 'duration', min: 1000 } }, { TIMEOUT: '500ms' }), /expected a number at least 1000/);
+  // Unknown units, negatives and malformed values are rejected, naming the key.
+  for (const bad of ['15x', '15min', '15sec', '-5m', '-1', 'm', '1.2.3h', '1e3s']) {
+    assert.throws(() => validateEnv(schema, { TIMEOUT: bad }), /expected a duration/);
+  }
+  assert.throws(() => validateEnv({ TIMEOUT: { type: 'duration', required: true } }, {}), EnvSaafError);
+  // generateExample suggests a real duration, not a placeholder.
+  assert.ok(generateExample({ TIMEOUT: { type: 'duration', required: true } }).includes('TIMEOUT=15m'));
+}
+
 // Issue #82: parseEnvFile takes .env TEXT, not a file path. Passing a path
 // silently returned {}; now it throws a clear error pointing at loadEnv.
 {

@@ -1,4 +1,4 @@
-export type EnvType = 'string' | 'number' | 'int' | 'boolean' | 'url' | 'port' | 'email' | 'json' | 'uuid' | 'hex' | 'ipv4' | 'semver' | 'base64' | 'date' | 'file';
+export type EnvType = 'string' | 'number' | 'int' | 'boolean' | 'url' | 'port' | 'email' | 'json' | 'uuid' | 'hex' | 'ipv4' | 'semver' | 'base64' | 'date' | 'file' | 'duration';
 
 export interface EnvRule {
   type?: EnvType;
@@ -7,7 +7,7 @@ export interface EnvRule {
   default?: string | number | boolean | Date | Record<string, unknown> | unknown[] | null;
   choices?: Array<string | number | boolean>;
   /**
-   * Allowed range for numeric values (`number`, `int`, `port`).
+   * Allowed range for numeric values (`number`, `int`, `port`, `duration`).
    * `min` alone or `max` alone both work; out-of-range values are
    * rejected with an error naming the allowed range.
    */
@@ -55,7 +55,7 @@ export type EnvSchema = Record<string, EnvRule>;
 
 /**
  * The value type of a rule, from the schema's `type` field:
- * 'number' / 'int' / 'port' -> number, 'boolean' -> boolean,
+ * 'number' / 'int' / 'port' / 'duration' -> number, 'boolean' -> boolean,
  * 'json' -> unknown (parsed JSON can be any shape), 'date' -> Date,
  * everything else (string / url / file / email / uuid / hex / ipv4 / semver / base64
  * / no type given) -> string.
@@ -66,6 +66,7 @@ export type EnvValue<R extends EnvRule> =
   R extends { type: 'number' } ? number :
   R extends { type: 'int' } ? number :
   R extends { type: 'port' } ? number :
+  R extends { type: 'duration' } ? number :
   R extends { type: 'boolean' } ? boolean :
   R extends { type: 'json' } ? unknown :
   R extends { type: 'date' } ? Date :
