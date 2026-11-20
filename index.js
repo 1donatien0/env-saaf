@@ -54,11 +54,20 @@ function validateSchema(schema) {
     if (rule.length !== undefined && (!Number.isInteger(rule.length) || rule.length < 0)) {
       errors.push(`${key}: "length" must be a non-negative integer`);
     }
+    // Issue #50: `protocols` is a non-empty array of schemes (e.g. ['https']);
+    // a bare string, an empty array or a non-scheme entry is a schema bug.
+    if (rule.protocols !== undefined) {
+      const bad = !Array.isArray(rule.protocols) || rule.protocols.length === 0
+        || rule.protocols.some(p => typeof p !== 'string' || !/^[a-zA-Z][a-zA-Z0-9+.-]*:?$/.test(p));
+      if (bad) {
+        errors.push(`${key}: "protocols" must be a non-empty array of schemes, e.g. ['https']`);
+      }
+    }
   }
   if (errors.length) throw new EnvSaafError(errors);
 }
 
-function coerce(key, raw, type, trim = true) {
+function coerce(key, raw, type, trim = true, protocols) {
   // trim: false (issue #84) keeps the raw value exactly as provided — for
   // values where the whitespace IS the value (a password with a significant
   // trailing space). The default stays true: stray spaces from pasted
@@ -112,8 +121,18 @@ function coerce(key, raw, type, trim = true) {
       // Validate only — never modify: new URL(...).toString() normalizes
       // the value (a bare origin gains a trailing slash), which can break
       // the user's string comparisons.
-      try { new URL(String(v)); }
+      let parsed;
+      try { parsed = new URL(String(v)); }
       catch { throw new Error(`${key}: expected a valid URL, got "${raw}"`); }
+      // Issue #50: `protocols` allowlists the schemes (e.g. ['https']).
+      // Schemes compare case-insensitively, with or without a trailing ':'.
+      if (Array.isArray(protocols)) {
+        const scheme = parsed.protocol.replace(/:$/, '').toLowerCase();
+        const allowed = protocols.map(p => String(p).replace(/:$/, '').toLowerCase());
+        if (!allowed.includes(scheme)) {
+          throw new Error(`${key}: expected a URL with one of these protocols (${protocols.join(', ')}), got "${raw}"`);
+        }
+      }
       return String(v);
     }
     case 'file': {
@@ -295,7 +314,7 @@ function validateEnv(schema, env = process.env, options = {}) {
       }
     }
     try {
-      const val = coerce(key, raw, rule.type || 'string', rule.trim !== false);
+      const val = coerce(key, raw, rule.type || 'string', rule.trim !== false, rule.protocols);
       // min/max: allowed range for numeric values (number, int, port, duration).
       // Runs right after coercion, before choices/pattern/transform; the
       // error names the allowed range. min alone or max alone both work.

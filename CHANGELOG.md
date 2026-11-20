@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Added: `protocols` option for the `url` type — allowlist the schemes a value may use (e.g. `['https']` rejects `ftp://...` with an error naming the allowed schemes); matching is case-insensitive, with or without a trailing colon, and without the option any valid URL passes as before. A malformed `protocols` value is rejected up front, naming the key (fixes #50)
 - Fixed: CLI `check`/`scan` no longer print a doubled `env-saaf:` prefix when the template (or real `.env`) fails to parse — the duplicate-key error already carries the prefix, and the CLI added it again, in text and `--json` output alike (fixes #160)
 - Added: CLI `init` command scaffolds a starter `env.schema.js` — commented examples of the main types (string, int, boolean, port, url, email, duration, host) — and generates a matching `.env.example` from it with `generateExample`, refusing to overwrite either file unless `--force` is passed; `--schema <file>` names the schema file (fixes #60)
 - Fixed: `maskValue` returns an empty string unchanged instead of `'****'`, so an empty value no longer looks set in logs; `maskSecrets` keeps empty values the same way (fixes #159)
