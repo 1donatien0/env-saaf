@@ -4,6 +4,7 @@
 
 - Fixed: `maskValue` returns an empty string unchanged instead of `'****'`, so an empty value no longer looks set in logs; `maskSecrets` keeps empty values the same way (fixes #159)
 - Fixed: `loadEnv` reports `env-saaf: cannot read .env file at <path>: <reason>` when a file exists but cannot be read — a directory passed as `path` (or as an entry of `paths`) no longer leaks a raw `EISDIR`, and a permission-denied file no longer leaks `EACCES`; missing-file behaviour is unchanged (fixes #157)
+- Fixed: `loadEnv` throws `env-saaf: .env file not found: <path>` when an explicitly passed single `path` does not exist, instead of silently returning an empty result — a typo'd path no longer boots the app with defaults; the implicit default `.env` and list forms (`paths: [...]` or `path` as an array) keep skipping missing files (fixes #158)
 
 ## 1.5.0 — 2026-11-20
 
