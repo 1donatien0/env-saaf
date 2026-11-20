@@ -1104,6 +1104,27 @@ assert.deepStrictEqual(
   assert.ok(generateExample({ TIMEOUT: { type: 'duration', required: true } }).includes('TIMEOUT=15m'));
 }
 
+// Issue #44: 'host' type — a hostname or IP address, with no scheme, path or port.
+{
+  const schema = { HOST: { type: 'host' } };
+  assert.strictEqual(validateEnv(schema, { HOST: 'db.internal' }).HOST, 'db.internal');
+  assert.strictEqual(validateEnv(schema, { HOST: 'localhost' }).HOST, 'localhost');
+  assert.strictEqual(validateEnv(schema, { HOST: '10.0.0.5' }).HOST, '10.0.0.5');
+  assert.strictEqual(validateEnv(schema, { HOST: '::1' }).HOST, '::1');
+  assert.strictEqual(validateEnv(schema, { HOST: '2001:db8::1' }).HOST, '2001:db8::1');
+  assert.strictEqual(validateEnv(schema, { HOST: 'DB.EXAMPLE.COM' }).HOST, 'DB.EXAMPLE.COM');
+  // A scheme, a path or a port is rejected, naming the key.
+  for (const bad of ['https://db.internal', 'http://localhost:3000', 'db.internal:8080', 'localhost:3000',
+    'db/x', 'db.internal/', 'http://[::1]:8080', '-bad-.example.com', 'bad..host', '.example.com', 'example.com.']) {
+    assert.throws(() => validateEnv(schema, { HOST: bad }), /expected a hostname or IP address/);
+  }
+  assert.throws(() => validateEnv({ HOST: { type: 'host', required: true } }, {}), EnvSaafError);
+  // String options work on it like on any other string type.
+  assert.throws(() => validateEnv({ HOST: { type: 'host', maxLength: 5 } }, { HOST: 'db.internal' }), /at most 5 characters/);
+  // generateExample suggests a real host, not a placeholder.
+  assert.ok(generateExample({ HOST: { type: 'host', required: true } }).includes('HOST=localhost'));
+}
+
 // Issue #82: parseEnvFile takes .env TEXT, not a file path. Passing a path
 // silently returned {}; now it throws a clear error pointing at loadEnv.
 {

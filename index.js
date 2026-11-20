@@ -6,6 +6,7 @@
  * v0.1.0 core: validateEnv with typed coercion.
  */
 const fs = require('node:fs');
+const net = require('node:net');
 const path = require('node:path');
 
 class EnvSaafError extends Error {
@@ -20,7 +21,7 @@ class EnvSaafError extends Error {
 // validation and coercion cannot drift apart when a new type is added.
 const KNOWN_TYPES = new Set([
   'string', 'email', 'number', 'int', 'json', 'boolean', 'url',
-  'uuid', 'hex', 'ipv4', 'semver', 'base64', 'port', 'date', 'file', 'duration',
+  'uuid', 'hex', 'ipv4', 'semver', 'base64', 'port', 'date', 'file', 'duration', 'host',
 ]);
 
 // Validate the shape of the schema itself, independent of any env values.
@@ -236,6 +237,25 @@ function coerce(key, raw, type, trim = true) {
       }
       return ms;
     }
+    case 'host': {
+      // A hostname or IP address, with no scheme, path or port:
+      // 'db.internal', 'localhost', '10.0.0.5' and '::1' pass, while
+      // 'https://x', 'db/x' and 'example.com:8080' fail. IPv6 is checked
+      // with net.isIP, so a colon only passes as part of a real IPv6
+      // address; anything else with a colon is host:port and is rejected.
+      const s = String(v);
+      if (s.includes('://') || s.includes('/')) {
+        throw new Error(`${key}: expected a hostname or IP address (e.g. db.internal, localhost, 10.0.0.5), got "${raw}"`);
+      }
+      if (net.isIP(s) === 6 || net.isIP(s) === 4) return s;
+      if (s.includes(':')) {
+        throw new Error(`${key}: expected a hostname or IP address (e.g. db.internal, localhost, 10.0.0.5), got "${raw}"`);
+      }
+      if (!/^(?=.{1,253}$)([A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?)(\.[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?)*$/.test(s)) {
+        throw new Error(`${key}: expected a hostname or IP address (e.g. db.internal, localhost, 10.0.0.5), got "${raw}"`);
+      }
+      return s;
+    }
     case 'port': {
       const n = Number(v);
       const zeroWithoutValue = n === 0 && typeof v !== 'number'
@@ -290,7 +310,7 @@ function validateEnv(schema, env = process.env, options = {}) {
         }
       }
       // minLength/maxLength: allowed length for string values (string,
-      // email, url, file, uuid, hex, ipv4, semver, base64). Checked after coercion, before choices/pattern; the
+      // email, url, file, uuid, hex, ipv4, semver, base64, host). Checked after coercion, before choices/pattern; the
       // error names the allowed length. Either option works alone, and
       // non-string values skip the check entirely.
       if (typeof val === 'string' && (rule.minLength !== undefined || rule.maxLength !== undefined)) {
@@ -756,7 +776,7 @@ function generateExample(schema) {
       : looksSecret ? ''
       : (rule.type === 'port' ? 3000 : rule.type === 'url' ? 'https://example.com'
         : rule.type === 'ipv4' ? '192.168.0.1' : rule.type === 'semver' ? '1.0.0'
-        : rule.type === 'date' ? '2026-01-31' : rule.type === 'duration' ? '15m' : rule.type === 'file' ? './config.json' : 'your_value_here');
+        : rule.type === 'date' ? '2026-01-31' : rule.type === 'duration' ? '15m' : rule.type === 'host' ? 'localhost' : rule.type === 'file' ? './config.json' : 'your_value_here');
     lines.push(`${key}=${placeholder}`);
   }
   return lines.join('\n') + '\n';

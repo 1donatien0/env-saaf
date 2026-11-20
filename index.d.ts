@@ -1,4 +1,4 @@
-export type EnvType = 'string' | 'number' | 'int' | 'boolean' | 'url' | 'port' | 'email' | 'json' | 'uuid' | 'hex' | 'ipv4' | 'semver' | 'base64' | 'date' | 'file' | 'duration';
+export type EnvType = 'string' | 'number' | 'int' | 'boolean' | 'url' | 'port' | 'email' | 'json' | 'uuid' | 'hex' | 'ipv4' | 'semver' | 'base64' | 'date' | 'file' | 'duration' | 'host';
 
 export interface EnvRule {
   type?: EnvType;
@@ -16,7 +16,7 @@ export interface EnvRule {
   max?: number;
   /**
    * Allowed length for string values (`string`, `email`, `url`, `file`, `uuid`, `hex`,
-   * `ipv4`, `semver`, `base64`).
+   * `ipv4`, `semver`, `base64`, `host`).
    * `minLength` alone or `maxLength` alone both work; a too-short or
    * too-long value is rejected with an error naming the allowed length.
    * Checked after coercion, before `pattern`.
@@ -58,7 +58,7 @@ export type EnvSchema = Record<string, EnvRule>;
  * 'number' / 'int' / 'port' / 'duration' -> number, 'boolean' -> boolean,
  * 'json' -> unknown (parsed JSON can be any shape), 'date' -> Date,
  * everything else (string / url / file / email / uuid / hex / ipv4 / semver / base64
- * / no type given) -> string.
+ * / host / no type given) -> string.
  * A rule with a `transform` returns the transform's return type instead.
  */
 export type EnvValue<R extends EnvRule> =

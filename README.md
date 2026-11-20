@@ -57,6 +57,7 @@ Environment inputs are strings. Output below is before an optional `transform`.
 | `base64` | Standard alphabet, length multiple of four, padding where needed. Excludes base64url. | `string` | `trim`, `minLength`, `maxLength`, `pattern` |
 | `date` | Valid `YYYY-MM-DD` or datetime with `T` and hours/minutes; optional seconds, fraction and `Z` or numeric offset. Accepts valid `Date` defaults. | `Date` | `trim` |
 | `duration` | Human duration: `500ms`, `30s`, `15m`, `2h`, `1d`; a bare number is milliseconds | `number` (milliseconds) | `trim`, `min`, `max` |
+| `host` | Hostname (`db.internal`, `localhost`) or IPv4/IPv6 address; no scheme, path or port | `string` | `trim`, `minLength`, `maxLength`, `pattern` |
 
 All types support `required`, `default` and `transform`. Transforms run on provided values after validation. Missing optional keys are omitted and defaults are validated. The `choices` option matches coerced strings, numbers or booleans. A parsed JSON value can match a choice when it has one of those three types. String input is trimmed by default. Setting `trim: false` leaves whitespace in place for string-like types. For `number` and `int`, whitespace around a numeric value is accepted either way, but whitespace-only text is rejected by default and converts to `0` with `trim: false`. Boolean matching always ignores surrounding whitespace. The `length` option applies only to `hex`. See the sections below for examples.
 ### Non-throwing mode — collect errors instead of throwing
@@ -194,6 +195,17 @@ setTimeout(refresh, env.CACHE_TTL); // 900000 for '15m'
 ```
 
 `duration` parses a human duration (`500ms`, `30s`, `15m`, `2h`, `1d`) into a number of milliseconds; a bare number is already milliseconds, so `'250'` and `250` both mean 250 ms. Units are case-insensitive and decimals are allowed (`1.5h` is 5,400,000 ms). Unknown units (`15min`, `15sec`), negatives and malformed values are rejected with an error naming the key. A number given as a `default` is taken as milliseconds, and `min`/`max` work on the millisecond result like on any other number. `generateExample` suggests `15m` for the type.
+
+### `host` type — a hostname or IP address, no scheme or port
+
+```js
+const env = validateEnv({
+  DB_HOST: { type: 'host', required: true },
+  BIND_ADDR: { type: 'host', default: 'localhost' },
+}, process.env);
+```
+
+`host` accepts a hostname (`db.internal`, `localhost`) or an IPv4/IPv6 address (`10.0.0.5`, `::1`) and returns it unchanged. A value with a scheme (`https://db.internal`), a path (`db/x`) or a port (`example.com:8080`) is rejected with an error naming the key — those belong to the `url` type or to a separate port variable. `minLength`/`maxLength` and `pattern` work on it like on any other string type, and `generateExample` suggests `localhost` for the type.
 
 ### `trim: false` — keep whitespace when it matters
 
