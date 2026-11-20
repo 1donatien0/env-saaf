@@ -20,7 +20,7 @@ class EnvSaafError extends Error {
 // validation and coercion cannot drift apart when a new type is added.
 const KNOWN_TYPES = new Set([
   'string', 'email', 'number', 'int', 'json', 'boolean', 'url',
-  'uuid', 'hex', 'ipv4', 'semver', 'base64', 'port', 'date', 'file',
+  'uuid', 'hex', 'ipv4', 'semver', 'base64', 'port', 'date', 'file', 'duration',
 ]);
 
 // Validate the shape of the schema itself, independent of any env values.
@@ -212,6 +212,30 @@ function coerce(key, raw, type, trim = true) {
       }
       return d;
     }
+    case 'duration': {
+      // Human durations: '500ms', '30s', '15m', '2h', '1d' become
+      // milliseconds; a bare number is already milliseconds. Units are
+      // case-insensitive and decimals are allowed ('1.5h'), negatives and
+      // unknown units are rejected. A number passed directly (e.g. as a
+      // default) is taken as milliseconds, like the number type.
+      if (typeof v === 'number') {
+        if (!Number.isFinite(v) || v < 0) {
+          throw new Error(`${key}: expected a duration (e.g. 500ms, 30s, 15m, 2h, 1d), got "${raw}"`);
+        }
+        return v;
+      }
+      const s = String(v).trim();
+      const m = /^(\d+(?:\.\d+)?)\s*(ms|s|m|h|d)?$/i.exec(s);
+      if (!m) {
+        throw new Error(`${key}: expected a duration (e.g. 500ms, 30s, 15m, 2h, 1d), got "${raw}"`);
+      }
+      const mult = { ms: 1, s: 1000, m: 60000, h: 3600000, d: 86400000 }[m[2] ? m[2].toLowerCase() : 'ms'];
+      const ms = Number(m[1]) * mult;
+      if (!Number.isFinite(ms)) {
+        throw new Error(`${key}: expected a duration (e.g. 500ms, 30s, 15m, 2h, 1d), got "${raw}"`);
+      }
+      return ms;
+    }
     case 'port': {
       const n = Number(v);
       const zeroWithoutValue = n === 0 && typeof v !== 'number'
@@ -252,7 +276,7 @@ function validateEnv(schema, env = process.env, options = {}) {
     }
     try {
       const val = coerce(key, raw, rule.type || 'string', rule.trim !== false);
-      // min/max: allowed range for numeric values (number, int, port).
+      // min/max: allowed range for numeric values (number, int, port, duration).
       // Runs right after coercion, before choices/pattern/transform; the
       // error names the allowed range. min alone or max alone both work.
       if (typeof val === 'number' && (rule.min !== undefined || rule.max !== undefined)) {
@@ -732,7 +756,7 @@ function generateExample(schema) {
       : looksSecret ? ''
       : (rule.type === 'port' ? 3000 : rule.type === 'url' ? 'https://example.com'
         : rule.type === 'ipv4' ? '192.168.0.1' : rule.type === 'semver' ? '1.0.0'
-        : rule.type === 'date' ? '2026-01-31' : rule.type === 'file' ? './config.json' : 'your_value_here');
+        : rule.type === 'date' ? '2026-01-31' : rule.type === 'duration' ? '15m' : rule.type === 'file' ? './config.json' : 'your_value_here');
     lines.push(`${key}=${placeholder}`);
   }
   return lines.join('\n') + '\n';

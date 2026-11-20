@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Added: `duration` type — parses human durations (`500ms`, `30s`, `15m`, `2h`, `1d`) into milliseconds; a bare number is already milliseconds, decimals and case-insensitive units are accepted, and unknown units and negatives are rejected. `min`/`max` work on the millisecond result, and `generateExample` suggests `15m` (fixes #41)
+
 - Added: `file` validates that a path points to a readable regular file and returns the path string (fixes #57).
 
 - Docs: add a README types reference table covering inputs, outputs and rule options (fixes #135).
