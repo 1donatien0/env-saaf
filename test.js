@@ -343,6 +343,40 @@ assert.ok(!ex.includes('sk_live'));
   assert.throws(() => validateEnv({ U: { type: 'url' } }, { U: 'not a url' }), /valid URL/);
 }
 
+// Issue #50: `protocols` allowlists the schemes a `url` value may use.
+{
+  // An allowed scheme passes, and the value comes back exactly as given.
+  assert.strictEqual(
+    validateEnv({ U: { type: 'url', protocols: ['https'] } }, { U: 'https://example.com' }).U,
+    'https://example.com');
+  // Several allowed schemes; matching is case-insensitive, with or without ':'.
+  assert.strictEqual(
+    validateEnv({ U: { type: 'url', protocols: ['http', 'https:'] } }, { U: 'HTTPS://example.com/x' }).U,
+    'HTTPS://example.com/x');
+  // A scheme outside the list is rejected, naming the allowed schemes.
+  assert.throws(
+    () => validateEnv({ U: { type: 'url', protocols: ['https'] } }, { U: 'ftp://example.com/x' }),
+    /expected a URL with one of these protocols \(https\), got "ftp:\/\/example\.com\/x"/);
+  // Without the option, any valid URL still passes.
+  assert.strictEqual(
+    validateEnv({ U: { type: 'url' } }, { U: 'ftp://example.com/x' }).U, 'ftp://example.com/x');
+  // A bad `protocols` option is rejected up front, naming the key — even
+  // when the variable is absent.
+  assert.throws(
+    () => validateEnv({ U: { type: 'url', protocols: 'https' } }, {}),
+    /U: "protocols" must be a non-empty array of schemes/);
+  assert.throws(
+    () => validateEnv({ U: { type: 'url', protocols: [] } }, {}),
+    /U: "protocols" must be a non-empty array of schemes/);
+  assert.throws(
+    () => validateEnv({ U: { type: 'url', protocols: ['ht tp'] } }, {}),
+    /U: "protocols" must be a non-empty array of schemes/);
+  // A default goes through the same check as a provided value.
+  assert.throws(
+    () => validateEnv({ U: { type: 'url', protocols: ['https'], default: 'ftp://example.com' } }, {}),
+    /one of these protocols/);
+}
+
 // Issue #5: CLI 'check --file <name>' — compare against the given file instead of .env.example
 {
   const fs = require('node:fs');

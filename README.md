@@ -45,7 +45,7 @@ Environment inputs are strings. Output below is before an optional `transform`.
 | `number` | Non-empty text accepted by `Number()`, including fractions and exponent notation. Rejects `NaN`. | `number` | `trim`, `min`, `max` |
 | `int` | Numeric text resolving to an integer, e.g. `42`, `1e3` | `number` | `trim`, `min`, `max` |
 | `boolean` | Case-insensitive `true/false`, `1/0`, `yes/no`, `on/off`, `y/n` | `boolean` | None |
-| `url` | Absolute URL accepted by `new URL()`, without normalization | `string` | `trim`, `minLength`, `maxLength`, `pattern` |
+| `url` | Absolute URL accepted by `new URL()`, without normalization | `string` | `trim`, `minLength`, `maxLength`, `pattern`, `protocols` |
 | `file` | Path to an existing, readable regular file. Relative paths use the process working directory. | `string` | `trim`, `minLength`, `maxLength`, `pattern` |
 | `port` | Numeric text resolving to an integer from 0 to 65535 | `number` | `min`, `max` |
 | `email` | One `@`, non-empty local part, domain with an interior dot, no leading or trailing domain dot, no whitespace | `string` | `trim`, `minLength`, `maxLength`, `pattern` |
@@ -206,6 +206,16 @@ const env = validateEnv({
 ```
 
 `host` accepts a hostname (`db.internal`, `localhost`) or an IPv4/IPv6 address (`10.0.0.5`, `::1`) and returns it unchanged. A value with a scheme (`https://db.internal`), a path (`db/x`) or a port (`example.com:8080`) is rejected with an error naming the key — those belong to the `url` type or to a separate port variable. `minLength`/`maxLength` and `pattern` work on it like on any other string type, and `generateExample` suggests `localhost` for the type.
+
+### `url` type and `protocols` — allowlist schemes
+
+```js
+const env = validateEnv({
+  WEBHOOK_URL: { type: 'url', protocols: ['https'], required: true },
+});
+```
+
+`url` validates with `new URL()` and returns the value exactly as given (no normalization — a bare origin gains no trailing slash). `protocols` allowlists the schemes a value may use (`['https']` rejects `ftp://...` and `javascript:...` with an error naming the allowed schemes); matching is case-insensitive, and entries may be written with or without a trailing colon (`'https'` and `'https:'` mean the same). Without the option, any valid URL passes, as before.
 
 ### `trim: false` — keep whitespace when it matters
 

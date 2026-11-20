@@ -31,6 +31,13 @@ export interface EnvRule {
    */
   length?: number;
   /**
+   * Allowed schemes for `url` values (e.g. `['https']`). A value whose
+   * scheme is outside the list is rejected with an error naming the
+   * allowed schemes. Matching is case-insensitive, and entries may be
+   * written with or without a trailing colon. Ignored for other types.
+   */
+  protocols?: string[];
+  /**
    * A regular expression a string value must match (e.g. a slug, or a
    * prefixed key like `sk_...`). Checked after coercion and `choices`,
    * before `transform`; a mismatch error names the pattern.
