@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Fixed: `maskValue` returns an empty string unchanged instead of `'****'`, so an empty value no longer looks set in logs; `maskSecrets` keeps empty values the same way (fixes #159)
+
 ## 1.5.0 — 2026-11-20
 
 - Added: `host` type — validates a hostname or an IPv4/IPv6 address (`db.internal`, `localhost`, `10.0.0.5`, `::1`) and rejects values with a scheme, path or port; `minLength`/`maxLength`/`pattern` work on it, and `generateExample` suggests `localhost` (fixes #44)
