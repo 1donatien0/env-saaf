@@ -382,7 +382,10 @@ npx env-saaf check . --schema ./env.schema.js  # also validate the values in .en
 npx env-saaf scan ./src --json  # JSON list of used vars
 npx env-saaf example ./src  # draft a .env.example from a code scan
 npx env-saaf example ./src --write  # save the draft to .env.example (refuses, exit 1, when the scan finds no variables)
+npx env-saaf init .  # scaffold a starter env.schema.js (commented type examples) + a matching .env.example (refuses to overwrite without --force)
 ```
+
+Starting a new project? `env-saaf init` writes a starter `env.schema.js` with commented examples of the main types (`string`, `int`, `boolean`, `port`, `url`, `email`, `duration`, `host`) and generates a matching `.env.example` from it, so the first `check` already has something to compare against. Either file being present is a refusal (exit 1, naming the files) unless `--force` is passed; `--schema <file>` names the schema file instead of `env.schema.js`.
 
 When `.env.example` (or the file given with `--file`) sits in the scanned directory, `scan` also warns about keys declared there that no code reads, one per line on stderr: `UNUSED: OLD_KEY (in .env.example, never used in code)`. With `--json` they are listed in an `unused` array next to `vars`. It is only a warning: stdout still holds just the used variables, and `scan` still exits 0 (use `check` to fail a CI job on drift). Without a template file, nothing changes.
 

@@ -1685,3 +1685,67 @@ console.log('env-saaf v1.5.0: all tests passed');
     fs.rmSync(dir, { recursive: true, force: true });
   }
 }
+
+// Issue #60: CLI 'init' — scaffold a starter schema + .env.example.
+{
+  const { spawnSync } = require('node:child_process');
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const cli = path.join(__dirname, 'cli.js');
+  const run = (args) => spawnSync('node', [cli, ...args], { encoding: 'utf8' });
+
+  const dir = fs.mkdtempSync(path.join(__dirname, 'init-test-'));
+  try {
+    // Both files land in an empty directory, with a confirmation on stdout.
+    const first = run(['init', dir]);
+    assert.strictEqual(first.status, 0, first.stderr);
+    assert.ok(first.stdout.includes('env.schema.js') && first.stdout.includes('.env.example'));
+    const schemaFile = path.join(dir, 'env.schema.js');
+    const exampleFile = path.join(dir, '.env.example');
+    assert.ok(fs.existsSync(schemaFile));
+    assert.ok(fs.existsSync(exampleFile));
+    // The scaffold is a valid schema object, and the .env.example on disk is
+    // exactly what generateExample produces from it — the two cannot drift.
+    const starter = require(schemaFile);
+    const types = Object.values(starter).map(rule => rule.type);
+    for (const t of ['string', 'int', 'boolean', 'port', 'url', 'email']) {
+      assert.ok(types.includes(t), `starter schema should demonstrate ${t}`);
+    }
+    assert.strictEqual(fs.readFileSync(exampleFile, 'utf8'), generateExample(starter));
+    assert.deepStrictEqual(
+      Object.keys(starter),
+      fs.readFileSync(exampleFile, 'utf8').split('\n')
+        .filter(l => l && !l.startsWith('#')).map(l => l.split('=')[0]),
+    );
+
+    // Refuses to overwrite either file without --force, naming what exists,
+    // and the files keep their content.
+    const before = fs.readFileSync(schemaFile, 'utf8');
+    const again = run(['init', dir]);
+    assert.strictEqual(again.status, 1);
+    assert.match(again.stderr, /already exist/);
+    assert.match(again.stderr, /--force/);
+    assert.strictEqual(fs.readFileSync(schemaFile, 'utf8'), before);
+
+    // --force overwrites both files: a hand-edited schema is replaced by the
+    // scaffold again.
+    fs.writeFileSync(schemaFile, 'module.exports = { HAND_EDITED: true };\n');
+    const forced = run(['init', dir, '--force']);
+    assert.strictEqual(forced.status, 0, forced.stderr);
+    assert.strictEqual(fs.readFileSync(schemaFile, 'utf8'), before);
+    assert.strictEqual(fs.readFileSync(exampleFile, 'utf8'), generateExample(starter));
+
+    // --schema names the schema file; the .env.example is still generated.
+    const dir2 = fs.mkdtempSync(path.join(__dirname, 'init-test-named-'));
+    try {
+      const named = run(['init', dir2, '--schema', 'config.schema.js']);
+      assert.strictEqual(named.status, 0, named.stderr);
+      assert.ok(fs.existsSync(path.join(dir2, 'config.schema.js')));
+      assert.ok(fs.existsSync(path.join(dir2, '.env.example')));
+    } finally {
+      fs.rmSync(dir2, { recursive: true, force: true });
+    }
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+}
