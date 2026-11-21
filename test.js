@@ -52,10 +52,10 @@ assert.throws(() => validateEnv({ A: { required: true } }, {}), EnvSaafError);
   assert.strictEqual(validateEnv(schema, { PORT: '0' }).PORT, 0);
   assert.strictEqual(validateEnv(schema, { PORT: '65535' }).PORT, 65535);
   for (const raw of ['-1', '65536', '3.5', 'abc', ' \t ', null, false]) {
-    assert.throws(() => validateEnv(schema, { PORT: raw }), /expected a port \(0-65535\)/);
+    assert.throws(() => validateEnv(schema, { PORT: raw }), /expected a port \(0-65535, e\.g\. 3000\)/);
   }
   const untrimmed = { PORT: { ...schema.PORT, trim: false } };
-  assert.throws(() => validateEnv(untrimmed, { PORT: ' \t ' }), /expected a port \(0-65535\)/);
+  assert.throws(() => validateEnv(untrimmed, { PORT: ' \t ' }), /expected a port \(0-65535, e\.g\. 3000\)/);
   assert.throws(() => validateEnv(schema, { PORT: '' }), /missing required variable/);
 }
 
@@ -1467,7 +1467,7 @@ assert.deepStrictEqual(
     // A wrong-typed value in the real .env fails the check, naming the key, exit 1.
     const bad = spawnSync(process.execPath, [cli, 'check', dir, '--schema', 'env.schema.js'], { encoding: 'utf8' });
     assert.strictEqual(bad.status, 1);
-    assert.ok(bad.stdout.includes('INVALID: PORT: expected a port (0-65535), got "not-a-port"'), bad.stdout);
+    assert.ok(bad.stdout.includes('INVALID: PORT: expected a port (0-65535, e.g. 3000), got "not-a-port"'), bad.stdout);
     assert.ok(!bad.stdout.includes('DEBUG'), bad.stdout);
 
     // --json reports the failure in the existing `invalid` field.
@@ -1477,7 +1477,7 @@ assert.deepStrictEqual(
       ok: false,
       missing: [],
       extra: [],
-      invalid: ['PORT: expected a port (0-65535), got "not-a-port"'],
+      invalid: ['PORT: expected a port (0-65535, e.g. 3000), got "not-a-port"'],
       envExtra: [],
       envMissing: [],
     });
@@ -1506,7 +1506,7 @@ assert.deepStrictEqual(
     fs.writeFileSync(path.join(dir, 'custom.env'), 'PORT=not-a-port\nDEBUG=yes\n');
     const custom = spawnSync(process.execPath, [cli, 'check', dir, '--schema', 'env.schema.js', '--file', 'custom.env'], { encoding: 'utf8' });
     assert.strictEqual(custom.status, 1);
-    assert.ok(custom.stdout.includes('INVALID: PORT: expected a port (0-65535), got "not-a-port"'), custom.stdout);
+    assert.ok(custom.stdout.includes('INVALID: PORT: expected a port (0-65535, e.g. 3000), got "not-a-port"'), custom.stdout);
 
     // A schema file that cannot be loaded is a usage error (exit 2), not a finding.
     const missing = spawnSync(process.execPath, [cli, 'check', dir, '--schema', 'nope.js'], { encoding: 'utf8' });
@@ -1739,7 +1739,7 @@ assert.deepStrictEqual(
   // Invalid values are collected; the values that did validate are returned.
   const partial = validateEnv(schema, { PORT: 'abc', NAME: 'ok', DEBUG: 'yes' }, { throwOnError: false });
   assert.deepStrictEqual(partial.env, { NAME: 'ok', DEBUG: true });
-  assert.deepStrictEqual(partial.errors, ['PORT: expected a port (0-65535), got "abc"']);
+  assert.deepStrictEqual(partial.errors, ['PORT: expected a port (0-65535, e.g. 3000), got "abc"']);
 
   // A clean environment returns the env the throwing API would and no errors.
   const clean = validateEnv(schema, { PORT: '3000', DEBUG: 'false' }, { throwOnError: false });
@@ -1927,40 +1927,95 @@ assert.deepStrictEqual(
     assert.throws(
       () => validateEnv({ N: { type: 'number' } }, { N: raw }),
       err => err instanceof EnvSaafError && err.errors.length === 1
-        && err.errors[0] === `N: expected a number, got "${raw}"`,
+        && err.errors[0] === `N: expected a number (e.g. 3.14), got "${raw}"`,
     );
     assert.throws(
       () => validateEnv({ N: { type: 'int' } }, { N: raw }),
       err => err instanceof EnvSaafError && err.errors.length === 1
-        && err.errors[0] === `N: expected an integer, got "${raw}"`,
+        && err.errors[0] === `N: expected an integer (e.g. 42), got "${raw}"`,
     );
   }
   // Non-finite values cannot slip past a lower bound like min: 0 either.
   assert.throws(
     () => validateEnv({ N: { type: 'number', min: 0 } }, { N: 'Infinity' }),
-    err => err instanceof EnvSaafError && err.errors[0] === 'N: expected a number, got "Infinity"',
+    err => err instanceof EnvSaafError && err.errors[0] === 'N: expected a number (e.g. 3.14), got "Infinity"',
   );
   // Non-finite defaults are rejected just like env inputs.
   for (const def of [Infinity, -Infinity, '1e999']) {
     assert.throws(
       () => validateEnv({ N: { type: 'number', default: def } }, {}),
-      err => err instanceof EnvSaafError && err.errors[0] === `N: expected a number, got "${def}"`,
+      err => err instanceof EnvSaafError && err.errors[0] === `N: expected a number (e.g. 3.14), got "${def}"`,
     );
     assert.throws(
       () => validateEnv({ N: { type: 'int', default: def } }, {}),
-      err => err instanceof EnvSaafError && err.errors[0] === `N: expected an integer, got "${def}"`,
+      err => err instanceof EnvSaafError && err.errors[0] === `N: expected an integer (e.g. 42), got "${def}"`,
     );
   }
   // Non-throwing mode collects the error and omits the key.
   const collected = validateEnv({ N: { type: 'number' } }, { N: '1e999' }, { throwOnError: false });
   assert.deepStrictEqual(collected.env, {});
-  assert.deepStrictEqual(collected.errors, ['N: expected a number, got "1e999"']);
+  assert.deepStrictEqual(collected.errors, ['N: expected a number (e.g. 3.14), got "1e999"']);
   // Ordinary finite inputs still pass for both 'number' and 'int'.
   for (const [raw, expected] of [['0', 0], ['42', 42], ['-7', -7], ['3.14', 3.14], ['-0.5', -0.5], ['1e3', 1000], ['1.5e-2', 0.015]]) {
     assert.strictEqual(validateEnv({ N: { type: 'number' } }, { N: raw }).N, expected);
   }
   for (const [raw, expected] of [['0', 0], ['42', 42], ['-7', -7], ['1e3', 1000], ['1.5e2', 150]]) {
     assert.strictEqual(validateEnv({ N: { type: 'int' } }, { N: raw }).N, expected);
+  }
+}
+
+// Issue #58: every built-in type's validation error includes a format example,
+// and aggregated errors remain one concise bullet per key.
+{
+  const cases = [
+    ['email', 'not-an-email', 'e.g. user@example.com'],
+    ['number', 'not-a-number', 'e.g. 3.14'],
+    ['int', '3.5', 'e.g. 42'],
+    ['json', '{bad', 'e.g. {"key":"value"}'],
+    ['boolean', 'maybe', 'e.g. true/false, yes/no, on/off, 1/0, y/n'],
+    ['url', 'not-a-url', 'e.g. https://example.com'],
+    ['uuid', 'not-a-uuid', 'e.g. 550e8400-e29b-41d4-a716-446655440000'],
+    ['hex', 'not-hex!', 'e.g. deadbeef'],
+    ['ipv4', '999.1.1.1', 'e.g. 192.168.0.1'],
+    ['semver', 'v1.2.3', 'e.g. 1.2.3'],
+    ['base64', 'not base64!', 'e.g. aGVsbG8='],
+    ['port', 'abc', '0-65535, e.g. 3000'],
+    ['date', '2026-02-31', 'e.g. 2026-01-31'],
+    ['file', './definitely-missing-env-saaf-file.json', 'e.g. ./config.json'],
+    ['duration', '15min', 'e.g. 500ms, 30s, 15m, 2h, 1d, 1w'],
+    ['host', 'https://db.internal', 'e.g. db.internal, localhost, 10.0.0.5'],
+  ];
+  for (const [type, bad, expectedHint] of cases) {
+    assert.throws(
+      () => validateEnv({ VAL: { type } }, { VAL: bad }),
+      err => err instanceof EnvSaafError
+        && err.errors.length === 1
+        && err.errors[0].includes(`(${expectedHint})`)
+        && err.errors[0].includes(`got "${bad}"`),
+      `${type} error should include (${expectedHint})`,
+    );
+  }
+
+  // Aggregated EnvSaafError stays readable: one single-line bullet per failing key.
+  const schema = {};
+  const badEnv = {};
+  for (const [type, bad] of cases) {
+    const key = `BAD_${type.toUpperCase()}`;
+    schema[key] = { type, required: true };
+    badEnv[key] = bad;
+  }
+  let aggregated;
+  try { validateEnv(schema, badEnv); } catch (e) { aggregated = e; }
+  assert.ok(aggregated instanceof EnvSaafError);
+  assert.strictEqual(aggregated.errors.length, cases.length);
+  const lines = aggregated.message.split('\n');
+  assert.strictEqual(lines[0], 'Invalid environment variables:');
+  assert.strictEqual(lines.length, cases.length + 1);
+  for (let i = 0; i < cases.length; i++) {
+    const [type, , expectedHint] = cases[i];
+    const key = `BAD_${type.toUpperCase()}`;
+    assert.ok(lines[i + 1].startsWith(`  - ${key}: `), lines[i + 1]);
+    assert.ok(lines[i + 1].includes(`(${expectedHint})`), lines[i + 1]);
   }
 }
 
@@ -2195,11 +2250,11 @@ assert.deepStrictEqual(
   // 7. Non-sensitive control: sensitive omitted or false behaves identically to before.
   assert.throws(
     () => validateEnv({ SESSION_ID: { type: 'int' } }, { SESSION_ID: 'not-an-int-plain99' }),
-    err => err instanceof EnvSaafError && err.errors[0] === 'SESSION_ID: expected an integer, got "not-an-int-plain99"',
+    err => err instanceof EnvSaafError && err.errors[0] === 'SESSION_ID: expected an integer (e.g. 42), got "not-an-int-plain99"',
   );
   assert.throws(
     () => validateEnv({ SESSION_ID: { type: 'int', sensitive: false } }, { SESSION_ID: 'not-an-int-plain99' }),
-    err => err instanceof EnvSaafError && err.errors[0] === 'SESSION_ID: expected an integer, got "not-an-int-plain99"',
+    err => err instanceof EnvSaafError && err.errors[0] === 'SESSION_ID: expected an integer (e.g. 42), got "not-an-int-plain99"',
   );
 
   // 8. maskSecrets masks innocuously-named keys as well.
