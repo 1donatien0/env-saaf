@@ -1996,4 +1996,123 @@ assert.deepStrictEqual(
   }
 }
 
+// Issue #170 + #178: CLI round-trip — a fresh `init` followed by `check`
+// passes with a single note instead of one UNUSED line per scaffolded key,
+// and UNUSED fails the check again as soon as code reads a variable.
+{
+  const { spawnSync } = require('node:child_process');
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const path = require('node:path');
+  const cli = path.join(__dirname, 'cli.js');
+  const run = (args) => spawnSync('node', [cli, ...args], { encoding: 'utf8' });
+
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'env-saaf-roundtrip-'));
+  try {
+    // init in an empty directory, then check: exit 0, one plain note, no
+    // UNUSED lines — the scaffold is ahead of the code, not drift.
+    const inited = run(['init', dir]);
+    assert.strictEqual(inited.status, 0, inited.stderr);
+    const checked = run(['check', dir]);
+    assert.strictEqual(checked.status, 0, checked.stdout + checked.stderr);
+    assert.ok(checked.stdout.includes('no process.env usage found in code yet'), checked.stdout);
+    assert.ok(checked.stdout.includes('8 keys in .env.example are not used by any code yet'), checked.stdout);
+    assert.ok(!checked.stdout.includes('UNUSED:'), checked.stdout);
+    const checkedJson = JSON.parse(run(['check', dir, '--json']).stdout.trim());
+    assert.strictEqual(checkedJson.ok, true);
+    assert.deepStrictEqual(checkedJson.extra, []);
+    assert.ok(checkedJson.note.includes('no process.env usage found in code yet'), checkedJson.note);
+    // --schema with no real .env: the schema step is skipped, the note still rules.
+    assert.strictEqual(run(['check', dir, '--schema', './env.schema.js']).status, 0);
+
+    // A real finding still fails even with no code usage: an EXTRA key in .env
+    // is not hidden behind the scaffold note.
+    fs.writeFileSync(path.join(dir, '.env'), 'TYPO_KEY=1\n');
+    const extra = run(['check', dir]);
+    assert.strictEqual(extra.status, 1);
+    assert.ok(extra.stdout.includes('EXTRA in .env: TYPO_KEY'), extra.stdout);
+    fs.rmSync(path.join(dir, '.env'));
+
+    // Once code reads one variable, UNUSED is a finding again (#113): the
+    // other seven scaffolded keys fail the check, in text and --json.
+    fs.writeFileSync(path.join(dir, 'app.js'), 'const port = process.env.PORT;\n');
+    const drifted = run(['check', dir]);
+    assert.strictEqual(drifted.status, 1);
+    assert.ok(drifted.stdout.includes('UNUSED: APP_NAME'), drifted.stdout);
+    assert.ok(!drifted.stdout.includes('no process.env usage found'), drifted.stdout);
+    const driftedJson = JSON.parse(run(['check', dir, '--json']).stdout.trim());
+    assert.strictEqual(driftedJson.ok, false);
+    assert.strictEqual(driftedJson.extra.length, 7);
+    assert.strictEqual(driftedJson.note, undefined);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+// Issue #184: CLI 'init' in an ES module project writes env.schema.cjs
+// instead of crashing on require() of a .js starter Node treats as ESM.
+{
+  const { spawnSync } = require('node:child_process');
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const path = require('node:path');
+  const cli = path.join(__dirname, 'cli.js');
+  const run = (args) => spawnSync('node', [cli, ...args], { encoding: 'utf8' });
+
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'env-saaf-esm-'));
+  try {
+    // A "type": "module" project: init exits 0, writes env.schema.cjs (not
+    // env.schema.js) + .env.example, and the whole round-trip works —
+    // check passes with the scaffold note, and check --schema validates a
+    // real .env against the .cjs schema.
+    fs.writeFileSync(path.join(dir, 'package.json'), '{"name":"esmproj","type":"module"}\n');
+    const inited = run(['init', dir]);
+    assert.strictEqual(inited.status, 0, inited.stderr);
+    assert.ok(inited.stdout.includes('env.schema.cjs'), inited.stdout);
+    assert.ok(fs.existsSync(path.join(dir, 'env.schema.cjs')));
+    assert.ok(!fs.existsSync(path.join(dir, 'env.schema.js')));
+    assert.ok(fs.existsSync(path.join(dir, '.env.example')));
+    const starter = require(path.join(dir, 'env.schema.cjs'));
+    assert.strictEqual(starter.PORT.type, 'port');
+    assert.strictEqual(fs.readFileSync(path.join(dir, '.env.example'), 'utf8'), generateExample(starter));
+    assert.strictEqual(run(['check', dir]).status, 0);
+    fs.writeFileSync(path.join(dir, '.env'),
+      'APP_NAME=myapp\nRETRIES=3\nDEBUG=false\nPORT=3000\nAPI_URL=https://example.com\nSUPPORT_EMAIL=a@b.com\nSHUTDOWN_TIMEOUT=15m\nDB_HOST=localhost\n');
+    assert.strictEqual(run(['check', dir, '--schema', './env.schema.cjs']).status, 0);
+    fs.rmSync(path.join(dir, '.env'));
+
+    // An explicit --schema .js name in the same project is refused cleanly
+    // (exit 2, no stack trace) and writes neither file.
+    const refused = run(['init', dir, '--force', '--schema', 'custom.js']);
+    assert.strictEqual(refused.status, 2, refused.stdout + refused.stderr);
+    assert.ok(refused.stderr.includes('.cjs'), refused.stderr);
+    assert.ok(!refused.stderr.includes('ReferenceError'), refused.stderr);
+    assert.ok(!fs.existsSync(path.join(dir, 'custom.js')));
+
+    // check --schema on a .js schema in an ES module project names the fix.
+    fs.writeFileSync(path.join(dir, 'bad.js'), "module.exports = { PORT: { type: 'port' } };\n");
+    fs.writeFileSync(path.join(dir, '.env'), 'PORT=3000\n');
+    const badCheck = run(['check', dir, '--schema', './bad.js']);
+    assert.strictEqual(badCheck.status, 2);
+    assert.ok(badCheck.stderr.includes('.cjs'), badCheck.stderr);
+    assert.ok(!badCheck.stderr.includes('ReferenceError'), badCheck.stderr);
+    fs.rmSync(path.join(dir, '.env'));
+    fs.rmSync(path.join(dir, 'bad.js'));
+
+    // A CommonJS project is unchanged: the starter is still env.schema.js.
+    const cjsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'env-saaf-cjs-'));
+    try {
+      fs.writeFileSync(path.join(cjsDir, 'package.json'), '{"name":"cjsproj","type":"commonjs"}\n');
+      const cjsInit = run(['init', cjsDir]);
+      assert.strictEqual(cjsInit.status, 0, cjsInit.stderr);
+      assert.ok(fs.existsSync(path.join(cjsDir, 'env.schema.js')));
+      assert.ok(!fs.existsSync(path.join(cjsDir, 'env.schema.cjs')));
+    } finally {
+      fs.rmSync(cjsDir, { recursive: true, force: true });
+    }
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+}
+
 console.log('env-saaf v1.5.0: all tests passed');
