@@ -489,7 +489,7 @@ Issues and pull requests are welcome — including tiny ones. Start with the iss
 
 ## Contributors
 
-env-saaf exists thanks to everyone who has contributed code, fixes and ideas. **16 people** outside the maintainer have landed merged pull requests so far:
+env-saaf exists thanks to everyone who has contributed code, fixes and ideas. **17 people** outside the maintainer have landed merged pull requests so far:
 
 - [@abdul-karim-mia](https://github.com/abdul-karim-mia) — the first outside contributor
 - `@HarshRajSinghania` — CLI `--json` output
@@ -507,6 +507,7 @@ env-saaf exists thanks to everyone who has contributed code, fixes and ideas. **
 - [@flipcyde101](https://github.com/flipcyde101)
 - [@swpswpswp](https://github.com/swpswpswp)
 - [@tnalbant](https://github.com/tnalbant)
+- [@jamesyshd19-cmyk](https://github.com/jamesyshd19-cmyk) — `init` uses the custom schema path
 
 This wall grows on its own as new pull requests land:
 
