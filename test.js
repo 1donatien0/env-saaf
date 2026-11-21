@@ -1213,6 +1213,22 @@ assert.deepStrictEqual(
   assert.throws(() => validateEnv({ TIMEOUT: { type: 'duration', required: true } }, {}), EnvSaafError);
   // generateExample suggests a real duration, not a placeholder.
   assert.ok(generateExample({ TIMEOUT: { type: 'duration', required: true } }).includes('TIMEOUT=15m'));
+  // Issue #176: 'w' is a week of 7 days, case-insensitive, fractional values allowed.
+  assert.strictEqual(validateEnv(schema, { TIMEOUT: '1w' }).TIMEOUT, 604800000);
+  assert.strictEqual(validateEnv(schema, { TIMEOUT: '2w' }).TIMEOUT, 1209600000);
+  assert.strictEqual(validateEnv(schema, { TIMEOUT: '1W' }).TIMEOUT, 604800000);
+  assert.strictEqual(validateEnv(schema, { TIMEOUT: '1.5w' }).TIMEOUT, 907200000);
+  assert.strictEqual(validateEnv(schema, { TIMEOUT: ' 1 w ' }).TIMEOUT, 604800000);
+  assert.strictEqual(validateEnv({ TIMEOUT: { type: 'duration', max: 604800000 } }, { TIMEOUT: '1w' }).TIMEOUT, 604800000);
+  assert.throws(() => validateEnv({ TIMEOUT: { type: 'duration', max: 604800000 } }, { TIMEOUT: '2w' }), /expected a number at most 604800000/);
+  // Existing units keep their values, and wrong week spellings are still rejected.
+  assert.strictEqual(validateEnv(schema, { TIMEOUT: '7d' }).TIMEOUT, validateEnv(schema, { TIMEOUT: '1w' }).TIMEOUT);
+  assert.strictEqual(validateEnv(schema, { TIMEOUT: '1d' }).TIMEOUT, 86400000);
+  assert.strictEqual(validateEnv(schema, { TIMEOUT: '2H' }).TIMEOUT, 7200000);
+  assert.strictEqual(validateEnv(schema, { TIMEOUT: '500ms' }).TIMEOUT, 500);
+  for (const bad of ['1wk', '1week', '1ww', 'w', '-1w', '1.w', '1e2w']) {
+    assert.throws(() => validateEnv(schema, { TIMEOUT: bad }), /expected a duration/);
+  }
 }
 
 // Issue #44: 'host' type — a hostname or IP address, with no scheme, path or port.

@@ -58,7 +58,7 @@ Environment inputs are strings. Output below is before an optional `transform`.
 | `semver` | `MAJOR.MINOR.PATCH`, optional prerelease and build suffixes. Excludes `v` prefixes and leading numeric zeroes. | `string` | `trim`, `minLength`, `maxLength`, `pattern` |
 | `base64` | Standard alphabet, length multiple of four, padding where needed. Excludes base64url. | `string` | `trim`, `minLength`, `maxLength`, `pattern` |
 | `date` | Valid `YYYY-MM-DD` or datetime with `T` and hours/minutes; optional seconds, fraction and `Z` or numeric offset. Accepts valid `Date` defaults. | `Date` | `trim` |
-| `duration` | Human duration: `500ms`, `30s`, `15m`, `2h`, `1d`; a bare number is milliseconds | `number` (milliseconds) | `trim`, `min`, `max` |
+| `duration` | Human duration: `500ms`, `30s`, `15m`, `2h`, `1d`, `1w`; a bare number is milliseconds | `number` (milliseconds) | `trim`, `min`, `max` |
 | `host` | Hostname (`db.internal`, `localhost`) or IPv4/IPv6 address; no scheme, path or port | `string` | `trim`, `minLength`, `maxLength`, `pattern` |
 
 All types support `required`, `default` and `transform`. Transforms run on provided values after validation. Missing optional keys are omitted and defaults are validated. The `choices` option matches coerced strings, numbers or booleans. A parsed JSON value can match a choice when it has one of those three types. String input is trimmed by default. Setting `trim: false` leaves whitespace in place for string-like types. For `number` and `int`, whitespace around a numeric value is accepted either way, but whitespace-only text is rejected by default and converts to `0` with `trim: false`. Boolean matching always ignores surrounding whitespace. The `length` option applies only to `hex`. See the sections below for examples.
@@ -196,7 +196,7 @@ const env = validateEnv({
 setTimeout(refresh, env.CACHE_TTL); // 900000 for '15m'
 ```
 
-`duration` parses a human duration (`500ms`, `30s`, `15m`, `2h`, `1d`) into a number of milliseconds; a bare number is already milliseconds, so `'250'` and `250` both mean 250 ms. Units are case-insensitive and decimals are allowed (`1.5h` is 5,400,000 ms). Unknown units (`15min`, `15sec`), negatives and malformed values are rejected with an error naming the key. A number given as a `default` is taken as milliseconds, and `min`/`max` work on the millisecond result like on any other number. `generateExample` suggests `15m` for the type.
+`duration` parses a human duration (`500ms`, `30s`, `15m`, `2h`, `1d`, `1w`) into a number of milliseconds; a bare number is already milliseconds, so `'250'` and `250` both mean 250 ms. Units are case-insensitive and decimals are allowed (`1.5h` is 5,400,000 ms); `w` is a week of 7 days, so `1w` is 604,800,000 ms. Unknown units (`15min`, `15sec`), negatives and malformed values are rejected with an error naming the key. A number given as a `default` is taken as milliseconds, and `min`/`max` work on the millisecond result like on any other number. `generateExample` suggests `15m` for the type.
 
 ### `host` type — a hostname or IP address, no scheme or port
 
