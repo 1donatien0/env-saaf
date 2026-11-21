@@ -380,6 +380,76 @@ const env = validateEnv({
 Validate the mode first, then choose an ordinary schema in application code. `validateEnv` does not
 provide conditional rules inside a schema.
 
+### Fastify
+
+Validate configuration at startup **before** registering plugins or calling `fastify.listen(...)`, then attach the typed, frozen config object to the Fastify instance with `fastify.decorate('config', config)`. Running validation before `register` and `listen` ensures the process fails fast before plugins open database pools or the server binds a port, and decorating the instance gives routes and plugins typed access via `fastify.config` without re-reading `process.env`:
+
+```js
+const Fastify = require('fastify');
+const { EnvSaafError, validateEnv } = require('env-saaf');
+
+function buildApp() {
+  let config;
+  try {
+    // Runs before registering plugins or calling listen(), so a bad config
+    // fails fast before opening database pools or binding a port.
+    config = validateEnv({
+      PORT:         { type: 'port', default: 3000 },
+      HOST:         { type: 'host', default: '127.0.0.1' },
+      DATABASE_URL: { type: 'url', required: true },
+      LOG_LEVEL:    { type: 'string', choices: ['info', 'warn', 'error'], default: 'info' },
+    });
+  } catch (err) {
+    if (!(err instanceof EnvSaafError)) throw err;
+    console.error(err.message);
+    process.exit(1);
+  }
+
+  const fastify = Fastify({ logger: { level: config.LOG_LEVEL } });
+  fastify.decorate('config', config);
+
+  fastify.get('/health', async () => ({
+    ok: true,
+    port: fastify.config.PORT,
+  }));
+
+  return fastify;
+}
+
+const fastify = buildApp();
+fastify.listen({ port: fastify.config.PORT, host: fastify.config.HOST });
+```
+
+For local development with a `.env` file, replace `validateEnv(schema)` with `loadEnv(schema)` (or `loadEnv(schema, { paths: ['.env', '.env.local'] })`) in the same startup block.
+
+### Next.js
+
+Put your server-only schema in a shared module (such as `lib/env.ts`) and import it from Next.js's `instrumentation.ts` `register()` hook, which runs **once when the Node.js server boots** — before handling requests, Route Handlers, or Server Components. Guard with `process.env.NEXT_RUNTIME === 'nodejs'` if your app also uses the Edge runtime, since `env-saaf` uses Node built-ins (`node:fs`, `node:net`, `node:path`). You can also import the same validation module at the top of `next.config.mjs` if you want `next build` to fail fast on missing build-time config.
+
+```ts
+// lib/env.ts — server-only configuration (never import in Client Components)
+import { validateEnv } from 'env-saaf';
+
+export const serverEnv = validateEnv({
+  DATABASE_URL: { type: 'url', required: true },
+  AUTH_SECRET:  { type: 'string', minLength: 32, required: true },
+  API_TIMEOUT:  { type: 'duration', default: '10s' },
+});
+```
+
+```ts
+// instrumentation.ts — runs once when the Next.js Node.js server starts
+export async function register() {
+  if (process.env.NEXT_RUNTIME === 'nodejs') {
+    await import('./lib/env');
+  }
+}
+```
+
+Next.js loads `.env`, `.env.local`, and environment-specific `.env.*` files into `process.env` automatically before `instrumentation.ts` runs, so `validateEnv` reads them directly without calling `loadEnv`.
+
+**`NEXT_PUBLIC_` variables are out of scope for secrets:** Next.js inlines every `NEXT_PUBLIC_*` variable into the browser bundle at build time. Never store secrets (API keys, database URLs, signing secrets) in `NEXT_PUBLIC_*` variables — keep secrets in unprefixed server-only variables validated in server-only modules like `lib/env.ts`. If you also want to validate public client settings (such as `NEXT_PUBLIC_SITE_URL`), pass an explicit object (`validateEnv({ NEXT_PUBLIC_SITE_URL: { type: 'url', required: true } }, { NEXT_PUBLIC_SITE_URL: process.env.NEXT_PUBLIC_SITE_URL })`) because Next.js statically replaces literal `process.env.NEXT_PUBLIC_*` references in client bundles rather than exposing a full `process.env` object.
+
 ### Keep `.env.example` honest (CLI)
 
 CLI output is plain text by default, including in pipes and CI. For scripts that set a shared color preference, pass `--no-color` before or after the command, or set `NO_COLOR=1`.
