@@ -1,0 +1,10 @@
+{
+  "name": "env-saaf-docker-example",
+  "private": true,
+  "engines": {
+    "node": ">=16"
+  },
+  "dependencies": {
+    "env-saaf": "^1.4.0"
+  }
+}

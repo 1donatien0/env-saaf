@@ -1,0 +1,8 @@
+services:
+  app:
+    build: .
+    environment:
+      APP_NAME: env-saaf-compose
+      PORT: ${PORT:-}
+      APP_DEBUG: ${APP_DEBUG:-false}
+      API_URL: ${API_URL:-}
