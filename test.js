@@ -2441,6 +2441,210 @@ assert.deepStrictEqual(
   }
 }
 
+// --- requiredIf: conditionally required variables (issue #51) ---
+{
+  // 1. Up-front schema validation rejects malformed requiredIf specs,
+  // even when the key is absent and even in non-throwing mode.
+  for (const bad of [
+    null,
+    'MODE',
+    123,
+    true,
+    [],
+    {},
+    { key: '' },
+    { key: '   ' },
+    { key: 42, equals: 'production' },
+    { key: 'MODE' },
+    { key: 'MODE', equals: undefined },
+    { key: 'MODE', equals: 'production', in: ['production'] },
+    { key: 'MODE', in: 'production' },
+    { key: 'MODE', in: [] },
+  ]) {
+    assert.throws(
+      () => validateEnv({ SENTRY_DSN: { type: 'url', requiredIf: bad } }, {}, { throwOnError: false }),
+      err => err instanceof EnvSaafError && err.errors.some(e => e.startsWith('SENTRY_DSN: "requiredIf')),
+      `expected schema error for requiredIf=${JSON.stringify(bad)}`,
+    );
+  }
+
+  // 2. Basic `equals`: missing + condition true throws the usual required error.
+  const basicSchema = {
+    MODE: { type: 'string', choices: ['development', 'staging', 'production'] },
+    SENTRY_DSN: { type: 'url', requiredIf: { key: 'MODE', equals: 'production' } },
+  };
+  assert.throws(
+    () => validateEnv(basicSchema, { MODE: 'production' }),
+    err => err instanceof EnvSaafError && err.errors.length === 1
+      && err.errors[0] === 'SENTRY_DSN: missing required variable',
+  );
+  // Empty string is treated as unset, so it also triggers the required error.
+  assert.throws(
+    () => validateEnv(basicSchema, { MODE: 'production', SENTRY_DSN: '' }),
+    err => err instanceof EnvSaafError && err.errors.length === 1
+      && err.errors[0] === 'SENTRY_DSN: missing required variable',
+  );
+  // Provided valid value satisfies the condition.
+  const prodOk = validateEnv(basicSchema, { MODE: 'production', SENTRY_DSN: 'https://sentry.example.com/1' });
+  assert.strictEqual(prodOk.MODE, 'production');
+  assert.strictEqual(prodOk.SENTRY_DSN, 'https://sentry.example.com/1');
+  // Provided invalid value reports only the type error (no duplicate missing error).
+  assert.throws(
+    () => validateEnv(basicSchema, { MODE: 'production', SENTRY_DSN: 'not-a-url' }),
+    err => err instanceof EnvSaafError && err.errors.length === 1
+      && err.errors[0].includes('SENTRY_DSN: expected a valid URL'),
+  );
+  // Condition false leaves the key optional and omitted.
+  const devOk = validateEnv(basicSchema, { MODE: 'development' });
+  assert.strictEqual(devOk.MODE, 'development');
+  assert.strictEqual('SENTRY_DSN' in devOk, false);
+  // Referenced key absent (or empty) leaves the key optional and omitted.
+  const absentOk = validateEnv(basicSchema, {});
+  assert.strictEqual('SENTRY_DSN' in absentOk, false);
+  const emptyRefOk = validateEnv(basicSchema, { MODE: '' });
+  assert.strictEqual('SENTRY_DSN' in emptyRefOk, false);
+  // Optional key provided while condition is false is still validated.
+  const devWithDsn = validateEnv(basicSchema, { MODE: 'development', SENTRY_DSN: 'https://sentry.example.com/dev' });
+  assert.strictEqual(devWithDsn.SENTRY_DSN, 'https://sentry.example.com/dev');
+  assert.throws(
+    () => validateEnv(basicSchema, { MODE: 'development', SENTRY_DSN: 'bad-url' }),
+    err => err instanceof EnvSaafError && err.errors[0].includes('SENTRY_DSN: expected a valid URL'),
+  );
+
+  // 3. `in: [...]` matches any listed value and stays optional otherwise.
+  const inSchema = {
+    MODE: { type: 'string' },
+    ALERT_WEBHOOK: { type: 'url', requiredIf: { key: 'MODE', in: ['staging', 'production'] } },
+  };
+  for (const mode of ['staging', 'production']) {
+    assert.throws(
+      () => validateEnv(inSchema, { MODE: mode }),
+      err => err instanceof EnvSaafError && err.errors[0] === 'ALERT_WEBHOOK: missing required variable',
+    );
+  }
+  assert.strictEqual('ALERT_WEBHOOK' in validateEnv(inSchema, { MODE: 'development' }), false);
+  assert.strictEqual('ALERT_WEBHOOK' in validateEnv(inSchema, {}), false);
+
+  // 4. Two-pass evaluation: key declaration order does not matter, and
+  // conditions see coerced values, defaults, and transforms from Pass 1.
+  const reversedSchema = {
+    SENTRY_DSN: { type: 'url', requiredIf: { key: 'MODE', equals: 'production' } },
+    MODE: { type: 'string', default: 'production' },
+  };
+  assert.throws(
+    () => validateEnv(reversedSchema, {}),
+    err => err instanceof EnvSaafError && err.errors[0] === 'SENTRY_DSN: missing required variable',
+  );
+  // Boolean coercion (and falsy `equals: false`).
+  const tlsSchema = {
+    TLS_CERT: { type: 'string', requiredIf: { key: 'USE_TLS', equals: true } },
+    DEV_NOTICE: { type: 'string', requiredIf: { key: 'USE_TLS', equals: false } },
+    USE_TLS: { type: 'boolean', default: false },
+  };
+  assert.throws(
+    () => validateEnv(tlsSchema, { USE_TLS: 'yes' }),
+    err => err instanceof EnvSaafError && err.errors.length === 1
+      && err.errors[0] === 'TLS_CERT: missing required variable',
+  );
+  assert.throws(
+    () => validateEnv(tlsSchema, {}),
+    err => err instanceof EnvSaafError && err.errors.length === 1
+      && err.errors[0] === 'DEV_NOTICE: missing required variable',
+  );
+  // Numeric coercion with `in`.
+  const retrySchema = {
+    RETRY_BACKOFF: { type: 'duration', requiredIf: { key: 'RETRIES', in: [1, 2, 3] } },
+    RETRIES: { type: 'int' },
+  };
+  assert.throws(
+    () => validateEnv(retrySchema, { RETRIES: '2' }),
+    err => err instanceof EnvSaafError && err.errors[0] === 'RETRY_BACKOFF: missing required variable',
+  );
+  assert.strictEqual('RETRY_BACKOFF' in validateEnv(retrySchema, { RETRIES: '0' }), false);
+  // Transform on referenced key is visible in Pass 2.
+  const transformSchema = {
+    SENTRY_DSN: { type: 'url', requiredIf: { key: 'MODE', equals: 'production' } },
+    MODE: { type: 'string', transform: v => v.toLowerCase() },
+  };
+  assert.throws(
+    () => validateEnv(transformSchema, { MODE: 'PRODUCTION' }),
+    err => err instanceof EnvSaafError && err.errors[0] === 'SENTRY_DSN: missing required variable',
+  );
+  // If the referenced key failed Pass 1 validation, Pass 2 does not emit a spurious error.
+  assert.throws(
+    () => validateEnv(basicSchema, { MODE: 'invalid' }),
+    err => err instanceof EnvSaafError && err.errors.length === 1
+      && err.errors[0].includes('MODE: expected one of'),
+  );
+  // Referenced key outside the schema falls back to raw `env`.
+  const externalRefSchema = {
+    SENTRY_DSN: { type: 'url', requiredIf: { key: 'NODE_ENV', equals: 'production' } },
+  };
+  assert.throws(
+    () => validateEnv(externalRefSchema, { NODE_ENV: 'production' }),
+    err => err instanceof EnvSaafError && err.errors[0] === 'SENTRY_DSN: missing required variable',
+  );
+  assert.strictEqual('SENTRY_DSN' in validateEnv(externalRefSchema, { NODE_ENV: 'test' }), false);
+  assert.strictEqual('SENTRY_DSN' in validateEnv(externalRefSchema, {}), false);
+
+  // 5. Interaction with `default`, `required: true`, `throwOnError: false`, and `loadEnv`.
+  const withDefault = validateEnv(
+    {
+      MODE: { type: 'string', default: 'production' },
+      SENTRY_DSN: { type: 'url', default: 'https://sentry.example.com/default', requiredIf: { key: 'MODE', equals: 'production' } },
+    },
+    {},
+  );
+  assert.strictEqual(withDefault.SENTRY_DSN, 'https://sentry.example.com/default');
+
+  // Combining `required: true` and `requiredIf` does not duplicate the missing error.
+  assert.throws(
+    () => validateEnv(
+      {
+        MODE: { type: 'string', default: 'production' },
+        SENTRY_DSN: { type: 'url', required: true, requiredIf: { key: 'MODE', equals: 'production' } },
+      },
+      {},
+    ),
+    err => err instanceof EnvSaafError && err.errors.length === 1
+      && err.errors[0] === 'SENTRY_DSN: missing required variable',
+  );
+
+  // Non-throwing mode collects the conditional required error alongside validated values.
+  const collected = validateEnv(
+    {
+      MODE: { type: 'string', default: 'production' },
+      PORT: { type: 'port', default: 3000 },
+      SENTRY_DSN: { type: 'url', requiredIf: { key: 'MODE', equals: 'production' } },
+    },
+    {},
+    { throwOnError: false },
+  );
+  assert.deepStrictEqual(collected.env, { MODE: 'production', PORT: 3000 });
+  assert.deepStrictEqual(collected.errors, ['SENTRY_DSN: missing required variable']);
+
+  // loadEnv enforces requiredIf from loaded .env files.
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const path = require('node:path');
+  const { loadEnv } = require('./index');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'env-saaf-required-if-'));
+  try {
+    const envFile = path.join(dir, '.env');
+    fs.writeFileSync(envFile, 'MODE=production\n');
+    assert.throws(
+      () => loadEnv(basicSchema, { path: envFile, env: {} }),
+      err => err instanceof EnvSaafError && err.errors[0] === 'SENTRY_DSN: missing required variable',
+    );
+    fs.writeFileSync(envFile, 'MODE=production\nSENTRY_DSN=https://sentry.example.com/live\n');
+    const loaded = loadEnv(basicSchema, { path: envFile, env: {} });
+    assert.strictEqual(loaded.SENTRY_DSN, 'https://sentry.example.com/live');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+
 // Issue #46: `array` type — split a delimited string into a typed array.
 {
   // 1. Default `of: 'string'` and explicit `of: 'string'`, trimming items by default.

@@ -64,7 +64,28 @@ Environment inputs are strings. Output below is before an optional `transform`.
 | `host` | Hostname (`db.internal`, `localhost`) or IPv4/IPv6 address; no scheme, path or port | `string` | `trim`, `minLength`, `maxLength`, `pattern` |
 | `array` | Delimited list split by `separator` (default `,`) with each item coerced as `of` (default `string`). Empty items are rejected. Accepts array defaults. | Typed array (`T[]`) | `of`, `separator`, `trim`, `protocols` (when `of: 'url'`) |
 
-All types support `required`, `default`, `validate`, `transform`, `sensitive` and `aliases`. Setting `sensitive: true` always masks the key's value in validation errors and CLI output, whatever its name (e.g. `SESSION_ID`, `LICENSE_KEY`), and leaves its placeholder empty in `generateExample`. Setting `aliases: ['OLD_NAME']` accepts deprecated variable names as fallbacks and emits a warning (see below). Custom `validate(value, env)` functions run after coercion and built-in checks (including on defaults), before `transform`. Transforms run on provided values after validation. Missing optional keys are omitted and defaults are validated. The `choices` option matches coerced strings, numbers or booleans. A parsed JSON value can match a choice when it has one of those three types. String input is trimmed by default. Setting `trim: false` leaves whitespace in place for string-like types. For `number` and `int`, whitespace around a numeric value is accepted either way, but whitespace-only text is rejected by default and converts to `0` with `trim: false`. Boolean matching always ignores surrounding whitespace. The `length` option applies only to `hex`. See the sections below for examples.
+All types support `required`, `requiredIf`, `default`, `validate`, `transform`, `sensitive` and `aliases`. Setting `sensitive: true` always masks the key's value in validation errors and CLI output, whatever its name (e.g. `SESSION_ID`, `LICENSE_KEY`), and leaves its placeholder empty in `generateExample`. Setting `aliases: ['OLD_NAME']` accepts deprecated variable names as fallbacks and emits a warning (see below). Custom `validate(value, env)` functions run after coercion and built-in checks (including on defaults), before `transform`. Transforms run on provided values after validation. Missing optional keys are omitted and defaults are validated. The `choices` option matches coerced strings, numbers or booleans. A parsed JSON value can match a choice when it has one of those three types. String input is trimmed by default. Setting `trim: false` leaves whitespace in place for string-like types. For `number` and `int`, whitespace around a numeric value is accepted either way, but whitespace-only text is rejected by default and converts to `0` with `trim: false`. Boolean matching always ignores surrounding whitespace. The `length` option applies only to `hex`. See the sections below for examples.
+
+### Conditional requirements (`requiredIf`)
+
+Require a variable only when another variable matches a specific value (`equals`) or one of several values (`in`):
+
+```js
+const { validateEnv } = require('env-saaf');
+
+const env = validateEnv({
+  SENTRY_DSN:    { type: 'url', requiredIf: { key: 'MODE', equals: 'production' } },
+  ALERT_WEBHOOK: { type: 'url', requiredIf: { key: 'MODE', in: ['staging', 'production'] } },
+  MODE:          { type: 'string', choices: ['development', 'staging', 'production'], default: 'development' },
+});
+```
+
+`validateEnv` evaluates schemas in **two passes**:
+
+1. **Pass 1** coerces every provided variable, applies `default` values, runs all per-key checks (`min`/`max`, `minLength`/`maxLength`, `length`, `choices`, `pattern`, `transform`), and records unconditional `required: true` errors.
+2. **Pass 2** evaluates every `requiredIf` rule for keys that were absent and had no `default`, comparing against the validated values from Pass 1 (falling back to the raw `env` object if the referenced key is not declared in the schema).
+
+Because Pass 2 runs after Pass 1 finishes, key declaration order in the schema does not matter (`SENTRY_DSN` can be declared before `MODE`), and conditions match coerced values (such as `boolean` `true` or `int` `3`) as well as `default` values. When the condition holds and the key is missing, `validateEnv` reports the usual `<KEY>: missing required variable` error (or collects it in `errors` with `{ throwOnError: false }`). When the condition is false — or when the referenced key is absent or failed Pass 1 validation — the key stays optional. If the key is provided anyway, it is still coerced and validated as usual.
 ### Non-throwing mode — collect errors instead of throwing
 
 A health check, a CLI, or a server that wants to boot in a degraded mode cannot use an API that throws on the first bad value. Pass `{ throwOnError: false }` and `validateEnv` returns `{ env, errors }` instead: `env` holds every value that validated, and `errors` is the same list `EnvSaafError` would have carried.
@@ -438,8 +459,9 @@ const env = validateEnv({
 });
 ```
 
-Validate the mode first, then choose an ordinary schema in application code. `validateEnv` does not
-provide conditional rules inside a schema.
+Validate the mode first, then choose an ordinary schema in application code when you need different
+`default` values or types per environment. For making a key required only under a specific mode, use
+`requiredIf` in a single schema instead.
 
 ### Fastify
 
