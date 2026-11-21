@@ -397,7 +397,7 @@ npx env-saaf example ./src --write  # save the draft to .env.example (refuses, e
 npx env-saaf init .  # scaffold a starter env.schema.js (commented type examples) + a matching .env.example (refuses to overwrite without --force)
 ```
 
-Starting a new project? `env-saaf init` writes a starter `env.schema.js` with commented examples of the main types (`string`, `int`, `boolean`, `port`, `url`, `email`, `duration`, `host`) and generates a matching `.env.example` from it. The first `check` after `init` passes with a note until code reads the variables — keys the scaffold declares but no code uses yet are not treated as drift. Once code reads at least one variable, unused keys fail the check again, as before. Either file being present is a refusal (exit 1, naming the files) unless `--force` is passed; `--schema <file>` names the schema file instead of `env.schema.js`.
+Starting a new project? `env-saaf init` writes a starter `env.schema.js` with commented examples of the main types (`string`, `int`, `boolean`, `port`, `url`, `email`, `duration`, `host`) and generates a matching `.env.example` from it. In a project whose `package.json` has `"type": "module"`, the starter is written as `env.schema.cjs` instead, so it still loads with `require()` — name your own schema with a `.cjs` extension there too. The first `check` after `init` passes with a note until code reads the variables — keys the scaffold declares but no code uses yet are not treated as drift. Once code reads at least one variable, unused keys fail the check again, as before. Either file being present is a refusal (exit 1, naming the files) unless `--force` is passed; `--schema <file>` names the schema file instead of `env.schema.js`.
 
 When `.env.example` (or the file given with `--file`) sits in the scanned directory, `scan` also warns about keys declared there that no code reads, one per line on stderr: `UNUSED: OLD_KEY (in .env.example, never used in code)`. With `--json` they are listed in an `unused` array next to `vars`. It is only a warning: stdout still holds just the used variables, and `scan` still exits 0 (use `check` to fail a CI job on drift). Without a template file, nothing changes.
 
@@ -489,7 +489,7 @@ Issues and pull requests are welcome — including tiny ones. Start with the iss
 
 ## Contributors
 
-env-saaf exists thanks to everyone who has contributed code, fixes and ideas. **17 people** outside the maintainer have landed merged pull requests so far:
+env-saaf exists thanks to everyone who has contributed code, fixes and ideas. **16 people** outside the maintainer have landed merged pull requests so far:
 
 - [@abdul-karim-mia](https://github.com/abdul-karim-mia) — the first outside contributor
 - `@HarshRajSinghania` — CLI `--json` output
@@ -507,7 +507,6 @@ env-saaf exists thanks to everyone who has contributed code, fixes and ideas. **
 - [@flipcyde101](https://github.com/flipcyde101)
 - [@swpswpswp](https://github.com/swpswpswp)
 - [@tnalbant](https://github.com/tnalbant)
-- [@jamesyshd19-cmyk](https://github.com/jamesyshd19-cmyk) — `init` uses the custom schema path
 
 This wall grows on its own as new pull requests land:
 

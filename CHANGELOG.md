@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Fixed: `init` in a `"type": "module"` project no longer crashes with a raw stack trace — the starter schema is written as `env.schema.cjs` instead of `env.schema.js`, and an explicit `--schema` file Node would treat as an ES module is refused up front with a clear error before anything is written; `check --schema` names the same fix when a schema fails to load as an ES module (fixes #184).
 - Fixed: the first `check` after `init` no longer fails on one UNUSED line per scaffolded key — when no code reads any variable yet, the check passes with a single note saying the scaffold is ahead of the code; once code reads at least one variable, unused keys fail the run exactly as before, and any MISSING, EXTRA or INVALID finding still fails (fixes #170, fixes #178).
 - Fixed: Reject non-finite values and overflowing exponent literals in numeric configuration (fixes #175).
 - Docs: add a runnable Docker and Docker Compose startup validation example explaining `ENV`, `--env-file`, and Compose `environment:` (fixes #66).
