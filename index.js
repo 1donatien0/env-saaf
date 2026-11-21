@@ -87,6 +87,13 @@ function validateSchema(schema) {
     if (rule.sensitive !== undefined && typeof rule.sensitive !== 'boolean') {
       errors.push(`${key}: "sensitive" must be a boolean`);
     }
+    if (rule.aliases !== undefined) {
+      const bad = !Array.isArray(rule.aliases)
+        || rule.aliases.some(a => typeof a !== 'string' || a.trim() === '');
+      if (bad) {
+        errors.push(`${key}: "aliases" must be an array of non-empty strings`);
+      }
+    }
   }
   if (errors.length) throw new EnvSaafError(errors);
 }
@@ -330,15 +337,54 @@ function validateEnv(schema, env = process.env, options = {}) {
   // Reject a malformed schema before looking at any values, so a typo on an
   // absent optional key fails immediately instead of passing silently.
   validateSchema(schema);
+  if (options.onWarn !== undefined && typeof options.onWarn !== 'function') {
+    throw new TypeError('env-saaf: "onWarn" option must be a function');
+  }
+  const warn = options.onWarn || ((msg) => console.warn(msg));
   if (options.strict) {
+    const knownAliases = new Set();
+    for (const rule of Object.values(schema)) {
+      if (rule && Array.isArray(rule.aliases)) {
+        for (const alias of rule.aliases) knownAliases.add(alias);
+      }
+    }
     for (const key of Object.keys(env)) {
-      if (!Object.prototype.hasOwnProperty.call(schema, key) && env[key] !== undefined && env[key] !== '') {
+      if (!Object.prototype.hasOwnProperty.call(schema, key)
+        && !knownAliases.has(key)
+        && env[key] !== undefined && env[key] !== '') {
         errors.push(`${key}: set but not in schema (strict mode)`);
       }
     }
   }
   for (const [key, rule] of Object.entries(schema)) {
     let raw = env[key];
+    // Issue #53: aliases let a renamed variable migrate without a flag day.
+    // If the canonical key is set it wins and any populated alias is noted
+    // as ignored; if unset, the first populated alias supplies the value
+    // with a deprecation warning. Empty strings count as unset everywhere.
+    if (Array.isArray(rule.aliases) && rule.aliases.length) {
+      const seenAliases = new Set([key]);
+      const populatedAliases = [];
+      for (const alias of rule.aliases) {
+        if (seenAliases.has(alias)) continue;
+        seenAliases.add(alias);
+        if (env[alias] !== undefined && env[alias] !== '') {
+          populatedAliases.push(alias);
+        }
+      }
+      if (raw !== undefined && raw !== '') {
+        for (const alias of populatedAliases) {
+          warn(`env-saaf: ${alias} is ignored because ${key} is set`);
+        }
+      } else if (populatedAliases.length) {
+        const [winner, ...ignored] = populatedAliases;
+        raw = env[winner];
+        warn(`env-saaf: ${winner} is deprecated; use ${key} instead`);
+        for (const alias of ignored) {
+          warn(`env-saaf: ${alias} is ignored because ${winner} is set; use ${key} instead`);
+        }
+      }
+    }
     // A default goes through the same coercion and checks as a real value,
     // so a typo in it fails startup with the key named. A supplied value
     // still wins; transform is skipped for defaults (see below).

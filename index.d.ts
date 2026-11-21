@@ -70,6 +70,13 @@ export interface EnvRule {
    * Also leaves its placeholder empty in `generateExample`. Default is false.
    */
   sensitive?: boolean;
+  /**
+   * Deprecated variable names accepted as fallbacks when this key is unset
+   * (e.g. `['OLD_NAME']`). The first populated alias supplies the value and
+   * emits a deprecation warning; if the canonical key is also set, the
+   * canonical key wins and a warning notes the alias is ignored.
+   */
+  aliases?: string[];
 }
 
 export type EnvSchema = Record<string, EnvRule>;
@@ -125,6 +132,11 @@ export interface ValidateOptions {
    * not a problem in the environment.
    */
   throwOnError?: boolean;
+  /**
+   * Callback invoked for each deprecation or ignored-alias warning (default `console.warn`).
+   * Pass a custom logger (or `() => {}` to silence warnings).
+   */
+  onWarn?: (message: string) => void;
 }
 
 /** The result of `validateEnv(..., { throwOnError: false })`. */
@@ -148,6 +160,8 @@ export interface LoadEnvOptions {
   assign?: boolean;
   /** Passed through to validateEnv (e.g. strict: true). */
   strict?: boolean;
+  /** Passed through to validateEnv (e.g. custom logger for alias warnings). */
+  onWarn?: (message: string) => void;
 }
 
 export function loadEnv<S extends EnvSchema>(schema: S, options?: LoadEnvOptions): EnvResult<S>;
