@@ -569,6 +569,26 @@ console.log(maskSecrets(process.env)); // values masked: sk***56
 
 An empty value stays empty — `maskValue('')` returns `''`, so an unset secret no longer looks set in logs.
 
+## How env-saaf compares to envalid, joi, and zod
+
+| | `env-saaf` | `envalid` | `joi` | `zod` |
+| --- | --- | --- | --- | --- |
+| **Scope** | Environment variables only (flat key-value maps) | Environment variables only | General-purpose schema validation (requests, payloads, config) | General-purpose schema validation (requests, forms, config) |
+| **Runtime dependencies** | Zero | Zero | Multiple `@hapi/*` packages | Zero |
+| **`.env` loading & CLI tooling** | Built-in `.env` parser (`loadEnv`/`parseEnvFile`), `scan`/`check`/`example`/`init` CLI, secret masking | Validation only (pair with Node `--env-file` or `dotenv`) | Validation only (pair with Node `--env-file` or `dotenv`) | Validation only (pair with Node `--env-file` or `dotenv`) |
+| **Error aggregation** | Collects all errors in one pass (`EnvSaafError`, or `{ env, errors }` with `throwOnError: false`) | Collects all errors in one pass (passed to default or custom `reporter`) | Stops on first error by default; pass `{ abortEarly: false }` to collect all | Collects all issues in one pass (`ZodError` via `parse`, or `{ success, error }` via `safeParse`) |
+| **TypeScript inference** | Ships `index.d.ts`; infers flat object types from inline / `as const` schemas (`json` infers as `unknown`, `choices` stays widened) | Written in TypeScript; infers validator return types including literal unions for `choices` | Ships types, but does not infer static TS types from schemas (define interfaces separately or use codegen) | TypeScript-first static inference (`z.infer<typeof schema>`) across nested objects, unions, literals, and transforms |
+
+### When `env-saaf` is a good fit
+
+- You want startup env validation, `.env` file loading (with layering and `${VAR}` interpolation), secret masking, and a CI CLI (`env-saaf check`) to keep `.env.example` in sync with code — all in one zero-dependency Node.js package.
+
+### When another library is a better fit
+
+- **Validating HTTP requests, API payloads, forms, or nested JSON:** `env-saaf` only validates flat environment variable maps and has no nested object schemas or cross-field conditional rules. Use **zod** (especially in TypeScript) or **joi** when you need general data validation.
+- **You already use `zod` or `joi` in the project:** If you already depend on one of them for request/data validation and do not need `env-saaf`'s `.env` parser or `scan`/`check` CLI, validating `process.env` with your existing library avoids adding another tool.
+- **Richer TypeScript inference or non-Node runtimes:** Use **zod** for full static type inference (nested shapes, discriminated unions, narrowed literal enums) or browser/edge runtime support (`env-saaf` uses Node built-ins `node:fs`, `node:net`, and `node:path`). Use **envalid** if you want env-only validation with `devDefault`, proxy-guarded env access, or literal-union inference from `choices`.
+
 ## Versions
 
 - **v0.1.0** — core `validateEnv`: types (string/number/boolean/url/port), required, defaults, choices, all-errors-at-once.
