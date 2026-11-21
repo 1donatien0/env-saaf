@@ -2355,4 +2355,232 @@ assert.deepStrictEqual(
   }
 }
 
+// Issue #53: `aliases` accepts renamed/deprecated variables as fallbacks and warns.
+{
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const path = require('node:path');
+  const { loadEnv } = require('./index');
+
+  // 1. Schema validation rejects malformed `aliases` up front even when absent.
+  for (const bad of ['OLD_NAME', 123, null, {}, [''], ['   '], [123], [null], ['OK', '']]) {
+    assert.throws(
+      () => validateEnv({ DATABASE_URL: { type: 'url', aliases: bad } }, {}),
+      err => err instanceof EnvSaafError
+        && err.errors.includes('DATABASE_URL: "aliases" must be an array of non-empty strings'),
+      `expected schema error for aliases=${JSON.stringify(bad)}`,
+    );
+  }
+  // Empty array is a valid no-op.
+  assert.deepStrictEqual(validateEnv({ A: { type: 'string', aliases: [] } }, {}), {});
+
+  // 2. Non-function `onWarn` throws TypeError.
+  assert.throws(
+    () => validateEnv({ A: { type: 'string', aliases: ['OLD_A'] } }, {}, { onWarn: 'nope' }),
+    TypeError,
+  );
+
+  // 3. Alias-only config validates, coerces, transforms, and yields under canonical key.
+  {
+    const warnings = [];
+    const res = validateEnv(
+      {
+        PORT: { type: 'port', required: true, aliases: ['APP_PORT'] },
+        ORIGINS: {
+          type: 'string',
+          aliases: ['CORS_ORIGINS'],
+          transform: v => v.split(',').map(s => s.trim()),
+        },
+      },
+      { APP_PORT: '8080', CORS_ORIGINS: 'a.com, b.com' },
+      { onWarn: msg => warnings.push(msg) },
+    );
+    assert.strictEqual(res.PORT, 8080);
+    assert.deepStrictEqual(res.ORIGINS, ['a.com', 'b.com']);
+    assert.strictEqual(Object.prototype.hasOwnProperty.call(res, 'APP_PORT'), false);
+    assert.strictEqual(Object.prototype.hasOwnProperty.call(res, 'CORS_ORIGINS'), false);
+    assert.deepStrictEqual(warnings, [
+      'env-saaf: APP_PORT is deprecated; use PORT instead',
+      'env-saaf: CORS_ORIGINS is deprecated; use ORIGINS instead',
+    ]);
+  }
+
+  // 4. Default warning sink uses console.warn once per warning.
+  {
+    const origWarn = console.warn;
+    const logged = [];
+    console.warn = (...args) => logged.push(args.join(' '));
+    try {
+      const res = validateEnv(
+        { DATABASE_URL: { type: 'url', required: true, aliases: ['DB_URL'] } },
+        { DB_URL: 'https://db.example.com' },
+      );
+      assert.strictEqual(res.DATABASE_URL, 'https://db.example.com');
+      assert.deepStrictEqual(logged, ['env-saaf: DB_URL is deprecated; use DATABASE_URL instead']);
+    } finally {
+      console.warn = origWarn;
+    }
+  }
+
+  // 5. Both canonical key and alias set: canonical key wins and warning notes alias is ignored.
+  {
+    const warnings = [];
+    const res = validateEnv(
+      { DATABASE_URL: { type: 'url', required: true, aliases: ['DB_URL', 'LEGACY_DB_URL'] } },
+      { DATABASE_URL: 'https://new.example.com', DB_URL: 'https://old.example.com' },
+      { onWarn: msg => warnings.push(msg) },
+    );
+    assert.strictEqual(res.DATABASE_URL, 'https://new.example.com');
+    assert.deepStrictEqual(warnings, ['env-saaf: DB_URL is ignored because DATABASE_URL is set']);
+  }
+
+  // 6. Only canonical key set: no warnings.
+  {
+    const warnings = [];
+    const res = validateEnv(
+      { DATABASE_URL: { type: 'url', required: true, aliases: ['DB_URL'] } },
+      { DATABASE_URL: 'https://new.example.com' },
+      { onWarn: msg => warnings.push(msg) },
+    );
+    assert.strictEqual(res.DATABASE_URL, 'https://new.example.com');
+    assert.deepStrictEqual(warnings, []);
+  }
+
+  // 7. Multiple aliases: first populated alias wins, subsequent populated aliases warn as ignored.
+  {
+    const warnings = [];
+    const res = validateEnv(
+      { PORT: { type: 'port', aliases: ['OLD_PORT_1', 'OLD_PORT_2', 'OLD_PORT_3'] } },
+      { OLD_PORT_1: '', OLD_PORT_2: '4000', OLD_PORT_3: '5000' },
+      { onWarn: msg => warnings.push(msg) },
+    );
+    assert.strictEqual(res.PORT, 4000);
+    assert.deepStrictEqual(warnings, [
+      'env-saaf: OLD_PORT_2 is deprecated; use PORT instead',
+      'env-saaf: OLD_PORT_3 is ignored because OLD_PORT_2 is set; use PORT instead',
+    ]);
+  }
+
+  // 8. Empty canonical key ('') falls back to alias; empty alias ('') is treated as unset.
+  {
+    const warnings = [];
+    const res = validateEnv(
+      {
+        HOST: { type: 'host', aliases: ['APP_HOST'] },
+        MODE: { type: 'string', default: 'dev', aliases: ['APP_MODE'] },
+      },
+      { HOST: '', APP_HOST: 'localhost', APP_MODE: '' },
+      { onWarn: msg => warnings.push(msg) },
+    );
+    assert.strictEqual(res.HOST, 'localhost');
+    assert.strictEqual(res.MODE, 'dev');
+    assert.deepStrictEqual(warnings, ['env-saaf: APP_HOST is deprecated; use HOST instead']);
+  }
+
+  // 9. Alias wins over default; missing canonical + alias still fails required without warning.
+  {
+    const warnings = [];
+    const res = validateEnv(
+      { PORT: { type: 'port', default: 3000, aliases: ['APP_PORT'] } },
+      { APP_PORT: '9000' },
+      { onWarn: msg => warnings.push(msg) },
+    );
+    assert.strictEqual(res.PORT, 9000);
+    assert.strictEqual(warnings.length, 1);
+
+    const reqWarnings = [];
+    assert.throws(
+      () => validateEnv(
+        { PORT: { type: 'port', required: true, aliases: ['APP_PORT'] } },
+        {},
+        { onWarn: msg => reqWarnings.push(msg) },
+      ),
+      err => err instanceof EnvSaafError && err.errors.includes('PORT: missing required variable'),
+    );
+    assert.deepStrictEqual(reqWarnings, []);
+  }
+
+  // 10. Invalid alias value reports error under canonical key and respects `sensitive: true`.
+  {
+    const warnings = [];
+    assert.throws(
+      () => validateEnv(
+        { SESSION_ID: { type: 'uuid', sensitive: true, aliases: ['OLD_SESSION_ID'] } },
+        { OLD_SESSION_ID: 'not-a-uuid-secret99' },
+        { onWarn: msg => warnings.push(msg) },
+      ),
+      err => err instanceof EnvSaafError
+        && !err.message.includes('not-a-uuid-secret99')
+        && err.errors[0].startsWith('SESSION_ID:')
+        && err.errors[0].includes('got "no***99"'),
+    );
+    assert.deepStrictEqual(warnings, ['env-saaf: OLD_SESSION_ID is deprecated; use SESSION_ID instead']);
+  }
+
+  // 11. Strict mode recognises declared aliases and still flags unknown variables.
+  {
+    const warnings = [];
+    const okStrict = validateEnv(
+      { DATABASE_URL: { type: 'url', required: true, aliases: ['DB_URL'] } },
+      { DB_URL: 'https://db.example.com' },
+      { strict: true, onWarn: msg => warnings.push(msg) },
+    );
+    assert.strictEqual(okStrict.DATABASE_URL, 'https://db.example.com');
+    assert.strictEqual(warnings.length, 1);
+
+    assert.throws(
+      () => validateEnv(
+        { DATABASE_URL: { type: 'url', required: true, aliases: ['DB_URL'] } },
+        { DB_URL: 'https://db.example.com', TYPO_KEY: '1' },
+        { strict: true, onWarn: () => {} },
+      ),
+      err => err instanceof EnvSaafError
+        && err.errors.length === 1
+        && err.errors[0] === 'TYPO_KEY: set but not in schema (strict mode)',
+    );
+  }
+
+  // 12. Duplicate and self aliases do not emit duplicate or self-ignoring warnings.
+  {
+    const warnings = [];
+    const res = validateEnv(
+      { PORT: { type: 'port', aliases: ['PORT', 'APP_PORT', 'APP_PORT'] } },
+      { PORT: '3000', APP_PORT: '4000' },
+      { onWarn: msg => warnings.push(msg) },
+    );
+    assert.strictEqual(res.PORT, 3000);
+    assert.deepStrictEqual(warnings, ['env-saaf: APP_PORT is ignored because PORT is set']);
+  }
+
+  // 13. Non-throwing mode preserves `{ env, errors }` shape and emits warnings via `onWarn`.
+  {
+    const warnings = [];
+    const collected = validateEnv(
+      { PORT: { type: 'port', required: true, aliases: ['APP_PORT'] } },
+      { APP_PORT: '3000' },
+      { throwOnError: false, onWarn: msg => warnings.push(msg) },
+    );
+    assert.deepStrictEqual(collected, { env: { PORT: 3000 }, errors: [] });
+    assert.deepStrictEqual(warnings, ['env-saaf: APP_PORT is deprecated; use PORT instead']);
+  }
+
+  // 14. loadEnv passes `onWarn` through and resolves aliases from a `.env` file.
+  {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'env-saaf-aliases-'));
+    try {
+      const envFile = path.join(dir, '.env');
+      fs.writeFileSync(envFile, 'OLD_PORT=7070\n');
+      const warnings = [];
+      const res = loadEnv(
+        { PORT: { type: 'port', required: true, aliases: ['OLD_PORT'] } },
+        { path: envFile, env: {}, onWarn: msg => warnings.push(msg) },
+      );
+      assert.strictEqual(res.PORT, 7070);
+      assert.deepStrictEqual(warnings, ['env-saaf: OLD_PORT is deprecated; use PORT instead']);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  }
+}
+
 console.log('env-saaf v1.5.0: all tests passed');

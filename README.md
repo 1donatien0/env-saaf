@@ -61,7 +61,7 @@ Environment inputs are strings. Output below is before an optional `transform`.
 | `duration` | Human duration: `500ms`, `30s`, `15m`, `2h`, `1d`, `1w`; a bare number is milliseconds | `number` (milliseconds) | `trim`, `min`, `max` |
 | `host` | Hostname (`db.internal`, `localhost`) or IPv4/IPv6 address; no scheme, path or port | `string` | `trim`, `minLength`, `maxLength`, `pattern` |
 
-All types support `required`, `default`, `transform` and `sensitive`. Setting `sensitive: true` always masks the key's value in validation errors and CLI output, whatever its name (e.g. `SESSION_ID`, `LICENSE_KEY`), and leaves its placeholder empty in `generateExample`. Transforms run on provided values after validation. Missing optional keys are omitted and defaults are validated. The `choices` option matches coerced strings, numbers or booleans. A parsed JSON value can match a choice when it has one of those three types. String input is trimmed by default. Setting `trim: false` leaves whitespace in place for string-like types. For `number` and `int`, whitespace around a numeric value is accepted either way, but whitespace-only text is rejected by default and converts to `0` with `trim: false`. Boolean matching always ignores surrounding whitespace. The `length` option applies only to `hex`. See the sections below for examples.
+All types support `required`, `default`, `transform`, `sensitive` and `aliases`. Setting `sensitive: true` always masks the key's value in validation errors and CLI output, whatever its name (e.g. `SESSION_ID`, `LICENSE_KEY`), and leaves its placeholder empty in `generateExample`. Setting `aliases: ['OLD_NAME']` accepts deprecated variable names as fallbacks and emits a warning (see below). Transforms run on provided values after validation. Missing optional keys are omitted and defaults are validated. The `choices` option matches coerced strings, numbers or booleans. A parsed JSON value can match a choice when it has one of those three types. String input is trimmed by default. Setting `trim: false` leaves whitespace in place for string-like types. For `number` and `int`, whitespace around a numeric value is accepted either way, but whitespace-only text is rejected by default and converts to `0` with `trim: false`. Boolean matching always ignores surrounding whitespace. The `length` option applies only to `hex`. See the sections below for examples.
 ### Non-throwing mode — collect errors instead of throwing
 
 A health check, a CLI, or a server that wants to boot in a degraded mode cannot use an API that throws on the first bad value. Pass `{ throwOnError: false }` and `validateEnv` returns `{ env, errors }` instead: `env` holds every value that validated, and `errors` is the same list `EnvSaafError` would have carried.
@@ -98,6 +98,28 @@ const env = validateEnv(schema, process.env, { strict: true });
 ```
 
 Default stays off — many apps share one environment with other tools.
+
+### Renaming variables safely with `aliases`
+
+Renaming an environment variable across a fleet usually means old and new names coexist for weeks. Declare the old names with `aliases` on the canonical key:
+
+```js
+const { validateEnv } = require('env-saaf');
+
+const env = validateEnv(
+  {
+    DATABASE_URL: { type: 'url', required: true, aliases: ['DB_URL'] },
+  },
+  process.env,
+  { onWarn: msg => logger.warn(msg) } // optional; defaults to console.warn
+);
+// env.DATABASE_URL receives the coerced, validated value (never env.DB_URL)
+```
+
+- When `DATABASE_URL` is unset (or empty `""`) and `DB_URL` is set, the first populated alias supplies the value under `env.DATABASE_URL`, runs through normal coercion, validation and `transform`, and emits a deprecation warning (`env-saaf: DB_URL is deprecated; use DATABASE_URL instead`).
+- When both `DATABASE_URL` and `DB_URL` are set, `DATABASE_URL` wins and a warning notes the alias is ignored (`env-saaf: DB_URL is ignored because DATABASE_URL is set`).
+- Warnings never fail validation. By default they are logged with `console.warn`; pass `onWarn: fn` to `validateEnv` or `loadEnv` to route them to your own logger (or `() => {}` to silence them).
+- In `{ strict: true }` mode, declared aliases are recognised and are not flagged as unknown variables.
 
 ### Per-key `transform` — one custom step after coercion
 

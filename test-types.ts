@@ -68,4 +68,19 @@ const throwingPort: number = validateEnv(
   { strict: true }
 ).PORT;
 
-export { port, count, url, mode, debug, name, doubled, fixed, wrongType, typo, debugStrict, myPort, myDebug, looseValue, tenantId, apiHash, collectedPort, collectedDebug, collectedErrors, collectedAsEnv, throwingPort };
+// Issue #53: aliases and onWarn keep exact return type inference on canonical keys.
+const aliasedWarnings: string[] = [];
+const aliased = validateEnv(
+  {
+    DATABASE_URL: { type: 'url', required: true, aliases: ['DB_URL'] },
+    PORT: { type: 'port', aliases: ['APP_PORT'] },
+  },
+  { DB_URL: 'https://example.com' },
+  { onWarn: (msg) => aliasedWarnings.push(msg) }
+);
+const aliasedUrl: string = aliased.DATABASE_URL;
+const aliasedPort: number | undefined = aliased.PORT;
+// @ts-expect-error — alias name is not a key on the validated result
+const aliasKey = aliased.DB_URL;
+
+export { port, count, url, mode, debug, name, doubled, fixed, wrongType, typo, debugStrict, myPort, myDebug, looseValue, tenantId, apiHash, collectedPort, collectedDebug, collectedErrors, collectedAsEnv, throwingPort, aliasedUrl, aliasedPort, aliasKey };
