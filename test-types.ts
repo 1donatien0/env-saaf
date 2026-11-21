@@ -83,4 +83,21 @@ const aliasedPort: number | undefined = aliased.PORT;
 // @ts-expect-error — alias name is not a key on the validated result
 const aliasKey = aliased.DB_URL;
 
-export { port, count, url, mode, debug, name, doubled, fixed, wrongType, typo, debugStrict, myPort, myDebug, looseValue, tenantId, apiHash, collectedPort, collectedDebug, collectedErrors, collectedAsEnv, throwingPort, aliasedUrl, aliasedPort, aliasKey };
+
+// Issue #52: per-key `validate(value, env)` preserves inferred value types.
+const validated = validateEnv(
+  {
+    APP_PORT: { type: 'port', required: true, validate: (v) => v >= 1024 || 'must be unprivileged' },
+    REPLICA_HOST: { type: 'host', required: true, validate: (v, e) => v !== e.PRIMARY_HOST || 'must differ from PRIMARY_HOST' },
+    FLAG: { type: 'boolean', default: false, validate: (v) => typeof v === 'boolean' },
+    NOTES: { type: 'string', validate: () => { /* void return passes */ } },
+  },
+  { APP_PORT: '8080', REPLICA_HOST: 'replica.internal', PRIMARY_HOST: 'primary.internal' }
+);
+const validatedPort: number = validated.APP_PORT;
+const validatedHost: string = validated.REPLICA_HOST;
+const validatedFlag: boolean = validated.FLAG;
+const validatedNotes: string | undefined = validated.NOTES;
+
+
+export { port, count, url, mode, debug, name, doubled, fixed, wrongType, typo, debugStrict, myPort, myDebug, looseValue, tenantId, apiHash, collectedPort, collectedDebug, collectedErrors, collectedAsEnv, throwingPort, aliasedUrl, aliasedPort, aliasKey, validatedPort, validatedHost, validatedFlag, validatedNotes };
