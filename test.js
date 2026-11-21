@@ -894,6 +894,29 @@ assert.deepStrictEqual(
   }
 }
 
+// Issue #185: a self-reference with a default (`${A:-...}` / `${A-...}`) uses
+// the default, because the key's own value is not set while its own line is
+// being resolved — exactly as for a genuinely absent name. A self-reference
+// without a default stays literal, and a genuine cycle (A=${B}, B=${A}) still
+// resolves to literals without looping forever.
+assert.deepStrictEqual(
+  parseEnvFile('A=${A:-fallback}\n'),
+  { A: 'fallback' });
+assert.deepStrictEqual(
+  parseEnvFile('A=${A-fallback}\n'),
+  { A: 'fallback' });
+assert.deepStrictEqual(
+  parseEnvFile('A=${A}\n'),
+  { A: '${A}' });
+assert.deepStrictEqual(
+  parseEnvFile('A=${B}\nB=${A}\n'),
+  { A: '${A}', B: '${B}' });
+// the self-reference is unset at nesting depth too: it sits inside another
+// key's default, reached while A's own line is being resolved
+assert.deepStrictEqual(
+  parseEnvFile('A=${ENV_SAAF_TEST_MISSING_NESTED:-${A:-q}}\n'),
+  { A: 'q' });
+
 // Issue #25: loadEnv — multiple files; later files override earlier ones,
 // via `paths: [...]` or `path` as an array.
 {
