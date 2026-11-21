@@ -2597,7 +2597,8 @@ assert.deepStrictEqual(
   );
   assert.strictEqual(withDefault.SENTRY_DSN, 'https://sentry.example.com/default');
 
-  // Combining `required: true` and `requiredIf` does not duplicate the missing error.
+  // Issue #204: combining `required: true` and `requiredIf` is rejected up front
+  // as a schema error instead of silently letting `required` win.
   assert.throws(
     () => validateEnv(
       {
@@ -2607,7 +2608,7 @@ assert.deepStrictEqual(
       {},
     ),
     err => err instanceof EnvSaafError && err.errors.length === 1
-      && err.errors[0] === 'SENTRY_DSN: missing required variable',
+      && err.errors[0] === 'SENTRY_DSN: "required" and "requiredIf" cannot be used together (use one or the other)',
   );
 
   // Non-throwing mode collects the conditional required error alongside validated values.
@@ -2644,6 +2645,52 @@ assert.deepStrictEqual(
   }
 }
 
+
+// Issue #204: `required` + `requiredIf` contradict each other, and a self-referencing `requiredIf` never fires.
+{
+  // `required: true` together with `requiredIf` is rejected up front —
+  // `required` would otherwise silently win and the condition would be dead config.
+  assert.throws(
+    () => validateEnv(
+      {
+        MODE: { type: 'string', default: 'dev' },
+        SENTRY_DSN: { type: 'url', required: true, requiredIf: { key: 'MODE', equals: 'production' } },
+      },
+      { MODE: 'dev' },
+    ),
+    err => err instanceof EnvSaafError
+      && err.errors.includes('SENTRY_DSN: "required" and "requiredIf" cannot be used together (use one or the other)'),
+  );
+  // Schema errors still throw with `{ throwOnError: false }`.
+  assert.throws(
+    () => validateEnv(
+      { SENTRY_DSN: { type: 'url', required: true, requiredIf: { key: 'MODE', equals: 'production' } } },
+      {},
+      { throwOnError: false },
+    ),
+    err => err instanceof EnvSaafError,
+  );
+  // A `requiredIf` naming its own key is rejected up front.
+  assert.throws(
+    () => validateEnv(
+      { MODE: { type: 'string', requiredIf: { key: 'MODE', equals: 'production' } } },
+      {},
+    ),
+    err => err instanceof EnvSaafError
+      && err.errors.includes('MODE: "requiredIf" must name a different key, not itself'),
+  );
+  // A well-formed `requiredIf` still works (regression guard).
+  assert.deepStrictEqual(
+    validateEnv(
+      {
+        MODE: { type: 'string', default: 'development' },
+        SENTRY_DSN: { type: 'url', requiredIf: { key: 'MODE', equals: 'production' } },
+      },
+      { MODE: 'development' },
+    ),
+    { MODE: 'development' },
+  );
+}
 
 // Issue #46: `array` type — split a delimited string into a typed array.
 {

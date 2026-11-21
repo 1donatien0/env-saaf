@@ -101,7 +101,17 @@ function validateSchema(schema) {
         } else if (hasIn && (!Array.isArray(cond.in) || cond.in.length === 0)) {
           errors.push(`${key}: "requiredIf.in" must be a non-empty array`);
         }
+        // Issue #204: a `requiredIf` naming its own key can never fire — absent
+        // means the condition is false, present means the key is satisfied.
+        if (cond.key === key) {
+          errors.push(`${key}: "requiredIf" must name a different key, not itself`);
+        }
       }
+    }
+    // Issue #204: `required: true` together with `requiredIf` is contradictory
+    // (`required` would silently win and the condition would be dead config).
+    if (rule.required && rule.requiredIf !== undefined) {
+      errors.push(`${key}: "required" and "requiredIf" cannot be used together (use one or the other)`);
     }
     if (rule.of !== undefined && (typeof rule.of !== 'string' || !KNOWN_TYPES.has(rule.of) || rule.of === 'array')) {
       errors.push(`${key}: "of" must be a valid item type (e.g. 'string', 'number', 'url')`);
