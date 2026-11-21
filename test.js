@@ -2355,4 +2355,35 @@ assert.deepStrictEqual(
   }
 }
 
+// Issue #186: validateEnv treats an empty string ('') as unset across
+// optional, required, and default rules, while whitespace-only input is provided.
+{
+  const optional = validateEnv({ NICK: { type: 'string' } }, { NICK: '' });
+  assert.deepStrictEqual(optional, {});
+  assert.strictEqual(Object.prototype.hasOwnProperty.call(optional, 'NICK'), false);
+
+  assert.throws(
+    () => validateEnv({ PORT: { type: 'port', required: true } }, { PORT: '' }),
+    err => err instanceof EnvSaafError && err.errors.length === 1 && err.errors[0] === 'PORT: missing required variable',
+  );
+
+  const defaulted = validateEnv(
+    {
+      HOST: { type: 'string', default: 'localhost' },
+      PORT: { type: 'port', required: true, default: 3000 },
+    },
+    { HOST: '', PORT: '' },
+  );
+  assert.deepStrictEqual(defaulted, { HOST: 'localhost', PORT: 3000 });
+
+  // Whitespace-only is provided, not unset: trimmed to '' by default, preserved with trim: false.
+  assert.deepStrictEqual(validateEnv({ NICK: { type: 'string' } }, { NICK: '   ' }), { NICK: '' });
+  assert.deepStrictEqual(validateEnv({ NICK: { type: 'string', trim: false } }, { NICK: '   ' }), { NICK: '   ' });
+
+  // parseEnvFile preserves KEY= as '', which validateEnv then treats as unset.
+  const parsed = parseEnvFile('NICK=\n');
+  assert.deepStrictEqual(parsed, { NICK: '' });
+  assert.deepStrictEqual(validateEnv({ NICK: { type: 'string' } }, parsed), {});
+}
+
 console.log('env-saaf v1.5.0: all tests passed');

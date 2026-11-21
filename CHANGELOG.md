@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Docs: document that `validateEnv` treats an empty string (`''`) as unset — omitting optional keys, failing required keys as missing, and falling back to `default` — matching `${VAR:-fallback}` interpolation, with tests pinning the behaviour (fixes #186).
 - Docs: add Fastify and Next.js startup validation examples to README, explaining boot-order placement and calling out `NEXT_PUBLIC_` variables as out of scope for secrets (fixes #65).
 - Added: `sensitive: true` rule option — always masks the key's value in validation errors (`validateEnv`, `loadEnv`, CLI `check --schema`) even when the variable name does not look like a secret (e.g. `SESSION_ID`, `LICENSE_KEY`), and leaves its placeholder empty in `generateExample`; non-boolean `sensitive` values are rejected up front, and non-sensitive keys behave unchanged (fixes #54).
 - Added: `check --json` exposes the documented-but-unused keys as an `unused` field, the same name `scan --json` already uses for them; the existing `extra` field keeps its identical value, so current consumers of the old shape are unaffected (fixes #187).
