@@ -233,26 +233,26 @@ function coerce(key, raw, type, trim = true, protocols) {
       return d;
     }
     case 'duration': {
-      // Human durations: '500ms', '30s', '15m', '2h', '1d' become
+      // Human durations: '500ms', '30s', '15m', '2h', '1d', '1w' become
       // milliseconds; a bare number is already milliseconds. Units are
       // case-insensitive and decimals are allowed ('1.5h'), negatives and
       // unknown units are rejected. A number passed directly (e.g. as a
       // default) is taken as milliseconds, like the number type.
       if (typeof v === 'number') {
         if (!Number.isFinite(v) || v < 0) {
-          throw new Error(`${key}: expected a duration (e.g. 500ms, 30s, 15m, 2h, 1d), got "${raw}"`);
+          throw new Error(`${key}: expected a duration (e.g. 500ms, 30s, 15m, 2h, 1d, 1w), got "${raw}"`);
         }
         return v;
       }
       const s = String(v).trim();
-      const m = /^(\d+(?:\.\d+)?)\s*(ms|s|m|h|d)?$/i.exec(s);
+      const m = /^(\d+(?:\.\d+)?)\s*(ms|s|m|h|d|w)?$/i.exec(s);
       if (!m) {
-        throw new Error(`${key}: expected a duration (e.g. 500ms, 30s, 15m, 2h, 1d), got "${raw}"`);
+        throw new Error(`${key}: expected a duration (e.g. 500ms, 30s, 15m, 2h, 1d, 1w), got "${raw}"`);
       }
-      const mult = { ms: 1, s: 1000, m: 60000, h: 3600000, d: 86400000 }[m[2] ? m[2].toLowerCase() : 'ms'];
+      const mult = { ms: 1, s: 1000, m: 60000, h: 3600000, d: 86400000, w: 604800000 }[m[2] ? m[2].toLowerCase() : 'ms'];
       const ms = Number(m[1]) * mult;
       if (!Number.isFinite(ms)) {
-        throw new Error(`${key}: expected a duration (e.g. 500ms, 30s, 15m, 2h, 1d), got "${raw}"`);
+        throw new Error(`${key}: expected a duration (e.g. 500ms, 30s, 15m, 2h, 1d, 1w), got "${raw}"`);
       }
       return ms;
     }
