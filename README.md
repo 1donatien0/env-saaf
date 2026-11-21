@@ -144,6 +144,7 @@ const env = validateEnv(
 - When both `DATABASE_URL` and `DB_URL` are set, `DATABASE_URL` wins and a warning notes the alias is ignored (`env-saaf: DB_URL is ignored because DATABASE_URL is set`).
 - Warnings never fail validation. By default they are logged with `console.warn`; pass `onWarn: fn` to `validateEnv` or `loadEnv` to route them to your own logger (or `() => {}` to silence them).
 - In `{ strict: true }` mode, declared aliases are recognised and are not flagged as unknown variables.
+- An alias cannot equal a declared schema key (including its own key) or be shared by different rules. These schema mistakes throw `EnvSaafError` before reading values, even with `{ throwOnError: false }`. Repeating an alias within one rule is allowed.
 ### Per-key `validate` — custom validation rules
 
 Some rules are app-specific — a path must be an existing directory, or two keys must differ. Pass a `validate(value, env)` function on the key instead of forking the library:

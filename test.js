@@ -2870,6 +2870,28 @@ assert.deepStrictEqual(
   assert.match(exArr, /^DEFAULTS=80;443$/m);
   assert.match(exArr, /^SECRET_LIST=$/m);
 }
+// Issue #205: aliases must not populate multiple declared keys.
+{
+  const cases = [
+    [{ A: { aliases: ['B'] }, B: { type: 'string' } }, 'A', 'B'],
+    [{ B: { type: 'string' }, A: { aliases: ['B'] } }, 'A', 'B'],
+    [{ A: { aliases: ['SHARED'] }, B: { aliases: ['SHARED'] } }, 'B', 'SHARED'],
+    [{ A: { aliases: ['A'] } }, 'A', 'A'],
+    [{ A: { aliases: ['__proto__'] }, ['__proto__']: { type: 'string' } }, 'A', '__proto__'],
+    [{ A: { aliases: ['toString'] }, B: { aliases: ['toString'] } }, 'B', 'toString'],
+  ];
+  for (const [schema, key, alias] of cases) {
+    for (const throwOnError of [true, false]) {
+      assert.throws(
+        () => validateEnv(schema, {}, { throwOnError }),
+        err => err instanceof EnvSaafError
+          && err.errors.some(message => message.startsWith(`${key}:`) && message.includes(`"${alias}"`)),
+        `expected alias collision for ${key}/${alias} with throwOnError=${throwOnError}`,
+      );
+    }
+  }
+}
+
 // Issue #53: `aliases` accepts renamed/deprecated variables as fallbacks and warns.
 {
   const fs = require('node:fs');
@@ -3055,11 +3077,11 @@ assert.deepStrictEqual(
     );
   }
 
-  // 12. Duplicate and self aliases do not emit duplicate or self-ignoring warnings.
+  // 12. Repeating an alias on the same rule does not emit duplicate warnings.
   {
     const warnings = [];
     const res = validateEnv(
-      { PORT: { type: 'port', aliases: ['PORT', 'APP_PORT', 'APP_PORT'] } },
+      { PORT: { type: 'port', aliases: ['APP_PORT', 'APP_PORT'] } },
       { PORT: '3000', APP_PORT: '4000' },
       { onWarn: msg => warnings.push(msg) },
     );
