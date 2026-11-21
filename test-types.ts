@@ -13,6 +13,10 @@ const env = validateEnv({
   NAME: { type: 'string' },
   TENANT_ID: { type: 'uuid', required: true },
   API_HASH: { type: 'hex', sensitive: true },
+  TAGS: { type: 'array', required: true },
+  PORTS: { type: 'array', of: 'port', separator: ';', required: true },
+  ORIGINS: { type: 'array', of: 'url', protocols: ['https'] },
+  FLAGS: { type: 'array', of: 'boolean', default: [true, false] },
 });
 
 // required keys: exact types
@@ -24,6 +28,11 @@ const mode: string = env.MODE;
 // uuid and hex values are strings
 const tenantId: string = env.TENANT_ID;
 const apiHash: string | undefined = env.API_HASH;
+// array values infer their element type from `of` (default string[])
+const tags: string[] = env.TAGS;
+const ports: number[] = env.PORTS;
+const origins: string[] | undefined = env.ORIGINS;
+const flags: boolean[] = env.FLAGS;
 // optional keys: value ya undefined
 const debug: boolean | undefined = env.DEBUG;
 const name: string | undefined = env.NAME;
@@ -43,6 +52,8 @@ const wrongType: string = env.PORT;
 const typo = env.TYPO_KEY;
 // @ts-expect-error — optional key undefined ho sakti hai, seedha boolean nahi
 const debugStrict: boolean = env.DEBUG;
+// @ts-expect-error — PORTS is number[], not string[]
+const wrongPorts: string[] = env.PORTS;
 
 // loose schema (jaise EnvSchema type ka variable) par purana loose record milta hai
 const looseSchema: EnvSchema = { PORT: { type: 'port', required: true } };
@@ -100,4 +111,4 @@ const validatedFlag: boolean = validated.FLAG;
 const validatedNotes: string | undefined = validated.NOTES;
 
 
-export { port, count, url, mode, debug, name, doubled, fixed, wrongType, typo, debugStrict, myPort, myDebug, looseValue, tenantId, apiHash, collectedPort, collectedDebug, collectedErrors, collectedAsEnv, throwingPort, aliasedUrl, aliasedPort, aliasKey, validatedPort, validatedHost, validatedFlag, validatedNotes };
+export { port, count, url, mode, debug, name, doubled, fixed, wrongType, typo, debugStrict, wrongPorts, myPort, myDebug, looseValue, tenantId, apiHash, tags, ports, origins, flags, collectedPort, collectedDebug, collectedErrors, collectedAsEnv, throwingPort, validatedPort, validatedHost, validatedFlag, validatedNotes, aliasedUrl, aliasedPort, aliasKey };

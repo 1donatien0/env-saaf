@@ -2441,6 +2441,184 @@ assert.deepStrictEqual(
   }
 }
 
+// Issue #46: `array` type — split a delimited string into a typed array.
+{
+  // 1. Default `of: 'string'` and explicit `of: 'string'`, trimming items by default.
+  assert.deepStrictEqual(
+    validateEnv({ TAGS: { type: 'array', of: 'string', required: true } }, { TAGS: 'a,b,c' }).TAGS,
+    ['a', 'b', 'c'],
+  );
+  assert.deepStrictEqual(
+    validateEnv({ TAGS: { type: 'array', required: true } }, { TAGS: ' a , b , c ' }).TAGS,
+    ['a', 'b', 'c'],
+  );
+  assert.deepStrictEqual(
+    validateEnv({ TAGS: { type: 'array' } }, { TAGS: 'solo' }).TAGS,
+    ['solo'],
+  );
+  // trim: false preserves surrounding whitespace on each item.
+  assert.deepStrictEqual(
+    validateEnv({ TAGS: { type: 'array', of: 'string', trim: false } }, { TAGS: ' a , b ' }).TAGS,
+    [' a ', ' b '],
+  );
+
+  // 2. Custom separators (single-character and multi-character).
+  assert.deepStrictEqual(
+    validateEnv({ PORTS: { type: 'array', of: 'port', separator: ';' } }, { PORTS: '80;443;8080' }).PORTS,
+    [80, 443, 8080],
+  );
+  assert.deepStrictEqual(
+    validateEnv({ PATHS: { type: 'array', separator: '::' } }, { PATHS: 'alpha::beta::gamma' }).PATHS,
+    ['alpha', 'beta', 'gamma'],
+  );
+
+  // 3. Coercion across scalar `of` types (number, int, boolean, url + protocols, email, duration, date).
+  const typed = validateEnv({
+    NUMS: { type: 'array', of: 'number', required: true },
+    INTS: { type: 'array', of: 'int', required: true },
+    FLAGS: { type: 'array', of: 'boolean', required: true },
+    ORIGINS: { type: 'array', of: 'url', protocols: ['https'], required: true },
+    EMAILS: { type: 'array', of: 'email', required: true },
+    TIMEOUTS: { type: 'array', of: 'duration', required: true },
+    DATES: { type: 'array', of: 'date', required: true },
+  }, {
+    NUMS: '1.5, 2, -3.25',
+    INTS: '10, 20, 30',
+    FLAGS: 'true, no, 1, off',
+    ORIGINS: 'https://a.example.com, https://b.example.com',
+    EMAILS: 'admin@example.com, ops@example.com',
+    TIMEOUTS: '500ms, 2s, 1m',
+    DATES: '2026-01-31, 2026-02-01',
+  });
+  assert.deepStrictEqual(typed.NUMS, [1.5, 2, -3.25]);
+  assert.deepStrictEqual(typed.INTS, [10, 20, 30]);
+  assert.deepStrictEqual(typed.FLAGS, [true, false, true, false]);
+  assert.deepStrictEqual(typed.ORIGINS, ['https://a.example.com', 'https://b.example.com']);
+  assert.deepStrictEqual(typed.EMAILS, ['admin@example.com', 'ops@example.com']);
+  assert.deepStrictEqual(typed.TIMEOUTS, [500, 2000, 60000]);
+  assert.strictEqual(typed.DATES.length, 2);
+  assert.ok(typed.DATES.every(d => d instanceof Date));
+
+  // 4. Invalid items report their 0-based index and offending value.
+  assert.throws(
+    () => validateEnv({ PORTS: { type: 'array', of: 'port' } }, { PORTS: '80,abc,443' }),
+    err => err instanceof EnvSaafError
+      && err.errors[0].includes('PORTS[1]')
+      && err.errors[0].includes('expected a port')
+      && err.errors[0].includes('got "abc"'),
+  );
+  assert.throws(
+    () => validateEnv({ ORIGINS: { type: 'array', of: 'url', protocols: ['https'] } }, { ORIGINS: 'https://a.com,http://b.com' }),
+    err => err instanceof EnvSaafError
+      && err.errors[0].includes('ORIGINS[1]')
+      && err.errors[0].includes('protocols (https)')
+      && err.errors[0].includes('got "http://b.com"'),
+  );
+
+  // 5. Empty items are rejected (not silently dropped) with their index and value.
+  for (const [raw, expectedIndex] of [['a,,c', 1], ['a,   ,c', 1], [',a,b', 0], ['a,b,', 2]]) {
+    assert.throws(
+      () => validateEnv({ TAGS: { type: 'array', of: 'string' } }, { TAGS: raw }),
+      err => err instanceof EnvSaafError
+        && err.errors[0].includes(`TAGS[${expectedIndex}]`)
+        && err.errors[0].includes('expected a non-empty value'),
+    );
+  }
+  assert.throws(
+    () => validateEnv({ INTS: { type: 'array', of: 'int' } }, { INTS: '1,,3' }),
+    err => err instanceof EnvSaafError
+      && err.errors[0].includes('INTS[1]')
+      && err.errors[0].includes('expected an integer')
+      && err.errors[0].includes('got ""'),
+  );
+
+  // 6. Defaults: delimited string, already-parsed array (including empty []), and invalid defaults.
+  assert.deepStrictEqual(
+    validateEnv({ TAGS: { type: 'array', default: 'x,y' } }, {}).TAGS,
+    ['x', 'y'],
+  );
+  assert.deepStrictEqual(
+    validateEnv({ PORTS: { type: 'array', of: 'port', default: [80, 443] } }, {}).PORTS,
+    [80, 443],
+  );
+  assert.deepStrictEqual(
+    validateEnv({ FLAGS: { type: 'array', of: 'string', default: [] } }, {}).FLAGS,
+    [],
+  );
+  assert.throws(
+    () => validateEnv({ PORTS: { type: 'array', of: 'port', default: [80, 'bad'] } }, {}),
+    err => err instanceof EnvSaafError && err.errors[0].includes('PORTS[1]') && err.errors[0].includes('got "bad"'),
+  );
+  assert.throws(
+    () => validateEnv({ NUMS: { type: 'array', of: 'number', default: [1, null] } }, {}),
+    err => err instanceof EnvSaafError && err.errors[0].includes('NUMS[1]') && err.errors[0].includes('expected a number'),
+  );
+  assert.throws(
+    () => validateEnv({ TAGS: { type: 'array', default: 123 } }, {}),
+    err => err instanceof EnvSaafError && err.errors[0].includes('expected a delimited list'),
+  );
+
+  // 7. Missing optional array is omitted; missing required array fails.
+  assert.deepStrictEqual(validateEnv({ TAGS: { type: 'array' } }, {}), {});
+  assert.throws(
+    () => validateEnv({ TAGS: { type: 'array', required: true } }, {}),
+    err => err instanceof EnvSaafError && err.errors[0] === 'TAGS: missing required variable',
+  );
+
+  // 8. `sensitive: true` masks offending item values without leaking secrets.
+  const secretItem = 'secret_bad_token_99';
+  assert.throws(
+    () => validateEnv(
+      { TOKENS: { type: 'array', of: 'uuid', sensitive: true } },
+      { TOKENS: `550e8400-e29b-41d4-a716-446655440000,${secretItem}` },
+    ),
+    err => err instanceof EnvSaafError
+      && err.errors[0].includes('TOKENS[1]')
+      && !err.message.includes(secretItem)
+      && err.errors[0].includes(`got "${maskValue(secretItem)}"`),
+  );
+
+  // 9. Up-front schema validation rejects invalid `of` and `separator` even when key is absent.
+  for (const badOf of ['unknown', 'array', 123, null, {}]) {
+    assert.throws(
+      () => validateEnv({ TAGS: { type: 'array', of: badOf } }, {}),
+      err => err instanceof EnvSaafError && err.errors[0].includes('TAGS: "of" must be a valid item type'),
+    );
+  }
+  for (const badSep of ['', 123, null, []]) {
+    assert.throws(
+      () => validateEnv({ TAGS: { type: 'array', separator: badSep } }, {}),
+      err => err instanceof EnvSaafError && err.errors[0].includes('TAGS: "separator" must be a non-empty string'),
+    );
+  }
+
+  // 10. Transform and non-throwing mode work with `array`.
+  const transformed = validateEnv(
+    { TAGS: { type: 'array', of: 'string', transform: xs => xs.map(s => s.toUpperCase()) } },
+    { TAGS: 'a,b' },
+  );
+  assert.deepStrictEqual(transformed.TAGS, ['A', 'B']);
+  const nonThrowArr = validateEnv(
+    { PORTS: { type: 'array', of: 'port' }, TAGS: { type: 'array' } },
+    { PORTS: '80,nope', TAGS: 'x,y' },
+    { throwOnError: false },
+  );
+  assert.deepStrictEqual(nonThrowArr.env, { TAGS: ['x', 'y'] });
+  assert.strictEqual(nonThrowArr.errors.length, 1);
+  assert.ok(nonThrowArr.errors[0].includes('PORTS[1]'));
+
+  // 11. generateExample produces a delimited placeholder (respecting separator, array default, and sensitive).
+  const exArr = generateExample({
+    TAGS: { type: 'array', required: true },
+    PORTS: { type: 'array', of: 'port', separator: ';' },
+    DEFAULTS: { type: 'array', of: 'port', separator: ';', default: [80, 443] },
+    SECRET_LIST: { type: 'array', sensitive: true },
+  });
+  assert.match(exArr, /^TAGS=a,b,c$/m);
+  assert.match(exArr, /^PORTS=a;b;c$/m);
+  assert.match(exArr, /^DEFAULTS=80;443$/m);
+  assert.match(exArr, /^SECRET_LIST=$/m);
+}
 // Issue #53: `aliases` accepts renamed/deprecated variables as fallbacks and warns.
 {
   const fs = require('node:fs');
