@@ -1,9 +1,21 @@
 export type EnvScalarType = 'string' | 'number' | 'int' | 'boolean' | 'url' | 'port' | 'email' | 'json' | 'uuid' | 'hex' | 'ipv4' | 'semver' | 'base64' | 'date' | 'file' | 'duration' | 'host';
 export type EnvType = EnvScalarType | 'array';
 
+export type RequiredIfCondition =
+  | { key: string; equals: string | number | boolean; in?: never }
+  | { key: string; in: Array<string | number | boolean>; equals?: never };
+
 export interface EnvRule {
   type?: EnvType;
   required?: boolean;
+  /**
+   * Make this key required only when another variable matches a condition:
+   * `{ key: 'MODE', equals: 'production' }` or `{ key: 'MODE', in: ['staging', 'production'] }`.
+   * Evaluated in a second pass after all keys are coerced and defaults are applied,
+   * so declaration order in the schema does not matter. When the condition does not hold
+   * (or the referenced key is absent), the key stays optional.
+   */
+  requiredIf?: RequiredIfCondition;
   /** A default may be an already-parsed object or array for `type: 'json'` or `type: 'array'`, or a `Date` for `type: 'date'`. */
   default?: string | number | boolean | Date | Record<string, unknown> | unknown[] | null;
   choices?: Array<string | number | boolean>;
