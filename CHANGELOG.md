@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Added: `aliases` rule option — accept deprecated variable names (e.g. `aliases: ['OLD_NAME']`) as fallbacks when the canonical key is unset, running normal coercion, validation, and `transform` under the canonical key while emitting a deprecation warning via `options.onWarn` (default `console.warn`); when both are set, the canonical key wins and a warning notes the ignored alias, and declared aliases are accepted in `{ strict: true }` mode (fixes #53).
 - Docs: add a comparison section in README contrasting `env-saaf` with `envalid`, `joi`, and `zod` across scope, runtime dependencies, `.env`/CLI tooling, error aggregation, TypeScript inference, and when another library is a better fit (fixes #68).
 - Docs: document that `validateEnv` treats an empty string (`''`) as unset — omitting optional keys, failing required keys as missing, and falling back to `default` — matching `${VAR:-fallback}` interpolation, with tests pinning the behaviour (fixes #186).
 - Added: per-key `validate(value, env)` rule option — runs after type coercion and built-in checks (including on `default` values), before `transform`; return `true` (or `undefined`/`null`) to pass, `false` for a generic error, or a non-empty string error message to fail. Throwing validators are collected as validation failures naming the key instead of crashing, non-function `validate` options are rejected up front, and `sensitive: true` masks values in custom validation errors (fixes #52).
