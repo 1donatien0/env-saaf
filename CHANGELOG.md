@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Added: every built-in type's validation error message now includes an example of the expected format (e.g. `expected a valid URL (e.g. https://example.com), got "..."` and `expected a port (0-65535, e.g. 3000), got "..."`), keeping aggregated errors one concise bullet per key (fixes #58)
 - Fixed: Reject non-finite values and overflowing exponent literals in numeric configuration (fixes #175).
 - Docs: add a runnable Docker and Docker Compose startup validation example explaining `ENV`, `--env-file`, and Compose `environment:` (fixes #66).
 - Added: the `duration` type accepts `w` for weeks (`1w` = 7 days = 604,800,000 ms); like the other units it is case-insensitive and takes decimals (`1.5w`), and the error message now lists `1w` among the examples (fixes #176)
