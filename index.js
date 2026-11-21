@@ -581,7 +581,7 @@ function parseEnvFile(text) {
   const ESC = String.fromCharCode(92) + '${';
   const PH = String.fromCharCode(1);
   const openRef = /\$\{([A-Za-z_][A-Za-z0-9_]*)(:-|-|(?=\}))/g;
-  const expandRefs = (text, remaining) => {
+  const expandRefs = (text, remaining, self) => {
     let result = '';
     let cursor = 0;
     for (const match of text.matchAll(openRef)) {
@@ -600,11 +600,16 @@ function parseEnvFile(text) {
       }
       if (end === text.length) break; // Leave an unterminated reference literal.
 
-      const value = Object.prototype.hasOwnProperty.call(raw, name)
-        ? raw[name].split(ESC).join(PH)
-        : process.env[name];
+      // While the line that sets `self` is being resolved, its own value is
+      // not set yet (#185): with a `:-`/`-` operator present, the reference
+      // falls back to the default instead of re-reading the unresolved raw
+      // text. Without an operator the raw text is read, as before.
+      const value = name === self && operator ? undefined
+        : Object.prototype.hasOwnProperty.call(raw, name)
+          ? raw[name].split(ESC).join(PH)
+          : process.env[name];
       const useDefault = operator && (value === undefined
-        || (operator === ':-' && expandValue(value, remaining) === ''));
+        || (operator === ':-' && expandValue(value, remaining, self) === ''));
       result += text.slice(cursor, match.index) + (useDefault
         ? text.slice(start, end)
         : (value ?? ''));
@@ -613,9 +618,9 @@ function parseEnvFile(text) {
     return result + text.slice(cursor);
   };
   // Share the existing five-round budget with checks of interpolated values.
-  const expandValue = (value, rounds) => {
+  const expandValue = (value, rounds, self) => {
     for (let remaining = rounds; remaining > 0; remaining--) {
-      const next = expandRefs(value, remaining - 1);
+      const next = expandRefs(value, remaining - 1, self);
       if (next === value) break;
       value = next;
     }
@@ -624,7 +629,7 @@ function parseEnvFile(text) {
   const out = {};
   for (const [key, val] of Object.entries(raw)) {
     if (quoteOf[key] === 'single') { out[key] = val; continue; }
-    const v = expandValue(val.split(ESC).join(PH), 5);
+    const v = expandValue(val.split(ESC).join(PH), 5, key);
     out[key] = v.split(PH).join('${');
   }
   return out;
