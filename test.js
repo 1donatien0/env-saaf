@@ -1848,6 +1848,9 @@ assert.deepStrictEqual(
       if (id === 'node:fs') return {
         existsSync: file => file === dir,
         statSync: () => ({ isDirectory: () => true }),
+        // Issue #171: init now scans the directory before writing; this stub
+        // project has no files, so the scan finds nothing.
+        readdirSync: () => [],
         writeFileSync: (file, contents) => writes.set(file, contents),
       };
       if (id === 'node:path') return {
@@ -1856,6 +1859,10 @@ assert.deepStrictEqual(
         resolve: (root, file) => path.resolve(file === 'D:custom.js' ? 'D:\\schemas' : root, file),
       };
       if (id === schemaPath) return {};
+      // Issue #171: init scans the directory before writing; this stub
+      // project ('C:\\project') does not exist on disk, so hand the CLI a
+      // scan that finds nothing instead of the real scanDir.
+      if (id === './index') return { ...require('./index'), scanDir: () => [] };
       return require(id);
     };
     requireFromCli.resolve = id => id;
@@ -2185,6 +2192,85 @@ assert.deepStrictEqual(
   }
 }
 
+// Issue #171: `init` scans the directory first (the same scan `check` and
+// `example` use) and folds keys the code already reads into the starter schema
+// as `{ type: 'string' }` entries, so the generated .env.example covers them
+// and the first `check` reports no MISSING lines to merge by hand. A directory
+// with no code yet scaffolds exactly as before, and keys the scaffold already
+// declares are not duplicated.
+{
+  const { spawnSync } = require('node:child_process');
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const path = require('node:path');
+  const cli = path.join(__dirname, 'cli.js');
+  const run = (args) => spawnSync('node', [cli, ...args], { encoding: 'utf8' });
+
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'env-saaf-init-scan-'));
+  try {
+    // Code already reads FOO and PORT: FOO must be folded into the scaffold,
+    // while PORT (already scaffolded) must not be duplicated.
+    fs.writeFileSync(path.join(dir, 'app.js'), 'const port = process.env.PORT;\nconst tag = process.env.FOO;\n');
+    const inited = run(['init', dir]);
+    assert.strictEqual(inited.status, 0, inited.stderr);
+    // The discovered keys are listed in init's output.
+    assert.ok(inited.stdout.includes('folded in 1 key found by scanning the code: FOO'), inited.stdout);
+    const schemaFile = path.join(dir, 'env.schema.js');
+    const schemaText = fs.readFileSync(schemaFile, 'utf8');
+    assert.match(schemaText, /FOO: \{ type: 'string' \},/);
+    assert.match(schemaText, /Found by scanning this project's code/);
+    assert.strictEqual(schemaText.match(/^  PORT:/gm).length, 1, schemaText);
+    const starter = require(schemaFile);
+    assert.deepStrictEqual(starter.FOO, { type: 'string' });
+    const exampleText = fs.readFileSync(path.join(dir, '.env.example'), 'utf8');
+    assert.match(exampleText, /^FOO=your_value_here$/m);
+    assert.strictEqual(exampleText.match(/^PORT=/gm).length, 1, exampleText);
+    assert.strictEqual(exampleText, generateExample(starter));
+
+    // The original complaint is gone: the first `check` after init no longer
+    // reports the scanned key as MISSING in .env.example (text or --json).
+    const checked = run(['check', dir]);
+    assert.ok(!checked.stdout.includes('MISSING in .env.example: FOO'), checked.stdout);
+    const checkedJson = JSON.parse(run(['check', dir, '--json']).stdout.trim());
+    assert.deepStrictEqual(checkedJson.missing, []);
+
+    // Once the code reads every documented key (the folded one included), the
+    // whole round trip is clean: check --schema validates a real .env against
+    // the folded scaffold with no hand merging.
+    fs.writeFileSync(path.join(dir, 'app.js'),
+      'const a = process.env.APP_NAME, r = process.env.RETRIES, d = process.env.DEBUG;\n'
+      + 'const p = process.env.PORT, u = process.env.API_URL, e = process.env.SUPPORT_EMAIL;\n'
+      + 'const t = process.env.SHUTDOWN_TIMEOUT, h = process.env.DB_HOST, f = process.env.FOO;\n');
+    fs.writeFileSync(path.join(dir, '.env'),
+      'APP_NAME=myapp\nRETRIES=3\nDEBUG=false\nPORT=3000\nAPI_URL=https://example.com\nSUPPORT_EMAIL=a@b.com\nSHUTDOWN_TIMEOUT=15m\nDB_HOST=localhost\nFOO=bar\n');
+    const roundTrip = run(['check', dir, '--schema', './env.schema.js']);
+    assert.strictEqual(roundTrip.status, 0, roundTrip.stdout + roundTrip.stderr);
+    assert.ok(roundTrip.stdout.includes('all clean'), roundTrip.stdout);
+    fs.rmSync(path.join(dir, '.env'));
+
+    // A fresh directory (no code yet) behaves exactly as before: the same 8
+    // starter keys, no scan comment, and no "folded in" line on stdout.
+    const fresh = fs.mkdtempSync(path.join(os.tmpdir(), 'env-saaf-init-fresh-'));
+    try {
+      const freshInit = run(['init', fresh]);
+      assert.strictEqual(freshInit.status, 0, freshInit.stderr);
+      assert.ok(freshInit.stdout.includes('(8 variables)'), freshInit.stdout);
+      assert.ok(!freshInit.stdout.includes('folded in'), freshInit.stdout);
+      const freshSchema = fs.readFileSync(path.join(fresh, 'env.schema.js'), 'utf8');
+      assert.doesNotMatch(freshSchema, /Found by scanning/);
+      const freshStarter = require(path.join(fresh, 'env.schema.js'));
+      assert.deepStrictEqual(
+        Object.keys(freshStarter),
+        ['APP_NAME', 'RETRIES', 'DEBUG', 'PORT', 'API_URL', 'SUPPORT_EMAIL', 'SHUTDOWN_TIMEOUT', 'DB_HOST'],
+      );
+    } finally {
+      fs.rmSync(fresh, { recursive: true, force: true });
+    }
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+}
+
 // Issue #54: `sensitive: true` masks a key's value in all validation errors
 // and CLI output, even when its name does not look like a secret.
 {
@@ -2384,6 +2470,252 @@ assert.deepStrictEqual(
   const parsed = parseEnvFile('NICK=\n');
   assert.deepStrictEqual(parsed, { NICK: '' });
   assert.deepStrictEqual(validateEnv({ NICK: { type: 'string' } }, parsed), {});
+}
+
+// Issue #52: per-key `validate(value, env)` function for custom rules.
+{
+  // 1. Non-function `validate` is rejected up front in validateSchema,
+  // even when the key is absent/optional and even with throwOnError: false.
+  for (const bad of ['fn', 123, true, null, {}]) {
+    assert.throws(
+      () => validateEnv({ CUSTOM: { type: 'string', validate: bad } }, {}),
+      err => err instanceof EnvSaafError
+        && err.errors.includes('CUSTOM: "validate" must be a function'),
+    );
+    assert.throws(
+      () => validateEnv({ CUSTOM: { type: 'string', validate: bad } }, {}, { throwOnError: false }),
+      err => err instanceof EnvSaafError
+        && err.errors.includes('CUSTOM: "validate" must be a function'),
+    );
+  }
+
+  // 2. Passing return values: true, undefined, null, and empty string.
+  const passRes = validateEnv(
+    {
+      A: { type: 'string', validate: () => true },
+      B: { type: 'string', validate: () => undefined },
+      C: { type: 'string', validate: () => null },
+      D: { type: 'string', validate: () => '' },
+    },
+    { A: 'a', B: 'b', C: 'c', D: 'd' },
+  );
+  assert.deepStrictEqual(passRes, { A: 'a', B: 'b', C: 'c', D: 'd' });
+
+  // 3. Failing return values: string message and boolean false.
+  assert.throws(
+    () => validateEnv(
+      { APP_PORT: { type: 'port', validate: v => v >= 1024 || 'must be an unprivileged port (>= 1024)' } },
+      { APP_PORT: '80' },
+    ),
+    err => err instanceof EnvSaafError
+      && err.errors.length === 1
+      && err.errors[0] === 'APP_PORT: must be an unprivileged port (>= 1024)',
+  );
+  assert.throws(
+    () => validateEnv(
+      { APP_PORT: { type: 'port', validate: v => v >= 1024 } },
+      { APP_PORT: '80' },
+    ),
+    err => err instanceof EnvSaafError
+      && err.errors.length === 1
+      && err.errors[0] === 'APP_PORT: failed custom validation, got "80"',
+  );
+
+  // 4. Receives coerced value and full env object (cross-key checks).
+  let seenVal, seenEnv;
+  const inputEnv = { PRIMARY_HOST: 'db1.internal', REPLICA_HOST: 'db2.internal', CONFIG: '{"retries":3}' };
+  const crossOk = validateEnv(
+    {
+      PRIMARY_HOST: { type: 'host', required: true },
+      REPLICA_HOST: {
+        type: 'host',
+        required: true,
+        validate: (v, e) => v !== e.PRIMARY_HOST || 'must differ from PRIMARY_HOST',
+      },
+      CONFIG: {
+        type: 'json',
+        validate: (v, e) => { seenVal = v; seenEnv = e; return v.retries > 0 || 'retries must be positive'; },
+      },
+    },
+    inputEnv,
+  );
+  assert.strictEqual(crossOk.REPLICA_HOST, 'db2.internal');
+  assert.deepStrictEqual(seenVal, { retries: 3 });
+  assert.strictEqual(seenEnv, inputEnv);
+
+  assert.throws(
+    () => validateEnv(
+      {
+        PRIMARY_HOST: { type: 'host', required: true },
+        REPLICA_HOST: {
+          type: 'host',
+          required: true,
+          validate: (v, e) => v !== e.PRIMARY_HOST || 'must differ from PRIMARY_HOST',
+        },
+      },
+      { PRIMARY_HOST: 'db1.internal', REPLICA_HOST: 'db1.internal' },
+    ),
+    err => err instanceof EnvSaafError
+      && err.errors.length === 1
+      && err.errors[0] === 'REPLICA_HOST: must differ from PRIMARY_HOST',
+  );
+
+  // 5. Throwing validator is reported as a validation failure, not a crash.
+  assert.throws(
+    () => validateEnv(
+      {
+        DIR: { type: 'string', validate: () => { throw new Error('directory does not exist'); } },
+        NON_ERR: { type: 'string', validate: () => { throw 'raw string throw'; } },
+      },
+      { DIR: '/nope', NON_ERR: 'x' },
+    ),
+    err => err instanceof EnvSaafError
+      && err.errors.length === 2
+      && err.errors[0] === 'DIR: validation failed: directory does not exist'
+      && err.errors[1] === 'NON_ERR: validation failed: raw string throw',
+  );
+
+  // 6. Aggregated errors: built-in failures and custom validate failures collect together.
+  assert.throws(
+    () => validateEnv(
+      {
+        REQ: { type: 'string', required: true },
+        BAD_PORT: { type: 'port' },
+        CUSTOM_STR: { type: 'string', validate: () => 'custom reason' },
+        CUSTOM_FALSE: { type: 'int', validate: () => false },
+        CUSTOM_THROW: { type: 'string', validate: () => { throw new Error('boom'); } },
+      },
+      { BAD_PORT: 'nope', CUSTOM_STR: 'a', CUSTOM_FALSE: '7', CUSTOM_THROW: 'b' },
+    ),
+    err => err instanceof EnvSaafError
+      && err.errors.length === 5
+      && err.errors[0] === 'REQ: missing required variable'
+      && err.errors[1].startsWith('BAD_PORT: expected a port')
+      && err.errors[2] === 'CUSTOM_STR: custom reason'
+      && err.errors[3] === 'CUSTOM_FALSE: failed custom validation, got "7"'
+      && err.errors[4] === 'CUSTOM_THROW: validation failed: boom',
+  );
+
+  // 7. Execution order:
+  // - skipped for missing optional keys and when coercion/built-in checks fail
+  // - runs before transform; transform is skipped when validate fails
+  // - runs on defaults (while transform is still skipped on defaults)
+  let calledOnMissing = false;
+  let calledAfterBadCoercion = false;
+  let calledAfterBadBuiltin = false;
+  validateEnv(
+    { OPT: { type: 'string', validate: () => { calledOnMissing = true; return true; } } },
+    {},
+  );
+  assert.strictEqual(calledOnMissing, false);
+
+  assert.throws(
+    () => validateEnv(
+      {
+        N: { type: 'int', validate: () => { calledAfterBadCoercion = true; return true; } },
+        M: { type: 'int', min: 10, validate: () => { calledAfterBadBuiltin = true; return true; } },
+      },
+      { N: 'abc', M: '5' },
+    ),
+    err => err instanceof EnvSaafError && err.errors.length === 2,
+  );
+  assert.strictEqual(calledAfterBadCoercion, false);
+  assert.strictEqual(calledAfterBadBuiltin, false);
+
+  const order = [];
+  const transformedRes = validateEnv(
+    {
+      LIST: {
+        type: 'string',
+        validate: v => { order.push(['validate', v]); return v.includes(',') || 'needs comma'; },
+        transform: v => { order.push(['transform', v]); return v.split(','); },
+      },
+    },
+    { LIST: 'a,b' },
+  );
+  assert.deepStrictEqual(transformedRes.LIST, ['a', 'b']);
+  assert.deepStrictEqual(order, [['validate', 'a,b'], ['transform', 'a,b']]);
+
+  let transformCalledAfterFail = false;
+  assert.throws(
+    () => validateEnv(
+      {
+        LIST: {
+          type: 'string',
+          validate: () => 'bad list',
+          transform: v => { transformCalledAfterFail = true; return v.split(','); },
+        },
+      },
+      { LIST: 'a' },
+    ),
+    err => err instanceof EnvSaafError && err.errors[0] === 'LIST: bad list',
+  );
+  assert.strictEqual(transformCalledAfterFail, false);
+
+  let defaultTransformCalled = false;
+  const defaultOk = validateEnv(
+    {
+      PORT: {
+        type: 'port',
+        default: 8080,
+        validate: v => v >= 1024 || 'too low',
+        transform: v => { defaultTransformCalled = true; return v; },
+      },
+    },
+    {},
+  );
+  assert.strictEqual(defaultOk.PORT, 8080);
+  assert.strictEqual(defaultTransformCalled, false);
+
+  assert.throws(
+    () => validateEnv(
+      { PORT: { type: 'port', default: 80, validate: v => v >= 1024 || 'default too low' } },
+      {},
+    ),
+    err => err instanceof EnvSaafError && err.errors[0] === 'PORT: default too low',
+  );
+
+  // 8. `sensitive: true` masks values across false, string, and thrown validate errors.
+  const secret = 'sess_secret_token_99';
+  assert.throws(
+    () => validateEnv(
+      { SESSION_ID: { type: 'string', sensitive: true, validate: () => false } },
+      { SESSION_ID: secret },
+    ),
+    err => err instanceof EnvSaafError
+      && !err.message.includes(secret)
+      && err.errors[0] === `SESSION_ID: failed custom validation, got "${maskValue(secret)}"`,
+  );
+  assert.throws(
+    () => validateEnv(
+      { SESSION_ID: { type: 'string', sensitive: true, validate: v => `rejected ${v}` } },
+      { SESSION_ID: secret },
+    ),
+    err => err instanceof EnvSaafError
+      && !err.message.includes(secret)
+      && err.errors[0] === `SESSION_ID: rejected ${maskValue(secret)}`,
+  );
+  assert.throws(
+    () => validateEnv(
+      { SESSION_ID: { type: 'string', sensitive: true, validate: v => { throw new Error(`bad ${v}`); } } },
+      { SESSION_ID: secret },
+    ),
+    err => err instanceof EnvSaafError
+      && !err.message.includes(secret)
+      && err.errors[0] === `SESSION_ID: validation failed: bad ${maskValue(secret)}`,
+  );
+
+  // 9. Non-throwing mode collects validate errors and omits failing keys from env.
+  const collected = validateEnv(
+    {
+      GOOD: { type: 'int', validate: v => v > 0 },
+      BAD: { type: 'int', validate: v => v > 10 || 'must exceed 10' },
+    },
+    { GOOD: '5', BAD: '3' },
+    { throwOnError: false },
+  );
+  assert.deepStrictEqual(collected.env, { GOOD: 5 });
+  assert.deepStrictEqual(collected.errors, ['BAD: must exceed 10']);
 }
 
 console.log('env-saaf v1.5.0: all tests passed');
