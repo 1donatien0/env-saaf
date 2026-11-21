@@ -68,4 +68,32 @@ const throwingPort: number = validateEnv(
   { strict: true }
 ).PORT;
 
-export { port, count, url, mode, debug, name, doubled, fixed, wrongType, typo, debugStrict, myPort, myDebug, looseValue, tenantId, apiHash, collectedPort, collectedDebug, collectedErrors, collectedAsEnv, throwingPort };
+// Issue #51: requiredIf — conditionally required keys remain optional in the inferred type.
+const condEnv = validateEnv(
+  {
+    MODE: { type: 'string', default: 'development' },
+    USE_TLS: { type: 'boolean', default: false },
+    SENTRY_DSN: { type: 'url', requiredIf: { key: 'MODE', equals: 'production' } },
+    ALERT_WEBHOOK: { type: 'url', requiredIf: { key: 'MODE', in: ['staging', 'production'] } },
+    TLS_CERT: { type: 'string', requiredIf: { key: 'USE_TLS', equals: true } },
+    FALLBACK_DSN: { type: 'url', default: 'https://example.com', requiredIf: { key: 'MODE', equals: 'production' } },
+  },
+  { MODE: 'development' }
+);
+const condSentry: string | undefined = condEnv.SENTRY_DSN;
+const condAlert: string | undefined = condEnv.ALERT_WEBHOOK;
+const condTls: string | undefined = condEnv.TLS_CERT;
+const condFallback: string = condEnv.FALLBACK_DSN;
+// @ts-expect-error — conditionally required key without default may be undefined
+const condSentryStrict: string = condEnv.SENTRY_DSN;
+
+validateEnv({
+  // @ts-expect-error — requiredIf must specify either equals or in, not both
+  BAD_BOTH: { type: 'string', requiredIf: { key: 'MODE', equals: 'prod', in: ['prod'] } },
+});
+validateEnv({
+  // @ts-expect-error — requiredIf must specify equals or in
+  BAD_NEITHER: { type: 'string', requiredIf: { key: 'MODE' } },
+});
+
+export { port, count, url, mode, debug, name, doubled, fixed, wrongType, typo, debugStrict, myPort, myDebug, looseValue, tenantId, apiHash, collectedPort, collectedDebug, collectedErrors, collectedAsEnv, throwingPort, condSentry, condAlert, condTls, condFallback, condSentryStrict };

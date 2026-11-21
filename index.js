@@ -84,6 +84,21 @@ function validateSchema(schema) {
     if (rule.sensitive !== undefined && typeof rule.sensitive !== 'boolean') {
       errors.push(`${key}: "sensitive" must be a boolean`);
     }
+    if (rule.requiredIf !== undefined) {
+      const cond = rule.requiredIf;
+      const isObj = cond !== null && typeof cond === 'object' && !Array.isArray(cond);
+      if (!isObj || typeof cond.key !== 'string' || cond.key.trim() === '') {
+        errors.push(`${key}: "requiredIf" must be an object with a non-empty string "key" and either "equals" or "in"`);
+      } else {
+        const hasEquals = Object.prototype.hasOwnProperty.call(cond, 'equals') && cond.equals !== undefined;
+        const hasIn = Object.prototype.hasOwnProperty.call(cond, 'in') && cond.in !== undefined;
+        if (hasEquals === hasIn) {
+          errors.push(`${key}: "requiredIf" must specify either "equals" or "in" (not both)`);
+        } else if (hasIn && (!Array.isArray(cond.in) || cond.in.length === 0)) {
+          errors.push(`${key}: "requiredIf.in" must be a non-empty array`);
+        }
+      }
+    }
   }
   if (errors.length) throw new EnvSaafError(errors);
 }
@@ -325,6 +340,7 @@ function validateEnv(schema, env = process.env, options = {}) {
       }
     }
   }
+  const pendingRequiredIf = [];
   for (const [key, rule] of Object.entries(schema)) {
     let raw = env[key];
     // A default goes through the same coercion and checks as a real value,
@@ -335,6 +351,7 @@ function validateEnv(schema, env = process.env, options = {}) {
       if (rule.default !== undefined) { raw = rule.default; usingDefault = true; }
       else {
         if (rule.required) errors.push(`${key}: missing required variable`);
+        else if (rule.requiredIf !== undefined) pendingRequiredIf.push([key, rule.requiredIf]);
         continue;
       }
     }
@@ -430,6 +447,28 @@ function validateEnv(schema, env = process.env, options = {}) {
       }
       out[key] = val;
     } catch (e) { errors.push(e.message); }
+  }
+  // Pass 2 (issue #51): evaluate `requiredIf` after Pass 1 has coerced values
+  // and applied defaults across the whole schema, so declaration order never
+  // matters. If the referenced key is not declared in the schema, fall back to
+  // the raw `env` object so external flags like NODE_ENV still work.
+  for (const [key, cond] of pendingRequiredIf) {
+    let hasRef = false;
+    let refVal;
+    if (Object.prototype.hasOwnProperty.call(out, cond.key)) {
+      hasRef = true;
+      refVal = out[cond.key];
+    } else if (!Object.prototype.hasOwnProperty.call(schema, cond.key)
+      && Object.prototype.hasOwnProperty.call(env, cond.key)
+      && env[cond.key] !== undefined && env[cond.key] !== '') {
+      hasRef = true;
+      refVal = env[cond.key];
+    }
+    if (!hasRef) continue;
+    const matched = Object.prototype.hasOwnProperty.call(cond, 'in') && cond.in !== undefined
+      ? cond.in.includes(refVal)
+      : refVal === cond.equals;
+    if (matched) errors.push(`${key}: missing required variable`);
   }
   // Non-throwing mode (issue #55): a health check, CLI or server that wants to
   // log every config problem and keep booting asks for the values that did
