@@ -6,7 +6,9 @@
  *                           .env.example (or the --file given); exit 1 if anything
  *                           used is not documented. --schema also validates the values
  *                           of the real .env file against the schema the file exports
- *                           (issue #90); --json emits machine-readable output.
+ *                           (issue #90); --json emits machine-readable output. A scaffold
+ *                           with no code usage yet passes with a single note instead of
+ *                           one UNUSED line per key (issue #170).
  *   env-saaf scan  [dir] [--file name] [--json]  — just list the env vars your code uses; keys in
  *                           .env.example (or the --file given) that no code reads are reported
  *                           as UNUSED warnings (stderr; `unused` in --json), never an exit code
@@ -211,18 +213,31 @@ if (cmd === 'scan') {
       }
     }
   }
-  const ok = usedNotDocumented.length === 0 && documentedNotUsed.length === 0
-    && envExtra.length === 0 && envMissing.length === 0 && invalid.length === 0;
+  // Issue #170: a fresh scaffold has no code using any variable yet, so every
+  // documented key looks UNUSED. That is the scaffold waiting for code, not
+  // drift in an established project — report it as one plain note and pass
+  // instead of failing on one UNUSED line per key. The exception only fires
+  // when UNUSED is the *only* finding: any MISSING, EXTRA or INVALID still
+  // fails the check exactly as before (#113 is unchanged for a project that
+  // already reads at least one variable).
+  const scaffoldAhead = used.length === 0 && documentedNotUsed.length > 0
+    && usedNotDocumented.length === 0 && envExtra.length === 0 && envMissing.length === 0 && invalid.length === 0;
+  const scaffoldNote = `no process.env usage found in code yet — ${documentedNotUsed.length} ${documentedNotUsed.length === 1 ? 'key' : 'keys'} in ${fileOpt} ${documentedNotUsed.length === 1 ? 'is' : 'are'} not used by any code yet`;
+  const ok = scaffoldAhead || (usedNotDocumented.length === 0 && documentedNotUsed.length === 0
+    && envExtra.length === 0 && envMissing.length === 0 && invalid.length === 0);
   if (jsonMode) {
     const result = {
       ok,
       missing: usedNotDocumented,
-      extra: documentedNotUsed,
+      extra: scaffoldAhead ? [] : documentedNotUsed,
       invalid,
       envExtra,
       envMissing,
     };
+    if (scaffoldAhead) result.note = scaffoldNote;
     console.log(JSON.stringify(result));
+  } else if (scaffoldAhead) {
+    console.log(`env-saaf: ${scaffoldNote}.`);
   } else {
     usedNotDocumented.forEach(k => console.log(`MISSING in ${fileOpt}: ${k} (used in code)`));
     documentedNotUsed.forEach(k => console.log(`UNUSED: ${k} (in ${fileOpt}, never used in code)`));
