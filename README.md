@@ -459,7 +459,7 @@ npx env-saaf --version      # print the installed version
 npx env-saaf scan ./src     # every env var your code actually uses
 npx env-saaf check .        # code vs .env.example diff — exit 1 on any finding (CI-ready)
 npx env-saaf check . --file .env.sample  # compare against a differently-named template file instead
-npx env-saaf check . --json # machine-readable JSON output (ok/missing/extra) for CI or tooling
+npx env-saaf check . --json # machine-readable JSON output (ok/missing/extra/unused) for CI or tooling
 npx env-saaf check . --schema ./env.schema.js  # also validate the values in .env against a schema — exit 1 on a type error
 npx env-saaf scan ./src --json  # JSON list of used vars
 npx env-saaf example ./src  # draft a .env.example from a code scan
@@ -473,7 +473,7 @@ When `.env.example` (or the file given with `--file`) sits in the scanned direct
 
 A scan reads code, not comments or the text inside string and template literals: a variable named only in a comment (`// set process.env.FOO first`), a string (`'see process.env.BAR'`) or a template's text isn't reported, so it can't quietly satisfy `check` or land in an `example` draft. A read inside a template's `${...}` is still a read, and so are `process.env['X']`, ``process.env[`X`]`` and destructuring.
 
-When a real `.env` sits next to the template, `check` also compares their keys: a key in `.env` that is not documented (`EXTRA in .env: FOO (not in .env.example)`) is usually a typo, and a template key with no local value is reported as `MISSING in .env: BAR (in .env.example, not set locally)`. `--file` selects the template for both comparisons; with no `.env` file this extra check is skipped. In `--json` mode the findings appear as `envExtra` and `envMissing` alongside the existing `missing`, `extra` and `invalid` fields.
+When a real `.env` sits next to the template, `check` also compares their keys: a key in `.env` that is not documented (`EXTRA in .env: FOO (not in .env.example)`) is usually a typo, and a template key with no local value is reported as `MISSING in .env: BAR (in .env.example, not set locally)`. `--file` selects the template for both comparisons; with no `.env` file this extra check is skipped. In `--json` mode the findings appear as `envExtra` and `envMissing` alongside the existing `missing`, `extra`, `unused` and `invalid` fields — `unused` lists the documented-but-unused keys under the same name `scan --json` uses, and `extra` keeps the identical list for compatibility.
 
 `check` exits 1 whenever it prints any finding, and `--json` `ok` carries the same value, so a CI job fails exactly when the output reports a problem; a fully clean project exits 0. `UNUSED` counts as a finding too: a key left in the template after its code usage is gone fails the run, so remove it from the template when you remove the last usage. The one exception is a project with no `process.env` usage at all — a fresh scaffold, for example: `check` then passes with a single note (a `note` field in `--json`) instead of one `UNUSED` line per key, because there is no code for the template to drift from yet.
 
