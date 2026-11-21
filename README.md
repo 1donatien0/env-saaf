@@ -62,6 +62,7 @@ Environment inputs are strings. Output below is before an optional `transform`.
 | `date` | Valid `YYYY-MM-DD` or datetime with `T` and hours/minutes; optional seconds, fraction and `Z` or numeric offset. Accepts valid `Date` defaults. | `Date` | `trim` |
 | `duration` | Human duration: `500ms`, `30s`, `15m`, `2h`, `1d`, `1w`; a bare number is milliseconds | `number` (milliseconds) | `trim`, `min`, `max` |
 | `host` | Hostname (`db.internal`, `localhost`) or IPv4/IPv6 address; no scheme, path or port | `string` | `trim`, `minLength`, `maxLength`, `pattern` |
+| `array` | Delimited list split by `separator` (default `,`) with each item coerced as `of` (default `string`). Empty items are rejected. Accepts array defaults. | Typed array (`T[]`) | `of`, `separator`, `trim`, `protocols` (when `of: 'url'`) |
 
 All types support `required`, `default`, `validate`, `transform`, `sensitive` and `aliases`. Setting `sensitive: true` always masks the key's value in validation errors and CLI output, whatever its name (e.g. `SESSION_ID`, `LICENSE_KEY`), and leaves its placeholder empty in `generateExample`. Setting `aliases: ['OLD_NAME']` accepts deprecated variable names as fallbacks and emits a warning (see below). Custom `validate(value, env)` functions run after coercion and built-in checks (including on defaults), before `transform`. Transforms run on provided values after validation. Missing optional keys are omitted and defaults are validated. The `choices` option matches coerced strings, numbers or booleans. A parsed JSON value can match a choice when it has one of those three types. String input is trimmed by default. Setting `trim: false` leaves whitespace in place for string-like types. For `number` and `int`, whitespace around a numeric value is accepted either way, but whitespace-only text is rejected by default and converts to `0` with `trim: false`. Boolean matching always ignores surrounding whitespace. The `length` option applies only to `hex`. See the sections below for examples.
 ### Non-throwing mode — collect errors instead of throwing
@@ -266,6 +267,18 @@ const env = validateEnv({
 ```
 
 `url` validates with `new URL()` and returns the value exactly as given (no normalization — a bare origin gains no trailing slash). `protocols` allowlists the schemes a value may use (`['https']` rejects `ftp://...` and `javascript:...` with an error naming the allowed schemes); matching is case-insensitive, and entries may be written with or without a trailing colon (`'https'` and `'https:'` mean the same). Without the option, any valid URL passes, as before.
+
+### `array` type — split a delimited string into a typed array
+
+```js
+const env = validateEnv({
+  ALLOWED_ORIGINS: { type: 'array', of: 'url', protocols: ['https'], required: true },
+  PORTS:           { type: 'array', of: 'port', separator: ';', default: [80, 443] },
+  ADMIN_EMAILS:    { type: 'array', of: 'email' },
+});
+```
+
+`array` splits a delimited string on `separator` (default `','`), trims each item by default (`trim: false` keeps surrounding whitespace), and coerces every item with `of` (default `'string'`; any built-in scalar type is supported, and nested `'array'` is rejected up front). Empty items (such as `a,,b` or a trailing comma `a,b,`) are rejected rather than silently dropped, and any invalid item reports its 0-based index and offending value (`PORTS[1]: expected a port (0-65535, e.g. 3000), got "abc"` — masked when `sensitive: true`). An already-parsed array may be passed as a `default` (including `[]`), and `generateExample` suggests `a,b,c` joined by `separator`. In TypeScript the element type is inferred from `of`.
 
 ### `trim: false` — keep whitespace when it matters
 

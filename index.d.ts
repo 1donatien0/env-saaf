@@ -1,9 +1,10 @@
-export type EnvType = 'string' | 'number' | 'int' | 'boolean' | 'url' | 'port' | 'email' | 'json' | 'uuid' | 'hex' | 'ipv4' | 'semver' | 'base64' | 'date' | 'file' | 'duration' | 'host';
+export type EnvScalarType = 'string' | 'number' | 'int' | 'boolean' | 'url' | 'port' | 'email' | 'json' | 'uuid' | 'hex' | 'ipv4' | 'semver' | 'base64' | 'date' | 'file' | 'duration' | 'host';
+export type EnvType = EnvScalarType | 'array';
 
 export interface EnvRule {
   type?: EnvType;
   required?: boolean;
-  /** A default may be an already-parsed object or array for `type: 'json'`, or a `Date` for `type: 'date'`. */
+  /** A default may be an already-parsed object or array for `type: 'json'` or `type: 'array'`, or a `Date` for `type: 'date'`. */
   default?: string | number | boolean | Date | Record<string, unknown> | unknown[] | null;
   choices?: Array<string | number | boolean>;
   /**
@@ -71,6 +72,18 @@ export interface EnvRule {
    */
   sensitive?: boolean;
   /**
+   * Item type for `type: 'array'` (default `'string'`). Every split element is
+   * coerced and validated as this type; nested `'array'` is not allowed.
+   * Ignored for other types.
+   */
+  of?: EnvScalarType;
+  /**
+   * Non-empty delimiter string for `type: 'array'` (default `','`).
+   * Empty items between or around separators are rejected with their index.
+   * Ignored for other types.
+   */
+  separator?: string;
+  /**
    * Deprecated variable names accepted as fallbacks when this key is unset
    * (e.g. `['OLD_NAME']`). The first populated alias supplies the value and
    * emits a deprecation warning; if the canonical key is also set, the
@@ -81,16 +94,26 @@ export interface EnvRule {
 
 export type EnvSchema = Record<string, EnvRule>;
 
+type EnvScalarValue<T> =
+  T extends 'number' | 'int' | 'port' | 'duration' ? number :
+  T extends 'boolean' ? boolean :
+  T extends 'json' ? unknown :
+  T extends 'date' ? Date :
+  string;
+
 /**
  * The value type of a rule, from the schema's `type` field:
  * 'number' / 'int' / 'port' / 'duration' -> number, 'boolean' -> boolean,
  * 'json' -> unknown (parsed JSON can be any shape), 'date' -> Date,
+ * 'array' -> array of the `of` item type (default `string[]`),
  * everything else (string / url / file / email / uuid / hex / ipv4 / semver / base64
  * / host / no type given) -> string.
  * A rule with a `transform` returns the transform's return type instead.
  */
 export type EnvValue<R extends EnvRule> =
   R extends { transform: (value: any) => infer T } ? T :
+  R extends { type: 'array'; of: infer O } ? EnvScalarValue<O>[] :
+  R extends { type: 'array' } ? string[] :
   R extends { type: 'number' } ? number :
   R extends { type: 'int' } ? number :
   R extends { type: 'port' } ? number :

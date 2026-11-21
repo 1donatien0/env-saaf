@@ -38,6 +38,7 @@ const TYPE_EXAMPLES = {
   file: './config.json',
   duration: '500ms, 30s, 15m, 2h, 1d, 1w',
   host: 'db.internal, localhost, 10.0.0.5',
+  array: 'a,b,c',
 };
 
 const KNOWN_TYPES = new Set(Object.keys(TYPE_EXAMPLES));
@@ -87,6 +88,12 @@ function validateSchema(schema) {
     if (rule.sensitive !== undefined && typeof rule.sensitive !== 'boolean') {
       errors.push(`${key}: "sensitive" must be a boolean`);
     }
+    if (rule.of !== undefined && (typeof rule.of !== 'string' || !KNOWN_TYPES.has(rule.of) || rule.of === 'array')) {
+      errors.push(`${key}: "of" must be a valid item type (e.g. 'string', 'number', 'url')`);
+    }
+    if (rule.separator !== undefined && (typeof rule.separator !== 'string' || rule.separator.length === 0)) {
+      errors.push(`${key}: "separator" must be a non-empty string`);
+    }
     if (rule.aliases !== undefined) {
       const bad = !Array.isArray(rule.aliases)
         || rule.aliases.some(a => typeof a !== 'string' || a.trim() === '');
@@ -98,7 +105,7 @@ function validateSchema(schema) {
   if (errors.length) throw new EnvSaafError(errors);
 }
 
-function coerce(key, raw, type, trim = true, protocols, sensitive = false) {
+function coerce(key, raw, type, trim = true, protocols, sensitive = false, of = 'string', separator = ',') {
   // trim: false (issue #84) keeps the raw value exactly as provided — for
   // values where the whitespace IS the value (a password with a significant
   // trailing space). The default stays true: stray spaces from pasted
@@ -319,6 +326,34 @@ function coerce(key, raw, type, trim = true, protocols, sensitive = false) {
       }
       return n;
     }
+    case 'array': {
+      // Split a delimited string (or validate an already-parsed array, e.g. a
+      // default) and coerce each item with `of` (default 'string'). Empty items
+      // are rejected rather than silently dropped so accidental double or
+      // trailing separators fail fast with the offending index and value.
+      let parts;
+      if (Array.isArray(raw)) {
+        parts = raw;
+      } else if (typeof raw === 'string') {
+        parts = raw.split(separator);
+      } else {
+        throw new Error(`${key}: expected a delimited list (e.g. ${TYPE_EXAMPLES.array}), got "${shown}"`);
+      }
+      const itemType = of || 'string';
+      return parts.map((part, i) => {
+        const itemKey = `${key}[${i}]`;
+        const itemVal = typeof part === 'string' ? (trim ? part.trim() : part) : part;
+        if (itemVal === undefined || itemVal === null || itemVal === '') {
+          if (itemType === 'string') {
+            const rawStr = part === undefined || part === null ? '' : String(part);
+            const itemShown = sensitive ? maskValue(rawStr) : rawStr;
+            throw new Error(`${itemKey}: expected a non-empty value, got "${itemShown}"`);
+          }
+          return coerce(itemKey, part === undefined || part === null ? '' : part, itemType, trim, protocols, sensitive);
+        }
+        return coerce(itemKey, part, itemType, trim, protocols, sensitive);
+      });
+    }
     default: throw new Error(`${key}: unknown type "${type}"`);
   }
 }
@@ -399,7 +434,7 @@ function validateEnv(schema, env = process.env, options = {}) {
     const sensitive = rule.sensitive === true;
     const shown = sensitive ? maskValue(raw) : raw;
     try {
-      const val = coerce(key, raw, rule.type || 'string', rule.trim !== false, rule.protocols, sensitive);
+      const val = coerce(key, raw, rule.type || 'string', rule.trim !== false, rule.protocols, sensitive, rule.of, rule.separator);
       // min/max: allowed range for numeric values (number, int, port, duration).
       // Runs right after coercion, before choices/pattern/transform; the
       // error names the allowed range. min alone or max alone both work.
@@ -924,11 +959,14 @@ function generateExample(schema) {
   for (const [key, rule] of Object.entries(schema)) {
     lines.push(`# type: ${rule.type || 'string'}${rule.required ? ', required' : ''}${rule.choices ? ', one of: ' + rule.choices.join('|') : ''}`);
     const looksSecret = rule.sensitive === true || key.split('_').some(part => SECRET_WORDS.has(part.toUpperCase()));
-    const placeholder = rule.default !== undefined ? rule.default
+    const placeholder = rule.default !== undefined
+      ? (rule.type === 'array' && Array.isArray(rule.default) ? rule.default.join(rule.separator || ',') : rule.default)
       : looksSecret ? ''
       : (rule.type === 'port' ? 3000 : rule.type === 'url' ? 'https://example.com'
         : rule.type === 'ipv4' ? '192.168.0.1' : rule.type === 'semver' ? '1.0.0'
-        : rule.type === 'date' ? '2026-01-31' : rule.type === 'duration' ? '15m' : rule.type === 'host' ? 'localhost' : rule.type === 'file' ? './config.json' : 'your_value_here');
+        : rule.type === 'date' ? '2026-01-31' : rule.type === 'duration' ? '15m' : rule.type === 'host' ? 'localhost'
+        : rule.type === 'file' ? './config.json'
+        : rule.type === 'array' ? ['a', 'b', 'c'].join(rule.separator || ',') : 'your_value_here');
     lines.push(`${key}=${placeholder}`);
   }
   return lines.join('\n') + '\n';
