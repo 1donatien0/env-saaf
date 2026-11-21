@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Fixed: the first `check` after `init` no longer fails on one UNUSED line per scaffolded key — when no code reads any variable yet, the check passes with a single note saying the scaffold is ahead of the code; once code reads at least one variable, unused keys fail the run exactly as before, and any MISSING, EXTRA or INVALID finding still fails (fixes #170, fixes #178).
 - Fixed: Reject non-finite values and overflowing exponent literals in numeric configuration (fixes #175).
 - Docs: add a runnable Docker and Docker Compose startup validation example explaining `ENV`, `--env-file`, and Compose `environment:` (fixes #66).
 - Added: the `duration` type accepts `w` for weeks (`1w` = 7 days = 604,800,000 ms); like the other units it is case-insensitive and takes decimals (`1.5w`), and the error message now lists `1w` among the examples (fixes #176)
