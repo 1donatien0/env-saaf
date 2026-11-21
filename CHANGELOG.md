@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Fixed: reject aliases that collide with declared schema keys or are shared by different rules before validating environment values, including with `throwOnError: false` (fixes #205).
+
 - Fixed: `validateSchema` now rejects a rule that sets both `required: true` and `requiredIf`, and a `requiredIf` that names its own key — both are contradictory combinations that used to be silently accepted (`required` winning, the self-reference never firing) (fixes #204).
 - Added: `requiredIf` rule option (`{ key, equals }` or `{ key, in: [...] }`) — makes a variable conditionally required in a second pass after all keys are coerced and defaults are applied, so schema key order does not matter; missing keys when the condition holds produce the usual `missing required variable` error, while false conditions or absent referenced keys leave the variable optional, and malformed `requiredIf` specs are rejected up front in schema validation (fixes #51).
 - Added: `array` type — splits a delimited string on `separator` (default `','`) and coerces each item with `of` (default `'string'`; any built-in scalar type, plus `protocols` when `of: 'url'`). Empty items are rejected rather than silently dropped, invalid items report their 0-based index and value (masked when `sensitive: true`), malformed `of`/`separator` options are rejected up front, array defaults and TypeScript element-type inference are supported, and `generateExample` suggests a delimited placeholder (fixes #46).

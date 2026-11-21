@@ -49,6 +49,8 @@ const KNOWN_TYPES = new Set(Object.keys(TYPE_EXAMPLES));
 // silently (issue #134). Errors name the key and the offending option.
 function validateSchema(schema) {
   const errors = [];
+  const keys = new Set(Object.keys(schema));
+  const aliasOwners = new Map();
   for (const [key, rule] of Object.entries(schema)) {
     if (rule === null || typeof rule !== 'object' || Array.isArray(rule)) continue;
     if (rule.type !== undefined && !KNOWN_TYPES.has(rule.type)) {
@@ -124,6 +126,16 @@ function validateSchema(schema) {
         || rule.aliases.some(a => typeof a !== 'string' || a.trim() === '');
       if (bad) {
         errors.push(`${key}: "aliases" must be an array of non-empty strings`);
+      } else {
+        for (const alias of rule.aliases) {
+          if (keys.has(alias)) {
+            errors.push(`${key}: alias "${alias}" conflicts with a declared schema key`);
+          } else if (aliasOwners.has(alias) && aliasOwners.get(alias) !== key) {
+            errors.push(`${key}: alias "${alias}" is already used by "${aliasOwners.get(alias)}"`);
+          } else {
+            aliasOwners.set(alias, key);
+          }
+        }
       }
     }
   }
