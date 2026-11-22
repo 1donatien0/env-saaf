@@ -49,6 +49,29 @@ const KNOWN_TYPES = new Set(Object.keys(TYPE_EXAMPLES));
 const STRING_TYPES = new Set([
   'string', 'email', 'url', 'file', 'uuid', 'hex', 'ipv4', 'semver', 'base64', 'host',
 ]);
+const KNOWN_RULE_OPTIONS = new Set([
+  'type',
+  'required',
+  'requiredIf',
+  'default',
+  'choices',
+  'min',
+  'max',
+  'minLength',
+  'maxLength',
+  'length',
+  'protocols',
+  'pattern',
+  'validate',
+  'transform',
+  'trim',
+  'sensitive',
+  'of',
+  'separator',
+  'minItems',
+  'maxItems',
+  'aliases',
+]);
 
 // Validate the shape of the schema itself, independent of any env values.
 // These checks used to live only inside the per-key coercion loop, so an
@@ -60,6 +83,11 @@ function validateSchema(schema) {
   const aliasOwners = new Map();
   for (const [key, rule] of Object.entries(schema)) {
     if (rule === null || typeof rule !== 'object' || Array.isArray(rule)) continue;
+    for (const opt of Object.keys(rule)) {
+      if (!KNOWN_RULE_OPTIONS.has(opt)) {
+        errors.push(`${key}: unknown option "${opt}"`);
+      }
+    }
     if (rule.type !== undefined && !KNOWN_TYPES.has(rule.type)) {
       errors.push(`${key}: unknown type "${rule.type}"`);
     }
