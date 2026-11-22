@@ -358,11 +358,10 @@ function coerce(key, raw, type, trim = true, protocols, sensitive = false, of = 
       return s;
     }
     case 'base64': {
-      // Standard base64 only: A-Za-z0-9+/ with '=' padding, total length
-      // a multiple of 4. Base64url ('-' and '_') is not accepted. The
-      // value is returned unchanged.
       const s = String(v);
-      if (!/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(s) || s.length === 0) {
+      const match = /^([A-Za-z0-9+/_-]+)(={0,2})$/.exec(s);
+      if (!match || (/[+/]/.test(s) && /[-_]/.test(s)) ||
+          match[1].length % 4 === 1 || (match[2] && s.length % 4 !== 0)) {
         throw new Error(`${key}: expected a valid base64 string (e.g. ${TYPE_EXAMPLES.base64}), got "${shown}"`);
       }
       return s;
