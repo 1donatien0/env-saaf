@@ -139,3 +139,33 @@ const validatedNotes: string | undefined = validated.NOTES;
 
 
 export { port, count, url, mode, debug, name, doubled, fixed, wrongType, typo, debugStrict, myPort, myDebug, looseValue, tenantId, apiHash, collectedPort, collectedDebug, collectedErrors, collectedAsEnv, throwingPort, condSentry, condAlert, condTls, condFallback, condSentryStrict, validatedPort, validatedHost, validatedFlag, validatedNotes, wrongPorts, tags, ports, origins, flags, aliasedUrl, aliasedPort, aliasKey };
+
+// Issue #228: group rules nest in the inferred result type.
+import { EnvGroupRule } from './index';
+
+const grouped = validateEnv({
+  DB: {
+    prefix: 'DB_',
+    schema: {
+      HOST: { type: 'host', required: true },
+      PORT: { type: 'port', default: 5432 },
+      USER: { type: 'string' },
+    },
+  },
+  NAME: { type: 'string' },
+});
+
+// the group key is optional (present when at least one inner key validated)
+const dbGroup = grouped.DB;
+if (dbGroup) {
+  const gHost: string = dbGroup.HOST; // required inner rule -> always present inside the group
+  const gPort: number = dbGroup.PORT; // default inner rule -> number
+  const gUser: string | undefined = dbGroup.USER; // optional inner rule
+  void gHost; void gPort; void gUser;
+}
+const groupedName: string | undefined = grouped.NAME;
+void groupedName;
+
+// a group rule is assignable to EnvSchema via EnvGroupRule
+const groupRule: EnvGroupRule = { prefix: 'X_', schema: { A: { type: 'string' } } };
+void groupRule;

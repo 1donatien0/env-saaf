@@ -3813,4 +3813,137 @@ assert.deepStrictEqual(
   );
 }
 
+
+// feat: grouped (nested) schemas with a key prefix (fixes #228)
+{
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const path = require('node:path');
+  const { validateEnv, validateSchema, loadEnv, generateExample, EnvSaafError } = require('./index');
+
+  // The issue's example: validates, coerces and nests; a missing grouped key
+  // errors with the FULL env name (DB_HOST, not DB.HOST).
+  const schema = {
+    DB: { prefix: 'DB_', schema: {
+      HOST: { type: 'host', required: true },
+      PORT: { type: 'port', default: 5432 },
+    } },
+  };
+  const out = validateEnv(schema, { DB_HOST: 'db.internal' });
+  assert.deepStrictEqual(out, { DB: { HOST: 'db.internal', PORT: 5432 } });
+  assert.deepStrictEqual(validateEnv(schema, { DB_HOST: 'db.internal', DB_PORT: '6543' }), { DB: { HOST: 'db.internal', PORT: 6543 } });
+  assert.throws(
+    () => validateEnv(schema, {}),
+    err => err instanceof EnvSaafError && err.errors.length === 1 && err.errors[0] === 'DB_HOST: missing required variable',
+  );
+  // Coercion errors inside a group also name the full env name.
+  assert.throws(
+    () => validateEnv(schema, { DB_HOST: 'db.internal', DB_PORT: 'not-a-port' }),
+    err => err instanceof EnvSaafError && err.errors.some(e => e.startsWith('DB_PORT:')),
+  );
+  // An optional inner key that is absent simply leaves the group without it;
+  // when no inner key is present at all, the group key is absent too.
+  const withOpt = { CACHE: { prefix: 'CACHE_', schema: { HOST: { type: 'host', required: true }, TTL: { type: 'int' } } } };
+  assert.deepStrictEqual(validateEnv(withOpt, { CACHE_HOST: 'redis.local' }), { CACHE: { HOST: 'redis.local' } });
+  // throwOnError: false returns the nested shape plus errors.
+  const soft = validateEnv(schema, {}, { throwOnError: false });
+  assert.deepStrictEqual(soft.env, { DB: { PORT: 5432 } }); // defaults still apply in soft mode
+  assert.deepStrictEqual(soft.errors, ['DB_HOST: missing required variable']);
+
+  // strict mode knows the flattened names: DB_HOST is fine, DB_OTHER is not.
+  validateEnv(schema, { DB_HOST: 'db.internal', DB_PORT: '1' }, { strict: true, onWarn: () => {} });
+  assert.throws(
+    () => validateEnv(schema, { DB_HOST: 'db.internal', DB_OTHER: 'x' }, { strict: true }),
+    err => err instanceof EnvSaafError && err.errors.some(e => e === 'DB_OTHER: set but not in schema (strict mode)'),
+  );
+
+  // aliases inside a group use FULL env names (verbatim, not prefixed).
+  const withAlias = { DB: { prefix: 'DB_', schema: { HOST: { type: 'host', required: true, aliases: ['DATABASE_HOST'] } } } };
+  const warnings = [];
+  const aliased = validateEnv(withAlias, { DATABASE_HOST: 'db.internal' }, { onWarn: m => warnings.push(m) });
+  assert.deepStrictEqual(aliased, { DB: { HOST: 'db.internal' } });
+  assert.ok(warnings.some(w => w.includes('DATABASE_HOST is deprecated')));
+
+  // requiredIf across groups / to external keys uses full env names too.
+  const crossGroup = {
+    DB: { prefix: 'DB_', schema: { HOST: { type: 'host', required: true } } },
+    MAIL: { prefix: 'MAIL_', schema: { SMTP_HOST: { type: 'host', requiredIf: { key: 'DB_HOST', equals: 'db.internal' } } } },
+  };
+  assert.throws(
+    () => validateEnv(crossGroup, { DB_HOST: 'db.internal' }),
+    err => err instanceof EnvSaafError && err.errors.includes('MAIL_SMTP_HOST: missing required variable'),
+  );
+  assert.deepStrictEqual(
+    validateEnv(crossGroup, { DB_HOST: 'other.host', MAIL_SMTP_HOST: 'smtp.local' }),
+    { DB: { HOST: 'other.host' }, MAIL: { SMTP_HOST: 'smtp.local' } },
+  );
+  // requiredIf can also point at an undeclared external key (e.g. NODE_ENV).
+  const ext = { A: { prefix: 'A_', schema: { KEY: { requiredIf: { key: 'NODE_ENV', equals: 'production' } } } } };
+  assert.throws(
+    () => validateEnv(ext, { NODE_ENV: 'production' }),
+    err => err instanceof EnvSaafError && err.errors.includes('A_KEY: missing required variable'),
+  );
+  assert.deepStrictEqual(validateEnv(ext, { NODE_ENV: 'development' }), {});
+
+  // transform inside a group lands nested, type-verified as usual.
+  const withTransform = { S: { prefix: 'S_', schema: { NAME: { type: 'string', transform: v => v.toUpperCase() } } } };
+  assert.deepStrictEqual(validateEnv(withTransform, { S_NAME: 'abc' }), { S: { NAME: 'ABC' } });
+
+  // generateExample emits FLAT env names for a group, with a group comment.
+  const example = generateExample({
+    APP_NAME: { type: 'string', required: true },
+    DB: { prefix: 'DB_', schema: { HOST: { type: 'host', required: true }, PORT: { type: 'port', default: 5432 } } },
+  });
+  assert.ok(example.includes('# group DB'));
+  assert.ok(example.includes('DB_HOST='));
+  assert.ok(example.includes('DB_PORT=5432'));
+  assert.ok(!example.includes('DB.HOST'), 'example must stay flat');
+  assert.ok(example.indexOf('APP_NAME=') < example.indexOf('DB_HOST='));
+
+  // loadEnv with a group: returns the nested shape; assign writes FLAT names.
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'env-saaf-group-'));
+  try {
+    const file = path.join(dir, '.env');
+    fs.writeFileSync(file, 'DB_HOST=db.internal\nDB_PORT=6543\n');
+    const loaded = loadEnv(schema, { path: file, env: {} });
+    assert.deepStrictEqual(loaded, { DB: { HOST: 'db.internal', PORT: 6543 } });
+    const target = {};
+    loadEnv(schema, { path: file, env: target, assign: true });
+    assert.strictEqual(target.DB_HOST, 'db.internal');
+    assert.strictEqual(target.DB_PORT, '6543');
+    assert.ok(!('DB' in target), 'assign must not write a nested group object');
+    // required inner rule counts when no file is found
+    assert.throws(
+      () => loadEnv(schema, { paths: [path.join(dir, 'missing.env')], env: {} }),
+      /required variables missing: DB_HOST/,
+    );
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+
+  // validateSchema rejects malformed groups up front (flat schemas unchanged).
+  const bad = (s, msgPart) => assert.throws(
+    () => validateSchema(s),
+    err => err instanceof EnvSaafError && err.errors.some(e => e.includes(msgPart)),
+    JSON.stringify(s),
+  );
+  bad({ G: { schema: { A: {} } } }, 'needs a non-empty string "prefix"');                 // no prefix
+  bad({ G: { prefix: 'G_', schema: 'nope' } }, 'group "schema" must be an object');          // schema not an object
+  bad({ G: { prefix: 'G_', schema: {} } }, 'group "schema" must not be empty');                // empty group
+  bad({ G: { prefix: 'G_', schema: { A: {} }, type: 'string' } }, 'cannot also set "type"');  // type + schema
+  bad({ G: { prefix: 'G_', schema: { A: {} }, required: true } }, 'group rules only support'); // extra option on group
+  bad({ G: { prefix: 'G_', schema: { A: { schema: {} } } } }, 'groups cannot be nested');     // nested group
+  bad({ G: { prefix: 'G_', schema: { A: { type: 'nope' } } } }, 'G_A: unknown type');         // inner rule error uses full name
+  bad({ DB_HOST: { type: 'string' }, G: { prefix: 'DB_', schema: { HOST: {} } } }, 'collide'); // prefix collision with a declared key
+  bad({ A: { prefix: 'X_', schema: { K: {} } }, B: { prefix: 'X_', schema: { K: {} } } }, 'collide'); // two groups collide
+  // a valid group passes validateSchema
+  validateSchema(schema);
+
+  // Flat schemas behave exactly as before (regression guard).
+  assert.deepStrictEqual(
+    validateEnv({ PORT: { type: 'port', default: 3000 }, NAME: { type: 'string' } }, { NAME: 'x' }),
+    { PORT: 3000, NAME: 'x' },
+  );
+}
+
 console.log('env-saaf v1.5.0: all tests passed');

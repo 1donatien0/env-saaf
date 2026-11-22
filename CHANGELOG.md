@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Added: grouped (nested) schemas — a rule with a `schema` object and a `prefix` (and no `type`) reads inner rules from prefixed env vars (`DB_` + `HOST` -> `DB_HOST`) and nests the result (`{ DB: { HOST, ... } }`); errors name the full env var; `strict`/`aliases`/`requiredIf`/`default`/`transform` work inside groups (aliases and requiredIf keys use full env names there); `generateExample` emits the flat prefixed keys with a group comment; `loadEnv` assign writes flat names; `validateSchema` is now exported and rejects malformed groups up front (bad prefix/schema shape, `type` on a group, nested groups, prefix collisions) (fixes #228).
+
 - Added: `test-cli.js`, a CLI integration suite wired into `npm test`, that runs `cli.js` as a real subprocess in throwaway temp projects and asserts process-level behaviour — exit codes, stdout vs stderr, `--json` shape, `check`/`scan`/`example --write`/`init` round-trips in CommonJS and `"type": "module"` projects, missing-directory errors — with a scrubbed child environment so developer env vars cannot leak in (fixes #237).
 
 - Added: `scanCode` (and therefore `scanDir` and the CLI `scan`/`check`/`example` commands) detects Vite-style `import.meta.env` reads — dot access (`import.meta.env.VITE_API_KEY`), bracket access and destructuring — returned in the same sorted list as `process.env` reads, with the same rule that mentions inside comments and string literals do not count (fixes #225).
