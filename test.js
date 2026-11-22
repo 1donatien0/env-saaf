@@ -1285,11 +1285,15 @@ assert.deepStrictEqual(
   }
   assert.throws(() => validateEnv({ IP: { type: 'ipv4', required: true } }, {}), EnvSaafError);
 
-  // semver: MAJOR.MINOR.PATCH, no leading 'v'; pre-release and build suffixes pass.
+  // semver: MAJOR.MINOR.PATCH, one optional lowercase 'v' prefix; pre-release and build suffixes pass.
   assert.strictEqual(validateEnv({ V: { type: 'semver' } }, { V: '1.2.3' }).V, '1.2.3');
   assert.strictEqual(validateEnv({ V: { type: 'semver' } }, { V: '1.2.3-beta.1' }).V, '1.2.3-beta.1');
   assert.strictEqual(validateEnv({ V: { type: 'semver' } }, { V: '0.0.1+build.5' }).V, '0.0.1+build.5');
-  for (const bad of ['1.2', 'v1.2.3', '1.02.3', '1.2.3.4', 'latest', '1.2.x']) {
+  // Issue #227: a 'v' prefix is accepted and returned unchanged, prefix included.
+  assert.strictEqual(validateEnv({ V: { type: 'semver' } }, { V: 'v1.2.3' }).V, 'v1.2.3');
+  assert.strictEqual(validateEnv({ V: { type: 'semver' } }, { V: 'v1.2.3-rc.1' }).V, 'v1.2.3-rc.1');
+  assert.strictEqual(validateEnv({ V: { type: 'semver' } }, { V: 'v1.2.3+build' }).V, 'v1.2.3+build');
+  for (const bad of ['1.2', 'v1.2', 'vv1.2.3', 'v', 'V1.2.3', '1.02.3', '1.2.3.4', 'latest', '1.2.x']) {
     assert.throws(() => validateEnv({ V: { type: 'semver' } }, { V: bad }), /expected a valid semantic version/);
   }
 
@@ -2126,7 +2130,7 @@ assert.deepStrictEqual(
     ['uuid', 'not-a-uuid', 'e.g. 550e8400-e29b-41d4-a716-446655440000'],
     ['hex', 'not-hex!', 'e.g. deadbeef'],
     ['ipv4', '999.1.1.1', 'e.g. 192.168.0.1'],
-    ['semver', 'v1.2.3', 'e.g. 1.2.3'],
+    ['semver', '1.2', 'e.g. 1.2.3'],
     ['base64', 'not base64!', 'e.g. aGVsbG8='],
     ['port', 'abc', '0-65535, e.g. 3000'],
     ['date', '2026-02-31', 'e.g. 2026-01-31'],
