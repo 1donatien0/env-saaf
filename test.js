@@ -64,6 +64,41 @@ assert.deepStrictEqual(parseEnvFile('PORT=3000\nNAME="my app"\n'), { PORT: '3000
 assert.deepStrictEqual(scanCode('process.env.API_URL; const { PORT } = process.env;'), ['API_URL', 'PORT']);
 assert.deepStrictEqual(diffEnv(['A', 'B'], ['A', 'C']), { usedNotDocumented: ['B'], documentedNotUsed: ['C'] });
 
+// Issue #221: assignment-shaped lines with invalid keys must not disappear.
+{
+  const secret = 'do-not-echo-this-value';
+  for (const key of ['app.name', 'MY-KEY', 'MY KEY', '9NAME', '', '?', '??']) {
+    assert.throws(
+      () => parseEnvFile(`${key}=${secret}`),
+      err => err instanceof SyntaxError && err.message === 'line 1: expected KEY=VALUE',
+    );
+    for (const newline of ['\n', '\r\n']) {
+      for (const prefix of ['', 'export ', 'export\t']) {
+        const input = ['# comment with KEY=VALUE', '', 'CERT="one', 'two"',
+          ` ${prefix}${key}=${secret} # trailing`, 'PLAIN=1'].join(newline);
+        assert.throws(
+          () => parseEnvFile(input),
+          err => err instanceof SyntaxError && err.message === 'line 5: expected KEY=VALUE'
+            && !err.message.includes(secret),
+        );
+      }
+    }
+  }
+  // Invalid-looking assignments inside comments and quoted values are data.
+  for (const newline of ['\n', '\r\n']) {
+    const input = ['# app.name=ignored', '\t# MY-KEY=ignored', '',
+      'export _NAME9 = "a=b # literal" # MY KEY=ignored',
+      "SINGLE='MY KEY=literal'", 'MULTI="first', 'app.name=literal',
+      'MY-KEY=literal', 'MY KEY=literal', 'last" # ignored=comment',
+      'PLAIN=1 # app.name=ignored', 'EMPTY= # MY-KEY=ignored'].join(newline);
+    assert.deepStrictEqual(parseEnvFile(input), {
+      _NAME9: 'a=b # literal', SINGLE: 'MY KEY=literal',
+      MULTI: 'first\napp.name=literal\nMY-KEY=literal\nMY KEY=literal\nlast',
+      PLAIN: '1', EMPTY: '',
+    });
+  }
+}
+
 // Issue #69: deterministic combinations of the documented .env syntax.
 {
   let seed = 0x62a47f21;
@@ -73,7 +108,8 @@ assert.deepStrictEqual(diffEnv(['A', 'B'], ['A', 'C']), { usedNotDocumented: ['B
   };
   const spaces = ['', ' ', '  ', '\t'];
   const fragments = ['sample', '42', 'x=y', 'with#hash', 'café', 'path\\part'];
-  const noise = ['', '# comment', '? = value', "UNCLOSED='", '??='];
+  // Malformed assignments are errors (#221); only use them as comments here.
+  const noise = ['', '# comment', '# ? = value', "UNCLOSED='", '# ??='];
 
   for (let sample = 0; sample < 128; sample++) {
     const newline = pick(['\n', '\r\n']);
@@ -1522,6 +1558,32 @@ assert.deepStrictEqual(
     assert.strictEqual(check.stdout, '');
     assert.match(check.stderr, /\.env: line 1: expected KEY=VALUE/);
     assert.doesNotMatch(check.stderr, /fake secret value/);
+
+    // Issue #221: invalid assignment keys use the same CLI error contract.
+    fs.writeFileSync(path.join(dir, '.env.example'), '# config\napp.name=private-value\n');
+    const invalidKey = run('scan', dir, '--json');
+    assert.strictEqual(invalidKey.status, 2);
+    assert.strictEqual(invalidKey.stderr, '');
+    const invalidKeyError = JSON.parse(invalidKey.stdout);
+    assert.strictEqual(invalidKeyError.ok, false);
+    assert.match(invalidKeyError.error, /\.env\.example: line 2: expected KEY=VALUE/);
+    assert.doesNotMatch(invalidKey.stdout, /private-value/);
+
+    fs.writeFileSync(path.join(dir, '.env.example'), 'FOO=\n');
+    fs.writeFileSync(path.join(dir, '.env'), 'FOO=ok\r\nMY-KEY=private-value\r\n');
+    const invalidEnv = run('check', dir);
+    assert.strictEqual(invalidEnv.status, 2);
+    assert.strictEqual(invalidEnv.stdout, '');
+    assert.match(invalidEnv.stderr, /\.env: line 2: expected KEY=VALUE/);
+    assert.doesNotMatch(invalidEnv.stderr, /private-value/);
+    const target = {};
+    assert.throws(
+      () => require('./index').loadEnv({ FOO: { type: 'string' } }, {
+        path: path.join(dir, '.env'), env: target, assign: true,
+      }),
+      err => err instanceof SyntaxError && err.message === 'line 2: expected KEY=VALUE',
+    );
+    assert.deepStrictEqual(target, {});
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }

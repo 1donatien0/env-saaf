@@ -348,7 +348,7 @@ Use `${VAR:-fallback}` to supply a fallback when a value is unset or expands to 
 
 Quoted values may also span several lines (PEM keys, JSON blobs) — parsing continues until the closing quote. A backslash-escaped quote (`\'` inside single quotes, `\"` inside double quotes) stays part of the value, so `B='it\'s'` is `it's`; other backslashes, such as a Windows path, are kept as-is.
 
-A bare line without `=` raises a syntax error with its line number. Use `KEY=` for an empty value.
+A bare line without `=`, or an assignment with an invalid key (such as `app.name`, `MY-KEY` or `MY KEY`), raises a syntax error with its line number, without echoing the value. Keys must match `[A-Za-z_][A-Za-z0-9_]*`. Use `KEY=` for an empty value.
 
 The manual way still works too — parse the file and pass it in:
 
