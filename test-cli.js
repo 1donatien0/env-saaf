@@ -311,6 +311,27 @@ try {
     assert.match(schemaText, /E: \{ type: 'int' \}/);
   }
 
+  // --- issue #232 (review fix): malformed samples must not infer 'email'/'url' —
+  // the generated schema has to validate against the example's own values.
+  {
+    const dir = mkProject({ '.env.example': 'BAD_EMAIL=a@.b.com\nBAD_URL=http://host:abc\nGOOD_EMAIL=admin@example.com\nGOOD_URL=https://api.example.com/v1\n' });
+    const r = run(['init', dir, '--from-example'], dir);
+    assert.strictEqual(r.status, 0, `${r.stdout}${r.stderr}`);
+    const schemaText = fs.readFileSync(path.join(dir, 'env.schema.js'), 'utf8');
+    // 'a@.b.com' has a domain starting with a dot and 'http://host:abc' has an
+    // invalid port — both fail the corresponding validators, so they infer 'string'.
+    assert.match(schemaText, /BAD_EMAIL: \{ type: 'string' \}/);
+    assert.match(schemaText, /BAD_URL: \{ type: 'string' \}/);
+    assert.doesNotMatch(schemaText, /BAD_EMAIL: \{ type: 'email' \}/);
+    assert.doesNotMatch(schemaText, /BAD_URL: \{ type: 'url' \}/);
+    // Valid samples still infer their types.
+    assert.match(schemaText, /GOOD_EMAIL: \{ type: 'email' \}/);
+    assert.match(schemaText, /GOOD_URL: \{ type: 'url' \}/);
+    // Acceptance: check passes against the example's own values.
+    const c = run(['check', dir, '--file', '.env.example', '--schema', 'env.schema.js'], dir);
+    assert.strictEqual(c.status, 0, `check against the example should pass, got ${c.status}: ${c.stdout}${c.stderr}`);
+  }
+
   // --- issue #232: --from-example=FILE names a different example file
   {
     const dir = mkProject({ '.env.sample': 'TOKEN=abc123\n' });

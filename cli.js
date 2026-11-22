@@ -151,8 +151,22 @@ function inferTypeFromSample(sample) {
     return n >= 1024 && n <= 65535 ? 'port' : 'int';
   }
   if (/^(true|false)$/i.test(v)) return 'boolean';
-  if (/^https?:\/\/\S+$/i.test(v)) return 'url';
-  if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v)) return 'email';
+  if (/^https?:\/\//i.test(v)) {
+    // Match the 'url' validator: new URL() must parse the value and the scheme
+    // must be http(s) — 'http://host:abc' has an invalid port, check rejects it,
+    // so it must not infer as 'url' (falls through to 'string').
+    try {
+      const parsed = new URL(v);
+      if (parsed.protocol === 'http:' || parsed.protocol === 'https:') return 'url';
+    } catch { /* not a parseable URL — fall through */ }
+  }
+  if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v)) {
+    // Match the 'email' validator: the domain must not start or end with a
+    // dot — 'a@.b.com' fails check ("domain may not start with a dot"), so it
+    // must not infer as 'email' (falls through to 'string').
+    const domain = v.slice(v.indexOf('@') + 1);
+    if (!domain.startsWith('.') && !domain.endsWith('.')) return 'email';
+  }
   if (Number.isFinite(Number(v))) return 'number';
   return 'string';
 }
