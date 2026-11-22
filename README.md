@@ -637,6 +637,8 @@ An empty value stays empty — `maskValue('')` returns `''`, so an unset secret 
 | **Error aggregation** | Collects all errors in one pass (`EnvSaafError`, or `{ env, errors }` with `throwOnError: false`) | Collects all errors in one pass (passed to default or custom `reporter`) | Stops on first error by default; pass `{ abortEarly: false }` to collect all | Collects all issues in one pass (`ZodError` via `parse`, or `{ success, error }` via `safeParse`) |
 | **TypeScript inference** | Ships `index.d.ts`; infers flat object types from inline / `as const` schemas (`json` infers as `unknown`, `choices` stays widened) | Written in TypeScript; infers validator return types including literal unions for `choices` | Ships types, but does not infer static TS types from schemas (define interfaces separately or use codegen) | TypeScript-first static inference (`z.infer<typeof schema>`) across nested objects, unions, literals, and transforms |
 
+A comparison is not a migration path, though — see [Migrating to env-saaf](#migrating-to-env-saaf) below for concrete before/after steps from `dotenv`, `dotenv-safe` and `envalid`.
+
 ### When `env-saaf` is a good fit
 
 - You want startup env validation, `.env` file loading (with layering and `${VAR}` interpolation), secret masking, and a CI CLI (`env-saaf check`) to keep `.env.example` in sync with code — all in one zero-dependency Node.js package.
@@ -646,6 +648,95 @@ An empty value stays empty — `maskValue('')` returns `''`, so an unset secret 
 - **Validating HTTP requests, API payloads, forms, or nested JSON:** `env-saaf` only validates flat environment variable maps and has no nested object schemas or cross-field conditional rules. Use **zod** (especially in TypeScript) or **joi** when you need general data validation.
 - **You already use `zod` or `joi` in the project:** If you already depend on one of them for request/data validation and do not need `env-saaf`'s `.env` parser or `scan`/`check` CLI, validating `process.env` with your existing library avoids adding another tool.
 - **Richer TypeScript inference or non-Node runtimes:** Use **zod** for full static type inference (nested shapes, discriminated unions, narrowed literal enums) or browser/edge runtime support (`env-saaf` uses Node built-ins `node:fs`, `node:net`, and `node:path`). Use **envalid** if you want env-only validation with `devDefault`, proxy-guarded env access, or literal-union inference from `choices`.
+
+## Migrating to env-saaf
+
+Three short paths, each ending with a complete snippet that runs against the current API (verified against this release). The `.env` file itself never has to change.
+
+### From `dotenv` (manual `process.env` reads)
+
+Keep the `.env` file exactly as it is. Replace the scattered `process.env.X` reads with one schema plus `loadEnv`, which parses `.env`, validates every value and returns typed results — and run `env-saaf scan` first to find every read you have.
+
+```bash
+npx env-saaf scan ./src          # every env var your code actually uses, one per line
+npx env-saaf scan ./src --json   # same list as JSON, for scripts
+```
+
+```js
+// before — dotenv + hand-rolled reads, nothing validated
+require('dotenv').config();
+const port = Number(process.env.PORT || 3000);   // 'abc' -> NaN, silently
+const dbUrl = process.env.DATABASE_URL;          // may be undefined
+
+// after — same .env file, one schema, typed + validated at startup
+const { loadEnv } = require('env-saaf');
+const env = loadEnv({
+  PORT: { type: 'port', default: 3000 },          // validated integer 0-65535, default 3000
+  DATABASE_URL: { type: 'url', required: true },  // throws if missing or malformed
+  DEBUG: { type: 'boolean', default: false },     // 'yes'/'on'/'1' -> true
+});
+// env.PORT is a number, env.DATABASE_URL a valid URL; a bad or missing value
+// throws EnvSaafError listing *every* problem at once (or pass
+// { throwOnError: false } to get { env, errors } instead).
+```
+
+### From `dotenv-safe` (the `.env.example` contract)
+
+`dotenv-safe` fails at boot when `.env` is missing a key that `.env.example` declares. env-saaf keeps the same `.env.example` file and moves the contract check to where drift actually happens — CI — plus a schema check at boot.
+
+| `dotenv-safe` | env-saaf |
+| --- | --- |
+| `require('dotenv-safe').config({ example: '.env.example' })` in code; boot crash on a missing key | keep `.env.example` unchanged; `npx env-saaf check` compares it with your code and your real `.env` (exit 1 on any `MISSING` / `EXTRA` / `UNUSED` / `INVALID` finding) |
+| no type validation — every value stays a string | `loadEnv(schema)` coerces and validates each value (`port`, `url`, `boolean`, …) at boot |
+| `allowEmptyValues: false` option | `sensitive: true` masks the value in errors/output and leaves its `.env.example` placeholder empty; empty *optional* values stay allowed |
+
+```js
+// before — dotenv-safe
+require('dotenv-safe').config({ example: '.env.example', allowEmptyValues: false });
+const port = process.env.PORT; // still a string
+
+// after — same .env.example, checked in CI and validated at boot
+// (CI)   npx env-saaf check .          -> exit 1 listing every drift finding
+// (boot) const { loadEnv } = require('env-saaf');
+//        const env = loadEnv({ PORT: { type: 'port', required: true } });
+//        env.PORT // number, already validated
+```
+
+### From `envalid` (validator mapping)
+
+The common validators map one-to-one onto env-saaf rule types:
+
+| envalid | env-saaf rule | difference that matters |
+| --- | --- | --- |
+| `str()` | `{ type: 'string' }` | trimmed by default (`trim: false` to keep whitespace); `pattern` / `minLength` / `maxLength` available |
+| `str({ default: 'dev' })` | `{ type: 'string', default: 'dev' }` | defaults are validated like provided values |
+| `str({ choices: ['dev', 'prod'] })` | `{ choices: ['dev', 'prod'] }` | `choices` matches the *coerced* value (works for numbers/booleans too) |
+| `num()` | `{ type: 'number' }` | `min` / `max` bound the parsed number |
+| `port()` | `{ type: 'port' }` | integer 0–65535, parsed to a number |
+| `bool()` | `{ type: 'boolean' }` | accepts `true/false`, `yes/no`, `on/off`, `1/0`, `y/n` |
+| `url()` | `{ type: 'url' }` | `protocols: ['https']` allowlists schemes |
+| `email()` | `{ type: 'email' }` | — |
+| `json()` | `{ type: 'json' }` | parsed to a real JS value, not a string |
+
+Both libraries aggregate all errors in one pass; env-saaf throws an `EnvSaafError` whose `.errors` lists every problem (or returns `{ env, errors }` with `throwOnError: false`).
+
+```js
+// before — envalid
+const { cleanEnv, str, port, bool, url } = require('envalid');
+const env = cleanEnv(process.env, {
+  API_URL: url(),
+  PORT: port({ default: 3000 }),
+  DEBUG: bool({ default: false }),
+});
+
+// after — env-saaf (same .env, same behaviour, zero-dependency, plus .env parsing + scan/check CLI)
+const { loadEnv } = require('env-saaf');
+const env = loadEnv({
+  API_URL: { type: 'url', required: true },
+  PORT: { type: 'port', default: 3000 },
+  DEBUG: { type: 'boolean', default: false },
+});
+```
 
 ## Versions
 
