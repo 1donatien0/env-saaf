@@ -246,6 +246,147 @@ try {
       /deliberately wrong expectation/,
     );
   }
+
+  // --- issue #232: init --from-example infers a schema from an existing example
+  {
+    const example = [
+      'APP_NAME=demo-app',
+      'PORT=5432',
+      'DEBUG=true',
+      'API_URL=https://api.example.com/v1',
+      'SUPPORT_EMAIL=admin@example.com',
+      'RETRIES=3',
+      'RATIO=2.5',
+      'EMPTY=',
+      'DB_HOST=db.internal',
+      '',
+    ].join('\n');
+    const allKeys = 'console.log(' + ['APP_NAME','PORT','DEBUG','API_URL','SUPPORT_EMAIL','RETRIES','RATIO','EMPTY','DB_HOST'].map(k => `process.env.${k}`).join(', ') + ');\n';
+    const dir = mkProject({ '.env.example': example, 'src/app.js': allKeys });
+    const r = run(['init', dir, '--from-example'], dir);
+    assert.strictEqual(r.status, 0, `init --from-example should exit 0, got ${r.status}: ${r.stdout}${r.stderr}`);
+    assert.match(r.stdout, /wrote env\.schema\.js inferred from \.env\.example \(9 variables\)/);
+    assert.match(r.stdout, /\.env\.example left untouched/);
+
+    const schemaText = fs.readFileSync(path.join(dir, 'env.schema.js'), 'utf8');
+    // Each inferred type is present, with an "inferred ... review" comment.
+    for (const [key, type] of [['APP_NAME', 'string'], ['PORT', 'port'], ['DEBUG', 'boolean'], ['API_URL', 'url'], ['SUPPORT_EMAIL', 'email'], ['RETRIES', 'int'], ['RATIO', 'number'], ['EMPTY', 'string'], ['DB_HOST', 'string']]) {
+      const ci = schemaText.indexOf(`inferred as '${type}' from the sample value in .env.example`);
+      const ki = schemaText.indexOf(`${key}: { type: '${type}' }`);
+      assert.ok(ci !== -1 && ki !== -1 && ci < ki, `missing inferred rule for ${key}`);
+    }
+    // The sample values themselves are never echoed into comments (a password
+    // in the example must not leak into the committed schema).
+    assert.ok(!schemaText.includes('demo-app'), 'sample value leaked into schema comment');
+    // PORT is in the example, so the scan did not duplicate it.
+    assert.strictEqual(schemaText.match(/PORT: \{ type: 'port' \}/g).length, 1);
+    // The example file is byte-for-byte untouched.
+    assert.strictEqual(fs.readFileSync(path.join(dir, '.env.example'), 'utf8'), example);
+    // Acceptance: the generated schema's check passes against that same example file.
+    const c = run(['check', dir, '--file', '.env.example', '--schema', 'env.schema.js'], dir);
+    assert.strictEqual(c.status, 0, `check against the example should pass, got ${c.status}: ${c.stdout}${c.stderr}`);
+  }
+
+  // --- issue #232: a scanned key the example lacks is folded in as a string rule
+  {
+    const dir = mkProject({ '.env.example': 'PORT=8080\n', 'src/app.js': 'console.log(process.env.EXTRA_SCANNED);\n' });
+    const r = run(['init', dir, '--from-example'], dir);
+    assert.strictEqual(r.status, 0, `${r.stdout}${r.stderr}`);
+    assert.match(r.stdout, /folded in 1 key found by scanning the code: EXTRA_SCANNED/);
+    const schemaText = fs.readFileSync(path.join(dir, 'env.schema.js'), 'utf8');
+    assert.match(schemaText, /EXTRA_SCANNED: \{ type: 'string' \}/);
+    assert.strictEqual(schemaText.match(/PORT: \{ type: 'port' \}/g).length, 1);
+  }
+
+  // --- issue #232: port-looking threshold — 1024..65535 is a port, smaller ints are int
+  {
+    const dir = mkProject({ '.env.example': 'A=1024\nB=65535\nC=1023\nD=65536\nE=-5\n' });
+    const r = run(['init', dir, '--from-example'], dir);
+    assert.strictEqual(r.status, 0, `${r.stdout}${r.stderr}`);
+    const schemaText = fs.readFileSync(path.join(dir, 'env.schema.js'), 'utf8');
+    assert.match(schemaText, /A: \{ type: 'port' \}/);
+    assert.match(schemaText, /B: \{ type: 'port' \}/);
+    assert.match(schemaText, /C: \{ type: 'int' \}/);
+    assert.match(schemaText, /D: \{ type: 'int' \}/);
+    assert.match(schemaText, /E: \{ type: 'int' \}/);
+  }
+
+  // --- issue #232 (review fix): malformed samples must not infer 'email'/'url' —
+  // the generated schema has to validate against the example's own values.
+  {
+    const dir = mkProject({ '.env.example': 'BAD_EMAIL=a@.b.com\nBAD_URL=http://host:abc\nGOOD_EMAIL=admin@example.com\nGOOD_URL=https://api.example.com/v1\n' });
+    const r = run(['init', dir, '--from-example'], dir);
+    assert.strictEqual(r.status, 0, `${r.stdout}${r.stderr}`);
+    const schemaText = fs.readFileSync(path.join(dir, 'env.schema.js'), 'utf8');
+    // 'a@.b.com' has a domain starting with a dot and 'http://host:abc' has an
+    // invalid port — both fail the corresponding validators, so they infer 'string'.
+    assert.match(schemaText, /BAD_EMAIL: \{ type: 'string' \}/);
+    assert.match(schemaText, /BAD_URL: \{ type: 'string' \}/);
+    assert.doesNotMatch(schemaText, /BAD_EMAIL: \{ type: 'email' \}/);
+    assert.doesNotMatch(schemaText, /BAD_URL: \{ type: 'url' \}/);
+    // Valid samples still infer their types.
+    assert.match(schemaText, /GOOD_EMAIL: \{ type: 'email' \}/);
+    assert.match(schemaText, /GOOD_URL: \{ type: 'url' \}/);
+    // Acceptance: check passes against the example's own values.
+    const c = run(['check', dir, '--file', '.env.example', '--schema', 'env.schema.js'], dir);
+    assert.strictEqual(c.status, 0, `check against the example should pass, got ${c.status}: ${c.stdout}${c.stderr}`);
+  }
+
+  // --- issue #232: --from-example=FILE names a different example file
+  {
+    const dir = mkProject({ '.env.sample': 'TOKEN=abc123\n' });
+    const r = run(['init', dir, '--from-example=.env.sample'], dir);
+    assert.strictEqual(r.status, 0, `${r.stdout}${r.stderr}`);
+    assert.match(r.stdout, /inferred from \.env\.sample \(1 variable\)/);
+    assert.ok(fs.existsSync(path.join(dir, 'env.schema.js')));
+    assert.ok(!fs.existsSync(path.join(dir, '.env.example')), 'no .env.example should be created in --from-example mode');
+  }
+
+  // --- issue #232: missing example file exits 2 and writes nothing
+  {
+    const dir = mkProject({ 'src/app.js': 'console.log(process.env.PORT);\n' });
+    const r = run(['init', dir, '--from-example'], dir);
+    assert.strictEqual(r.status, 2);
+    assert.match(r.stderr, /\.env\.example not found/);
+    assert.ok(!fs.existsSync(path.join(dir, 'env.schema.js')));
+  }
+
+  // --- issue #232: existing schema without --force refuses (exit 1); --force overwrites schema but not the example
+  {
+    const example = 'PORT=8080\n';
+    const dir = mkProject({ '.env.example': example, 'env.schema.js': 'module.exports = {};\n' });
+    const r1 = run(['init', dir, '--from-example'], dir);
+    assert.strictEqual(r1.status, 1);
+    assert.match(r1.stderr, /env\.schema\.js already exists/);
+    assert.strictEqual(fs.readFileSync(path.join(dir, 'env.schema.js'), 'utf8'), 'module.exports = {};\n');
+    const r2 = run(['init', dir, '--from-example', '--force'], dir);
+    assert.strictEqual(r2.status, 0, `${r2.stdout}${r2.stderr}`);
+    assert.match(fs.readFileSync(path.join(dir, 'env.schema.js'), 'utf8'), /PORT: \{ type: 'port' \}/);
+    assert.strictEqual(fs.readFileSync(path.join(dir, '.env.example'), 'utf8'), example);
+  }
+
+  // --- issue #232: in a "type": "module" project the inferred schema is a .cjs file
+  {
+    const dir = mkProject({ 'package.json': '{"type":"module"}\n', '.env.example': 'PORT=8080\n' });
+    const r = run(['init', dir, '--from-example'], dir);
+    assert.strictEqual(r.status, 0, `${r.stdout}${r.stderr}`);
+    assert.ok(fs.existsSync(path.join(dir, 'env.schema.cjs')), 'ESM project should get env.schema.cjs');
+    assert.match(fs.readFileSync(path.join(dir, 'env.schema.cjs'), 'utf8'), /PORT: \{ type: 'port' \}/);
+  }
+
+  // --- issue #232: without --from-example, init behaves exactly as before (writes both files)
+  {
+    const dir = mkProject({ 'src/app.js': SRC_WITH_USAGE });
+    const r = run(['init', dir], dir);
+    assert.strictEqual(r.status, 0, `${r.stdout}${r.stderr}`);
+    assert.match(r.stdout, /wrote env\.schema\.js and \.env\.example/);
+    assert.ok(fs.existsSync(path.join(dir, '.env.example')));
+    const schemaText = fs.readFileSync(path.join(dir, 'env.schema.js'), 'utf8');
+    for (const k of ['APP_NAME', 'RETRIES', 'DEBUG', 'PORT', 'API_URL', 'SUPPORT_EMAIL', 'SHUTDOWN_TIMEOUT', 'DB_HOST']) {
+      assert.match(schemaText, new RegExp(`${k}: \\{`), `fixed scaffold key ${k} missing`);
+    }
+    assert.match(schemaText, /DATABASE_URL: \{ type: 'string' \}/);
+  }
 } finally {
   cleanup();
 }
