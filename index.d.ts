@@ -232,3 +232,33 @@ export type Masked<T> = T extends readonly unknown[]
       : string;
 export function maskSecrets<T extends Record<string, unknown>>(obj: T): { [K in keyof T]: Masked<T[K]> };
 export function generateExample(schema: EnvSchema): string;
+
+type JsonPrimitive = string | number | boolean | null;
+type JsonValue = JsonPrimitive | JsonValue[] | { [key: string]: JsonValue };
+
+export interface JsonSchemaProperty {
+  type?: 'string' | 'integer' | 'number' | 'boolean' | 'array';
+  format?: 'uri' | 'email' | 'uuid' | 'ipv4' | 'ipv6' | 'hostname' | 'date' | 'date-time';
+  pattern?: string;
+  minLength?: number;
+  maxLength?: number;
+  minimum?: number;
+  maximum?: number;
+  enum?: JsonPrimitive[];
+  default?: JsonValue;
+  items?: JsonSchemaProperty;
+  minItems?: number;
+  maxItems?: number;
+  anyOf?: JsonSchemaProperty[];
+  allOf?: JsonSchemaProperty[];
+}
+
+export interface JsonSchema {
+  $schema: 'https://json-schema.org/draft/2020-12/schema';
+  type: 'object';
+  properties: Record<string, JsonSchemaProperty>;
+  required?: string[];
+}
+
+/** Describe coerced values as a draft 2020-12 JSON Schema without reading the environment. */
+export function toJsonSchema(schema: EnvSchema): JsonSchema;
