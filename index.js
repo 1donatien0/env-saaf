@@ -43,6 +43,13 @@ const TYPE_EXAMPLES = {
 
 const KNOWN_TYPES = new Set(Object.keys(TYPE_EXAMPLES));
 
+// Types whose coerced value is always a string. String-only options
+// (`pattern`, `minLength`, `maxLength`) are rejected up front on any other
+// type so they cannot sit silently ignored as dead config (issue #211).
+const STRING_TYPES = new Set([
+  'string', 'email', 'url', 'file', 'uuid', 'hex', 'ipv4', 'semver', 'base64', 'host',
+]);
+
 // Validate the shape of the schema itself, independent of any env values.
 // These checks used to live only inside the per-key coercion loop, so an
 // invalid rule on an absent optional key was never reached and slipped through
@@ -55,6 +62,14 @@ function validateSchema(schema) {
     if (rule === null || typeof rule !== 'object' || Array.isArray(rule)) continue;
     if (rule.type !== undefined && !KNOWN_TYPES.has(rule.type)) {
       errors.push(`${key}: unknown type "${rule.type}"`);
+    }
+    const effectiveType = rule.type === undefined ? 'string' : rule.type;
+    if (KNOWN_TYPES.has(effectiveType) && !STRING_TYPES.has(effectiveType)) {
+      for (const opt of ['pattern', 'minLength', 'maxLength']) {
+        if (rule[opt] !== undefined) {
+          errors.push(`${key}: "${opt}" only applies to string types (cannot be used with type '${effectiveType}')`);
+        }
+      }
     }
     if (rule.pattern !== undefined && !(rule.pattern instanceof RegExp)) {
       errors.push(`${key}: "pattern" must be a RegExp`);
@@ -519,9 +534,9 @@ function validateEnv(schema, env = process.env, options = {}) {
         }
       }
       // minLength/maxLength: allowed length for string values (string,
-      // email, url, file, uuid, hex, ipv4, semver, base64, host). Checked after coercion, before choices/pattern; the
-      // error names the allowed length. Either option works alone, and
-      // non-string values skip the check entirely.
+      // email, url, file, uuid, hex, ipv4, semver, base64, host). Checked
+      // after coercion, before choices/pattern; the error names the allowed
+      // length. Non-string types are rejected up front in validateSchema.
       if (typeof val === 'string' && (rule.minLength !== undefined || rule.maxLength !== undefined)) {
         if ((rule.minLength !== undefined && (!Number.isInteger(rule.minLength) || rule.minLength < 0))
           || (rule.maxLength !== undefined && (!Number.isInteger(rule.maxLength) || rule.maxLength < 0))) {
@@ -556,7 +571,8 @@ function validateEnv(schema, env = process.env, options = {}) {
       }
       // pattern: a RegExp a string value must match (slugs, prefixed keys
       // like `sk_...`). Runs after coercion and the choices check, before
-      // transform; other types skip it. A mismatch names the pattern.
+      // transform; non-string types are rejected up front in validateSchema.
+      // A mismatch names the pattern.
       if (rule.pattern !== undefined) {
         if (!(rule.pattern instanceof RegExp)) {
           errors.push(`${key}: "pattern" must be a RegExp`);

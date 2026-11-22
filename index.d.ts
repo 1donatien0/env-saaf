@@ -32,7 +32,7 @@ export interface EnvRule {
    * `ipv4`, `semver`, `base64`, `host`).
    * `minLength` alone or `maxLength` alone both work; a too-short or
    * too-long value is rejected with an error naming the allowed length.
-   * Checked after coercion, before `pattern`.
+   * Checked after coercion, before `pattern`. Rejected up front on non-string rules.
    */
   minLength?: number;
   /** See `minLength`. */
@@ -51,9 +51,11 @@ export interface EnvRule {
    */
   protocols?: string[];
   /**
-   * A regular expression a string value must match (e.g. a slug, or a
-   * prefixed key like `sk_...`). Checked after coercion and `choices`,
-   * before `transform`; a mismatch error names the pattern.
+   * A regular expression a string value (`string`, `email`, `url`, `file`,
+   * `uuid`, `hex`, `ipv4`, `semver`, `base64`, `host`) must match (e.g. a
+   * slug, or a prefixed key like `sk_...`). Checked after coercion and
+   * `choices`, before `transform`; a mismatch error names the pattern.
+   * Rejected up front on non-string rules.
    */
   pattern?: RegExp;
   /**
