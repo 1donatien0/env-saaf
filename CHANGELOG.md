@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Added: `generateExample` now annotates `aliases` and `requiredIf` in `.env.example` comments — an aliased key notes its deprecated fallback names (`also accepts DATABASE_URL (deprecated)`), and a conditionally required key notes its condition (`required when MODE is 'production'`, or `is one of ...` for the `in` form); keys without these options keep the existing format, and `sensitive: true` placeholders stay empty. `example --schema <file>` generates the same annotated file from a schema via the CLI (fixes #206).
+
 - Added: `minItems` / `maxItems` rule options for the `array` type — bound the number of items (both non-negative integers, `minItems` must not exceed `maxItems`); a violation reports the key with the count and the bound (e.g. `TAGS: expected at least 2 items, got 1`), the bounds apply to `default` values too, and malformed values or use on a non-`array` rule are rejected up front (fixes #207).
 
 - Fixed: reject aliases that collide with declared schema keys or are shared by different rules before validating environment values, including with `throwOnError: false` (fixes #205).
