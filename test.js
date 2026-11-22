@@ -1,6 +1,157 @@
 'use strict';
 const assert = require('node:assert');
-const { validateEnv, EnvSaafError, parseEnvFile, scanCode, diffEnv, maskSecrets, maskValue, generateExample } = require('./index');
+const { validateEnv, EnvSaafError, parseEnvFile, scanCode, diffEnv, maskSecrets, maskValue, generateExample, toJsonSchema } = require('./index');
+
+// Issue #229: JSON Schema export
+{
+  const draft = 'https://json-schema.org/draft/2020-12/schema';
+  assert.deepStrictEqual(toJsonSchema({ PORT: { type: 'port', required: true } }), {
+    $schema: draft,
+    type: 'object',
+    properties: { PORT: { type: 'integer', minimum: 0, maximum: 65535 } },
+    required: ['PORT'],
+  });
+  assert.deepStrictEqual(toJsonSchema({}), { $schema: draft, type: 'object', properties: {} });
+
+  const types = {
+    string: { type: 'string' },
+    number: { type: 'number' },
+    int: { type: 'integer' },
+    boolean: { type: 'boolean' },
+    url: { type: 'string', format: 'uri' },
+    port: { type: 'integer', minimum: 0, maximum: 65535 },
+    email: { type: 'string', format: 'email' },
+    json: {},
+    uuid: { type: 'string', format: 'uuid' },
+    hex: { type: 'string', pattern: '^[0-9a-fA-F]+$' },
+    ipv4: { type: 'string', format: 'ipv4' },
+    semver: { type: 'string' },
+    base64: { type: 'string' },
+    date: { type: 'string', anyOf: [{ format: 'date' }, { format: 'date-time' }] },
+    file: { type: 'string' },
+    duration: { type: 'number', minimum: 0 },
+    host: { type: 'string', anyOf: [{ format: 'hostname' }, { format: 'ipv4' }, { format: 'ipv6' }] },
+    array: { type: 'array', items: { type: 'string', minLength: 1 } },
+  };
+  const rules = Object.fromEntries(Object.keys(types).map(type => [type, { type }]));
+  assert.deepStrictEqual(toJsonSchema(rules).properties, types);
+
+  const options = toJsonSchema({
+    MODE: { required: true, minLength: 0, maxLength: 6, pattern: /^\w+$/, choices: ['local', 'test', 'local'] },
+    RETRIES: { type: 'int', min: 0, max: 5, choices: [0, 2], default: '0' },
+    RATIO: { type: 'number', min: -0.5, max: 0 },
+    FEATURE: { type: 'boolean', choices: [false, true], default: 'no' },
+    PAYLOAD: { type: 'json', max: 0, choices: ['text', false, 0, null] },
+    PORT: { type: 'port', min: 1000, max: 99999 },
+    NARROW_PORT: { type: 'port', min: -1, max: 1024 },
+    TIMEOUT: { type: 'duration', min: -1, max: 100000, default: '1m30s' },
+    HEX: { type: 'hex', length: 4, minLength: 2, maxLength: 6, pattern: /^fe/ },
+    PORTS: { type: 'array', of: 'port', minItems: 0, maxItems: 2, separator: ';', default: '0;443' },
+    EMPTY: { type: 'array', maxItems: 0, default: [] },
+    RAW: { trim: false, default: ' text ', max: 1, length: 1 },
+  });
+  assert.deepStrictEqual(options.required, ['MODE']);
+  assert.deepStrictEqual(options.properties, {
+    MODE: { type: 'string', minLength: 0, maxLength: 6, pattern: '^\\w+$', enum: ['local', 'test'] },
+    RETRIES: { type: 'integer', minimum: 0, maximum: 5, enum: [0, 2], default: 0 },
+    RATIO: { type: 'number', minimum: -0.5, maximum: 0 },
+    FEATURE: { type: 'boolean', enum: [false, true], default: false },
+    PAYLOAD: { maximum: 0, enum: ['text', false, 0, null] },
+    PORT: { type: 'integer', minimum: 1000, maximum: 65535 },
+    NARROW_PORT: { type: 'integer', minimum: 0, maximum: 1024 },
+    TIMEOUT: { type: 'number', minimum: 0, maximum: 100000, default: 90000 },
+    HEX: { type: 'string', minLength: 4, maxLength: 4, pattern: '^fe', allOf: [{ pattern: '^[0-9a-fA-F]+$' }] },
+    PORTS: { type: 'array', minItems: 0, maxItems: 2, default: [0, 443], items: { type: 'integer', minimum: 0, maximum: 65535 } },
+    EMPTY: { type: 'array', maxItems: 0, default: [], items: { type: 'string', minLength: 1 } },
+    RAW: { type: 'string', default: ' text ' },
+  });
+
+  const urls = toJsonSchema({
+    URL: { type: 'url', protocols: ['HTTPS:', 'git+ssh', 'tool.v1-4'], pattern: /example\.org/ },
+    MIRRORS: { type: 'array', of: 'url', protocols: ['https'] },
+  }).properties;
+  assert.strictEqual(urls.URL.pattern, 'example\\.org');
+  const schemes = new RegExp(urls.URL.allOf[0].pattern, 'u');
+  for (const url of ['https://x', 'HTTPS://x', 'git+SSH://x', 'tool.V1-4:x']) assert.match(url, schemes);
+  for (const url of ['http://x', 'gitXssh://x', 'toolXv1-4:x', 'prefix-https://x']) assert.doesNotMatch(url, schemes);
+  assert.strictEqual(urls.MIRRORS.items.format, 'uri');
+  const itemScheme = new RegExp(urls.MIRRORS.items.pattern, 'u');
+  assert.match('https://x', itemScheme);
+  assert.doesNotMatch('http://x', itemScheme);
+
+  const data = Object.freeze({ ['__proto__']: Object.freeze({ enabled: true }), count: 0 });
+  let calls = 0;
+  const callback = () => { calls++; throw new Error('must not run'); };
+  const flagged = /ok/gi;
+  flagged.lastIndex = 2;
+  const source = Object.freeze({
+    ['__proto__']: Object.freeze({ type: 'json', default: data, required: true }),
+    constructor: { type: 'date', default: '2026-01-31' },
+    toString: { type: 'date', default: new Date('2026-02-01T02:00:00+02:00') },
+    toJSON: { type: 'json', default: '[false, null, 0]' },
+    'slash/~': { type: 'file', default: './not-a-real-file.example', required: true },
+    '': { default: '', required: false },
+    FLAGS: { pattern: flagged, validate: callback, transform: callback, aliases: ['OLD'], requiredIf: { key: 'SWITCH', equals: 'enabled' } },
+  });
+  const result = toJsonSchema(source);
+  assert.deepStrictEqual(JSON.parse(JSON.stringify(result)), result);
+  assert.deepStrictEqual(Object.keys(result.properties), Object.keys(source));
+  assert.deepStrictEqual(result.required, ['__proto__', 'slash/~']);
+  assert.deepStrictEqual(result.properties.__proto__.default, data);
+  assert.notStrictEqual(result.properties.__proto__.default, data);
+  assert.notStrictEqual(result.properties.__proto__.default.__proto__, data.__proto__);
+  assert.strictEqual(result.properties.__proto__.default.__proto__.enabled, true);
+  assert.strictEqual(result.properties.constructor.default, '2026-01-31T00:00:00.000Z');
+  assert.strictEqual(result.properties.toString.default, '2026-02-01T00:00:00.000Z');
+  assert.deepStrictEqual(result.properties.toJSON.default, [false, null, 0]);
+  assert.strictEqual(result.properties['slash/~'].default, './not-a-real-file.example');
+  assert.strictEqual(result.properties[''].default, '');
+  assert.deepStrictEqual(result.properties.FLAGS, { type: 'string' });
+  assert.strictEqual(calls, 0);
+  assert.strictEqual(flagged.lastIndex, 2);
+
+  const circular = {};
+  circular.self = circular;
+  const unrepresentable = toJsonSchema({
+    BAD_JSON: { type: 'json', default: '{' },
+    CIRCULAR: { type: 'json', default: circular },
+    NON_FINITE: { type: 'json', default: { count: Infinity } },
+    UNDEFINED: { type: 'json', default: [undefined] },
+    CUSTOM: { type: 'json', default: { toJSON: callback } },
+    CLASS_INSTANCE: { type: 'json', default: new RegExp('not JSON data') },
+    GETTER: { type: 'json', default: Object.defineProperty({}, 'value', { get: callback, enumerable: true }) },
+    INVALID_DATE: { type: 'date', default: new Date(NaN) },
+    LOCAL_TIME: { type: 'date', default: '2026-01-31T10:00' },
+    BAD_NUMBER: { type: 'number', default: '0x10' },
+    BAD_ITEMS: { type: 'array', of: 'file', default: ['example.txt', ''] },
+    NULL_ITEM: { type: 'array', of: 'int', default: [null] },
+    SPARSE: { type: 'array', default: Array(1) },
+  });
+  for (const property of Object.values(unrepresentable.properties)) {
+    assert.strictEqual(Object.prototype.hasOwnProperty.call(property, 'default'), false);
+  }
+  assert.strictEqual(calls, 0);
+  assert.deepStrictEqual(toJsonSchema({
+    FILES: { type: 'array', of: 'file', default: ['./example.txt'] },
+    DATES: { type: 'array', of: 'date', default: ['2026-01-31T10:00Z'] },
+    CONFIG: { type: 'json', default: null },
+    DICTIONARY: { type: 'json', default: Object.assign(Object.create(null), { enabled: false }) },
+    MIXED: { type: 'array', of: 'int', default: [0, '2'] },
+    SPACES: { type: 'array', trim: false, default: ' x , ' },
+    COUNT: { type: 'int', choices: [2, Infinity, 0, NaN] },
+    UNSUPPORTED: { type: 'json', choices: [Infinity] },
+  }).properties, {
+    FILES: { type: 'array', items: { type: 'string' }, default: ['./example.txt'] },
+    DATES: { type: 'array', items: types.date, default: ['2026-01-31T10:00:00.000Z'] },
+    CONFIG: { default: null },
+    DICTIONARY: { default: { enabled: false } },
+    MIXED: { type: 'array', items: { type: 'integer' }, default: [0, 2] },
+    SPACES: { type: 'array', items: { type: 'string', minLength: 1 }, default: [' x ', ' '] },
+    COUNT: { type: 'integer', enum: [2, 0] },
+    UNSUPPORTED: {},
+  });
+  assert.throws(() => toJsonSchema({ BROKEN: { type: 'port', min: NaN } }), EnvSaafError);
+}
 
 // v0.1.0 core
 const env = validateEnv({

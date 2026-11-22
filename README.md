@@ -625,6 +625,42 @@ API_KEY=
 
 Keys that look like secrets (`API_KEY`, `DB_PASSWORD`, …) get an empty placeholder — nothing safe to suggest for them. Other keys get a type-based placeholder, and an explicit `default` is used as-is. Keys with `aliases` note the deprecated fallback names (`# type: url, required; also accepts DATABASE_URL (deprecated)`), and keys with `requiredIf` note the condition (`# type: url; required when MODE is 'production'`, or `required when MODE is one of 'staging', 'production'` for the `in` form).
 
+### Export JSON Schema from your schema
+
+`toJsonSchema(schema)` returns a [draft 2020-12 JSON Schema](https://json-schema.org/draft/2020-12)
+for documentation, editor tooling, or validation of **coerced values**, not raw `.env` strings.
+It does not read environment variables or run custom callbacks.
+
+```js
+const { toJsonSchema } = require('env-saaf');
+
+const schema = toJsonSchema({
+  PORT: { type: 'port', required: true },
+  LOG_LEVEL: { choices: ['info', 'warn'], default: 'info' },
+});
+
+console.log(JSON.stringify(schema, null, 2));
+// PORT is required and must be an integer from 0 to 65535.
+// LOG_LEVEL is an optional string with enum ['info', 'warn'] and default 'info'.
+```
+
+Numeric, length and item bounds become JSON Schema keywords. Arrays describe
+their coerced items, durations are milliseconds, and dates serialize to ISO
+date-time strings (the schema also accepts the `date` format). The `json` type
+allows any JSON shape. JSON-compatible `choices` become `enum` values without
+re-coercion. Representable defaults are exported in coerced form as annotations;
+JSON Schema does not fill in missing values. Avoid putting secrets in schema
+defaults or choices that will be shared.
+
+**Not represented:** `transform`, `validate`, `requiredIf`, `aliases`, `sensitive`,
+input trimming and splitting, regular-expression flags (flagged patterns are omitted),
+and defaults that cannot be converted to JSON without loss or depend on local time.
+File existence and the detailed `base64` and `semver` checks remain runtime-only.
+Standard formats are annotations by default, and their rules can differ from
+env-saaf's checks. JSON Schema counts Unicode characters for string lengths;
+env-saaf counts JavaScript UTF-16 code units. Use `validateEnv` or `loadEnv`
+for runtime validation.
+
 ### Log config without leaking secrets
 
 ```js

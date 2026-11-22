@@ -1321,4 +1321,136 @@ function generateExample(schema) {
   return lines.join('\n') + '\n';
 }
 
-module.exports = { validateEnv, loadEnv, EnvSaafError, parseEnvFile, scanCode, scanDir, diffEnv, maskValue, maskSecrets, generateExample };
+function jsonSchemaForScalar(type, protocols) {
+  switch (type) {
+    case 'int': return { type: 'integer' };
+    case 'port': return { type: 'integer', minimum: 0, maximum: 65535 };
+    case 'number': return { type: 'number' };
+    case 'duration': return { type: 'number', minimum: 0 };
+    case 'boolean': return { type: 'boolean' };
+    case 'json': return {};
+    case 'date': return { type: 'string', anyOf: [{ format: 'date' }, { format: 'date-time' }] };
+    case 'host': return { type: 'string', anyOf: [{ format: 'hostname' }, { format: 'ipv4' }, { format: 'ipv6' }] };
+    case 'email': case 'uuid': case 'ipv4': return { type: 'string', format: type };
+    case 'hex': return { type: 'string', pattern: '^[0-9a-fA-F]+$' };
+    case 'url': {
+      const property = { type: 'string', format: 'uri' };
+      if (protocols) {
+        // Pattern has no flags. Spell out ASCII case folding and escape scheme punctuation.
+        const schemes = protocols.map(protocol => protocol.replace(/:$/, '').toLowerCase()
+          .replace(/[+.]/g, '\\$&').replace(/[a-z]/g, ch => `[${ch}${ch.toUpperCase()}]`));
+        property.pattern = `^(?:${schemes.join('|')}):`;
+      }
+      return property;
+    }
+    default: return { type: 'string' };
+  }
+}
+
+function isJsonPrimitive(value) {
+  return value === null || typeof value === 'boolean' || typeof value === 'string' || Number.isFinite(value);
+}
+
+// Copy plain data without invoking user-defined getters or toJSON methods,
+// and do not silently turn unsupported values into null or missing keys.
+function copyJsonDefault(value, seen = new Set()) {
+  if (isJsonPrimitive(value)) return value === 0 ? 0 : value;
+  if (typeof value !== 'object') throw new TypeError('not JSON data');
+  if (seen.has(value)) throw new TypeError('circular JSON data');
+  seen.add(value);
+  const copyEntry = key => copyJsonDefault(Object.getOwnPropertyDescriptor(value, key)?.value, seen);
+  let copy;
+  if (Array.isArray(value)) {
+    copy = Array.from({ length: value.length }, (_, i) => copyEntry(i));
+  } else {
+    const proto = Object.getPrototypeOf(value);
+    if (proto !== null && proto !== Object.prototype) throw new TypeError('not JSON data');
+    copy = Object.fromEntries(Object.keys(value).map(key => [key, copyEntry(key)]));
+  }
+  seen.delete(value);
+  return copy;
+}
+
+function jsonSchemaDefault(key, rule, type) {
+  const trim = rule.trim !== false;
+  const convert = (raw, valueType) => {
+    if (valueType === 'json') return copyJsonDefault(coerce(key, raw, valueType, trim));
+    if (valueType === 'date' && raw instanceof Date) return Date.prototype.toISOString.call(raw);
+    if (!isJsonPrimitive(raw)) throw new TypeError('not a primitive default');
+    if (valueType === 'date' && typeof raw === 'string' && raw.includes('T')
+      && !/(?:Z|[+-]\d{2}:?\d{2})$/.test(trim ? raw.trim() : raw)) {
+      // A date-time with no offset is local time; don't consult the host timezone.
+      return undefined;
+    }
+    // A file default can document the path without checking the filesystem.
+    const value = coerce(key, raw, valueType === 'file' ? 'string' : valueType, trim, rule.protocols);
+    return valueType === 'date' ? value.toISOString() : value === 0 ? 0 : value;
+  };
+  try {
+    if (type !== 'array') return convert(rule.default, type);
+    const raw = rule.default;
+    const parts = typeof raw === 'string' ? raw.split(rule.separator ?? ',') : raw;
+    if (!Array.isArray(parts)) return undefined;
+    return Array.from({ length: parts.length }, (_, i) => {
+      const part = Object.getOwnPropertyDescriptor(parts, i)?.value;
+      if (part === undefined || part === null || (trim && typeof part === 'string' ? part.trim() : part) === '') {
+        throw new TypeError('empty array item');
+      }
+      const value = convert(part, rule.of ?? 'string');
+      if (value === undefined) throw new TypeError('unsupported array item');
+      return value;
+    });
+  } catch {
+    return undefined;
+  }
+}
+
+/** Describe coerced values as JSON Schema, without reading the environment. */
+function toJsonSchema(schema) {
+  validateSchema(schema);
+  const required = [];
+  const properties = Object.fromEntries(Object.entries(schema).map(([key, rule]) => {
+    const type = rule.type ?? 'string';
+    let property;
+    if (type === 'array') {
+      const itemType = rule.of ?? 'string';
+      const items = jsonSchemaForScalar(itemType, rule.protocols);
+      if (itemType === 'string') items.minLength = 1;
+      property = { type: 'array', items };
+      if (rule.minItems !== undefined) property.minItems = rule.minItems;
+      if (rule.maxItems !== undefined) property.maxItems = rule.maxItems;
+    } else {
+      property = jsonSchemaForScalar(type, rule.protocols);
+    }
+    // JSON Schema numerical bounds also apply to numbers in an otherwise unconstrained `json` rule.
+    if (type === 'json' || property.type === 'number' || property.type === 'integer') {
+      if (rule.min !== undefined) property.minimum = Math.max(rule.min, property.minimum ?? -Infinity);
+      if (rule.max !== undefined) property.maximum = Math.min(rule.max, property.maximum ?? Infinity);
+    }
+    if (rule.minLength !== undefined) property.minLength = rule.minLength;
+    if (rule.maxLength !== undefined) property.maxLength = rule.maxLength;
+    if (type === 'hex' && rule.length !== undefined) {
+      property.minLength = Math.max(rule.length, property.minLength ?? 0);
+      property.maxLength = Math.min(rule.length, property.maxLength ?? Infinity);
+    }
+    if (rule.pattern && !rule.pattern.flags) {
+      if (property.pattern) property.allOf = [{ pattern: property.pattern }];
+      property.pattern = rule.pattern.source;
+    }
+    if (Array.isArray(rule.choices)) {
+      const choices = [...new Set(rule.choices.filter(isJsonPrimitive))];
+      if (choices.length) property.enum = choices;
+    }
+    if (rule.default !== undefined) {
+      const value = jsonSchemaDefault(key, rule, type);
+      if (value !== undefined) property.default = value;
+    }
+    if (rule.required) required.push(key);
+    return [key, property];
+  }));
+  const result = { $schema: 'https://json-schema.org/draft/2020-12/schema', type: 'object', properties };
+  if (required.length) result.required = required;
+  return result;
+}
+
+module.exports = { validateEnv, loadEnv, EnvSaafError, parseEnvFile, scanCode, scanDir, diffEnv, maskValue, maskSecrets, generateExample, toJsonSchema };

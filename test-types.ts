@@ -1,7 +1,7 @@
 // env-saaf type tests — sirf `tsc` se check hote hain (`npm test` me shamil).
 // Runtime me kuch nahi chalta: ye file sirf TypeScript inference verify karti hai.
 // Issue #7: validateEnv ka return type schema se infer hona chahiye.
-import { validateEnv, EnvSchema, EnvResult, maskSecrets, Masked } from './index';
+import { validateEnv, EnvSchema, EnvResult, maskSecrets, Masked, toJsonSchema } from './index';
 
 const env = validateEnv({
   PORT: { type: 'port', required: true },
@@ -154,5 +154,15 @@ const maskedNestedToken: string = masked.NESTED.LIST[0].TOKEN;
 const maskedWhen: string = masked.WHEN;
 // Masked<T> works standalone too.
 const manual: Masked<{ A: number; B: { C: string[] } }> = { A: '****', B: { C: ['****'] } };
+
+// Issue #229: the export takes an env-saaf schema and returns typed keywords.
+const jsonSchema = toJsonSchema({ PORT: { type: 'port', default: 0 } });
+const schemaType: 'object' = jsonSchema.type;
+const minimumPort: number | undefined = jsonSchema.properties.PORT.minimum;
+const requiredKeys: string[] | undefined = jsonSchema.required;
+// @ts-expect-error — schema bounds are numbers, not strings
+const badBound: string = jsonSchema.properties.PORT.minimum;
+// @ts-expect-error — accepts env-saaf rules, not a JSON Schema document
+toJsonSchema({ PORT: { type: 'integer', minimum: 0 } });
 
 export { port, count, url, mode, debug, name, doubled, fixed, wrongType, typo, debugStrict, myPort, myDebug, looseValue, tenantId, apiHash, collectedPort, collectedDebug, collectedErrors, collectedAsEnv, throwingPort, condSentry, condAlert, condTls, condFallback, condSentryStrict, validatedPort, validatedHost, validatedFlag, validatedNotes, wrongPorts, tags, ports, origins, flags, aliasedUrl, aliasedPort, aliasKey, maskedKey, maskedDbPassword, maskedDbPort, maskedTags, maskedNestedToken, maskedWhen, manual };

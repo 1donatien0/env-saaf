@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Added: `toJsonSchema(schema)` exports a draft 2020-12 JSON Schema for coerced configuration values (fixes #229).
+
 - Changed: The `base64` type accepts standard and URL-safe strings with or without padding and preserves the input encoding (fixes #226).
 
 - Added: `scanCode` detects static property reads through simple local environment aliases (fixes #252).
