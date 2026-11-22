@@ -222,5 +222,13 @@ export function scanCode(text: string): string[];
 export function scanDir(dir: string): string[];
 export function diffEnv(usedKeys: string[], documentedKeys: string[]): { usedNotDocumented: string[]; documentedNotUsed: string[] };
 export function maskValue(value: unknown): string;
-export function maskSecrets<T extends Record<string, unknown>>(obj: T): Record<keyof T, string>;
+/** The masked counterpart of `T`: structure is preserved, every leaf is a string. */
+export type Masked<T> = T extends readonly unknown[]
+  ? { [K in keyof T]: Masked<T[K]> }
+  : T extends Date | RegExp | ((...args: never[]) => unknown)
+    ? string
+    : T extends object
+      ? { [K in keyof T]: Masked<T[K]> }
+      : string;
+export function maskSecrets<T extends Record<string, unknown>>(obj: T): { [K in keyof T]: Masked<T[K]> };
 export function generateExample(schema: EnvSchema): string;

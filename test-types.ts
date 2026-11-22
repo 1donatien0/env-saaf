@@ -1,7 +1,7 @@
 // env-saaf type tests — sirf `tsc` se check hote hain (`npm test` me shamil).
 // Runtime me kuch nahi chalta: ye file sirf TypeScript inference verify karti hai.
 // Issue #7: validateEnv ka return type schema se infer hona chahiye.
-import { validateEnv, EnvSchema, EnvResult } from './index';
+import { validateEnv, EnvSchema, EnvResult, maskSecrets, Masked } from './index';
 
 const env = validateEnv({
   PORT: { type: 'port', required: true },
@@ -138,4 +138,21 @@ const validatedFlag: boolean = validated.FLAG;
 const validatedNotes: string | undefined = validated.NOTES;
 
 
-export { port, count, url, mode, debug, name, doubled, fixed, wrongType, typo, debugStrict, myPort, myDebug, looseValue, tenantId, apiHash, collectedPort, collectedDebug, collectedErrors, collectedAsEnv, throwingPort, condSentry, condAlert, condTls, condFallback, condSentryStrict, validatedPort, validatedHost, validatedFlag, validatedNotes, wrongPorts, tags, ports, origins, flags, aliasedUrl, aliasedPort, aliasKey };
+// Issue #234: maskSecrets keeps the recursive shape and stringifies every leaf.
+const masked = maskSecrets({
+  KEY: 'sk_live_123456',
+  DB: { PASSWORD: 'hunter2', PORT: 5432 },
+  TAGS: ['a', 'b'],
+  NESTED: { LIST: [{ TOKEN: 'abcdef' }] },
+  WHEN: new Date(),
+});
+const maskedKey: string = masked.KEY;
+const maskedDbPassword: string = masked.DB.PASSWORD;
+const maskedDbPort: string = masked.DB.PORT;
+const maskedTags: string[] = masked.TAGS;
+const maskedNestedToken: string = masked.NESTED.LIST[0].TOKEN;
+const maskedWhen: string = masked.WHEN;
+// Masked<T> works standalone too.
+const manual: Masked<{ A: number; B: { C: string[] } }> = { A: '****', B: { C: ['****'] } };
+
+export { port, count, url, mode, debug, name, doubled, fixed, wrongType, typo, debugStrict, myPort, myDebug, looseValue, tenantId, apiHash, collectedPort, collectedDebug, collectedErrors, collectedAsEnv, throwingPort, condSentry, condAlert, condTls, condFallback, condSentryStrict, validatedPort, validatedHost, validatedFlag, validatedNotes, wrongPorts, tags, ports, origins, flags, aliasedUrl, aliasedPort, aliasKey, maskedKey, maskedDbPassword, maskedDbPort, maskedTags, maskedNestedToken, maskedWhen, manual };
