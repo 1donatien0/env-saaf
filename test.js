@@ -377,7 +377,7 @@ assert.ok(!ex.includes('sk_live'));
   const { loadEnv } = require('./index');
   const message = "loadEnv expects a schema object as the first argument — did you mean loadEnv(schema, { path: '.env' })?";
   assert.throws(() => loadEnv('.env', { PORT: { type: 'port' } }), { name: 'TypeError', message });
-  for (const schema of [null, undefined, [], 42, false, 1n, Symbol('schema'), () => {}, new Date(), new Map(), new (class Schema {})()]) {
+  for (const schema of [null, undefined, [], 42, false, 1n, Symbol('schema'), () => { }, new Date(), new Map(), new (class Schema { })()]) {
     assert.throws(() => loadEnv(schema), { name: 'TypeError', message });
   }
   // Argument validation must happen before reading options or files.
@@ -1343,11 +1343,15 @@ assert.deepStrictEqual(
   }
   assert.throws(() => validateEnv({ IP: { type: 'ipv4', required: true } }, {}), EnvSaafError);
 
-  // semver: MAJOR.MINOR.PATCH, no leading 'v'; pre-release and build suffixes pass.
+  // semver: MAJOR.MINOR.PATCH, one optional lowercase 'v' prefix; pre-release and build suffixes pass.
   assert.strictEqual(validateEnv({ V: { type: 'semver' } }, { V: '1.2.3' }).V, '1.2.3');
   assert.strictEqual(validateEnv({ V: { type: 'semver' } }, { V: '1.2.3-beta.1' }).V, '1.2.3-beta.1');
   assert.strictEqual(validateEnv({ V: { type: 'semver' } }, { V: '0.0.1+build.5' }).V, '0.0.1+build.5');
-  for (const bad of ['1.2', 'v1.2.3', '1.02.3', '1.2.3.4', 'latest', '1.2.x']) {
+  // Issue #227: a 'v' prefix is accepted and returned unchanged, prefix included.
+  assert.strictEqual(validateEnv({ V: { type: 'semver' } }, { V: 'v1.2.3' }).V, 'v1.2.3');
+  assert.strictEqual(validateEnv({ V: { type: 'semver' } }, { V: 'v1.2.3-rc.1' }).V, 'v1.2.3-rc.1');
+  assert.strictEqual(validateEnv({ V: { type: 'semver' } }, { V: 'v1.2.3+build' }).V, 'v1.2.3+build');
+  for (const bad of ['1.2', 'v1.2', 'vv1.2.3', 'v', 'V1.2.3', '1.02.3', '1.2.3.4', 'latest', '1.2.x']) {
     assert.throws(() => validateEnv({ V: { type: 'semver' } }, { V: bad }), /expected a valid semantic version/);
   }
 
@@ -1608,7 +1612,7 @@ assert.deepStrictEqual(
   // An empty value counts as missing, so the default is checked then too.
   assert.throws(() => validateEnv({ P: { type: 'port', default: 99999 } }, { P: '' }), /P:/);
   // Valid defaults still work, and are coerced like real values.
-  assert.deepStrictEqual({ ...validateEnv({
+    assert.deepStrictEqual({ ...validateEnv({
     P: { type: 'port', default: 3000 },
     L: { choices: ['info', 'warn'], default: 'info' },
     B: { type: 'boolean', default: 'yes' },
@@ -2184,7 +2188,7 @@ assert.deepStrictEqual(
     ['uuid', 'not-a-uuid', 'e.g. 550e8400-e29b-41d4-a716-446655440000'],
     ['hex', 'not-hex!', 'e.g. deadbeef'],
     ['ipv4', '999.1.1.1', 'e.g. 192.168.0.1'],
-    ['semver', 'v1.2.3', 'e.g. 1.2.3'],
+    ['semver', '1.2', 'e.g. 1.2.3'],
     ['base64', 'not base64!', 'e.g. aGVsbG8='],
     ['port', 'abc', '0-65535, e.g. 3000'],
     ['date', '2026-02-31', 'e.g. 2026-01-31'],
@@ -3868,6 +3872,67 @@ assert.deepStrictEqual(
   assert.throws(
     () => validateEnv({ K: { type: 'emial', pattern: /@/ } }, {}),
     err => err instanceof EnvSaafError && err.errors.length === 1 && err.errors[0].includes('unknown type "emial"'),
+  );
+  // Unknown option on a present environment variable.
+  assert.throws(
+    () => validateEnv({ PORT: { type: 'port', requried: true } }, { PORT: '3000' }),
+    err => err instanceof EnvSaafError
+      && err.errors.includes('PORT: unknown option "requried"'),
+  );
+
+  // Unknown option on an absent environment variable.
+  // Schema errors must throw even when throwOnError is false.
+  assert.throws(
+    () => validateEnv({ PORT: { type: 'port', requried: true } }, {}, { throwOnError: false }),
+    err => err instanceof EnvSaafError
+      && err.errors.includes('PORT: unknown option "requried"'),
+  );
+
+  // Misspelled default must also be rejected.
+  assert.throws(
+    () => validateEnv({ PORT: { type: 'port', defualt: '3000' } }, {}),
+    err => err instanceof EnvSaafError
+      && err.errors.includes('PORT: unknown option "defualt"'),
+  );
+
+  // Issue #220: contradictory bounds are schema errors, even for absent keys.
+  assert.throws(
+    () => validateEnv({ N: { type: 'number', min: 10, max: 5 } }, { N: '7' }),
+    err => err instanceof EnvSaafError && err.errors.includes('N: "min" must not exceed "max"'),
+  );
+  assert.throws(
+    () => validateEnv({ N: { type: 'number', min: 10, max: 5 } }, {}),
+    err => err instanceof EnvSaafError && err.errors.includes('N: "min" must not exceed "max"'),
+  );
+  assert.throws(
+    () => validateEnv({ S: { type: 'string', minLength: 10, maxLength: 5 } }, { S: 'hello' }),
+    err => err instanceof EnvSaafError && err.errors.includes('S: "minLength" must not exceed "maxLength"'),
+  );
+  assert.throws(
+    () => validateEnv({ S: { type: 'string', minLength: 10, maxLength: 5 } }, {}),
+    err => err instanceof EnvSaafError && err.errors.includes('S: "minLength" must not exceed "maxLength"'),
+  );
+  assert.throws(
+    () => validateEnv({ M: { type: 'string', choices: [] } }, { M: 'a' }),
+    err => err instanceof EnvSaafError && err.errors.includes('M: "choices" must be a non-empty array'),
+  );
+  assert.throws(
+    () => validateEnv({ M: { type: 'string', choices: [] } }, {}),
+    err => err instanceof EnvSaafError && err.errors.includes('M: "choices" must be a non-empty array'),
+  );
+  // Valid combinations keep working exactly as before.
+  assert.strictEqual(validateEnv({ N: { type: 'number', min: 5, max: 10 } }, { N: '7' }).N, 7);
+  assert.strictEqual(validateEnv({ N: { type: 'number', min: 5, max: 5 } }, { N: '5' }).N, 5);
+  assert.strictEqual(validateEnv({ S: { type: 'string', minLength: 2, maxLength: 5 } }, { S: 'hey' }).S, 'hey');
+  assert.strictEqual(validateEnv({ M: { type: 'string', choices: ['a', 'b'] } }, { M: 'a' }).M, 'a');
+
+  // Several valid options together must continue working.
+  assert.strictEqual(
+    validateEnv(
+      { PORT: { type: 'int', required: true, min: 1, max: 65535, trim: true } },
+      { PORT: '3000' },
+    ).PORT,
+    3000,
   );
 }
 
