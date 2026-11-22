@@ -4092,4 +4092,138 @@ assert.deepStrictEqual(
   }
 }
 
+// Issue #222: scanCode — optional chaining `process.env?.KEY` / `import.meta.env?.KEY`
+{
+  // The reported case: an optional-chained read is a read.
+  assert.deepStrictEqual(scanCode('const x = process.env?.MAYBE_KEY;'), ['MAYBE_KEY']);
+  // Plain dot access keeps working unchanged.
+  assert.deepStrictEqual(scanCode('const x = process.env.MAYBE_KEY;'), ['MAYBE_KEY']);
+  // Optional and plain reads mix freely in one source: one sorted, unique list.
+  assert.deepStrictEqual(scanCode('process.env.A; process.env?.B; process.env?.A; process.env.A;'), ['A', 'B']);
+  // Bracket and backtick forms behind `?.` work too.
+  assert.deepStrictEqual(scanCode("process.env?.['BRACKET']; process.env?.[`TICK`];"), ['BRACKET', 'TICK']);
+  assert.deepStrictEqual(
+    scanCode("import.meta.env?.VITE_A; import.meta.env?.['VITE_B']; import.meta.env?.[`VITE_C`];"),
+    ['VITE_A', 'VITE_B', 'VITE_C']
+  );
+  // Chained further (`process.env?.A?.B`) still reports the env read `A`.
+  assert.deepStrictEqual(scanCode('const y = process.env?.A?.B;'), ['A']);
+  // A `?.` mention inside a comment, string or template text is still not a read.
+  assert.deepStrictEqual(scanCode('// set process.env?.NOPE first'), []);
+  assert.deepStrictEqual(scanCode('/* process.env?.BLOCK */'), []);
+  assert.deepStrictEqual(scanCode('const s = "process.env?.STR";'), []);
+  assert.deepStrictEqual(scanCode("const t = 'process.env?.QUOTE';"), []);
+  assert.deepStrictEqual(scanCode('const u = `see process.env?.TMPL in docs`;'), []);
+  // A real optional read and a decoy on the same line: only the read counts.
+  assert.deepStrictEqual(scanCode('const g = process.env?.REAL; // process.env?.FAKE'), ['REAL']);
+  assert.deepStrictEqual(scanCode('const g = process.env?.REAL; const s = "process.env?.STR2";'), ['REAL']);
+  // An optional read inside a template's ${...} is a read; the text around it is not.
+  assert.deepStrictEqual(scanCode('const v = `k=${process.env?.IN_TMPL} and process.env?.FAKE2`'), ['IN_TMPL']);
+  // `process.env?.` with no identifier after it is not a read (and must not crash).
+  assert.deepStrictEqual(scanCode('const z = process.env?.;'), []);
+  // scanDir picks up optional-chained reads in real files, next to plain ones,
+  // and still ignores comments — end to end through the CLI `scan` command.
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const path = require('node:path');
+  const { spawnSync } = require('node:child_process');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'env-saaf-scan-'));
+  fs.mkdirSync(path.join(dir, 'src'));
+  fs.writeFileSync(path.join(dir, 'src', 'a.ts'), 'export const u = process.env?.TS_KEY; // process.env?.NOPE\n');
+  fs.writeFileSync(path.join(dir, 'src', 'b.mjs'), "import x from 'x';\nconst k = process.env['PLAIN'];\nconst o = process.env?.OPT_KEY;\n");
+  const cli = path.join(__dirname, 'cli.js');
+  const out = spawnSync('node', [cli, 'scan', path.join(dir, 'src'), '--json'], { encoding: 'utf8' });
+  assert.strictEqual(out.status, 0, out.stderr);
+  assert.deepStrictEqual(JSON.parse(out.stdout).vars, ['OPT_KEY', 'PLAIN', 'TS_KEY']);
+  fs.rmSync(dir, { recursive: true, force: true });
+}
+
+// Issue #222 (edge cases): optional-chaining details and the `check` round-trip
+{
+  // Keys with digits/underscores, and the double-quoted bracket form.
+  assert.deepStrictEqual(scanCode('process.env?._PRIVATE_2; process.env?.["DQ_KEY"];'), ['DQ_KEY', '_PRIVATE_2']);
+  // Duplicates across plain and optional forms collapse into one sorted entry.
+  assert.deepStrictEqual(scanCode('process.env?.SAME; process.env.SAME; process.env?.SAME;'), ['SAME']);
+  // import.meta.env optional reads sort together with process.env ones.
+  assert.deepStrictEqual(scanCode('process.env?.ZZZ; import.meta.env?.AAA;'), ['AAA', 'ZZZ']);
+  // Empty / non-string input does not crash and finds nothing.
+  assert.deepStrictEqual(scanCode(''), []);
+  assert.deepStrictEqual(scanCode(null), []);
+  assert.deepStrictEqual(scanCode(undefined), []);
+  assert.deepStrictEqual(scanCode(42), []);
+  // `process.env?.` followed by a non-identifier is not a read.
+  assert.deepStrictEqual(scanCode('process.env?.9BAD; process.env?.-X;'), []);
+  // An optional chain on something that is not `env` is not reported.
+  assert.deepStrictEqual(scanCode('const a = foo?.env?.BAR;'), []);
+  // A block comment spanning lines masks optional reads inside it.
+  assert.deepStrictEqual(scanCode('/* process.env?.L1\nprocess.env?.L2 */ const a = process.env?.REAL;'), ['REAL']);
+  // The bracket key sits in a (masked) literal, but the head is code: still a read.
+  assert.deepStrictEqual(scanCode("const a = process.env?.['IN_BRACKET'];"), ['IN_BRACKET']);
+  // Destructuring keeps working next to optional reads.
+  assert.deepStrictEqual(scanCode('const { D } = process.env; const o = process.env?.O;'), ['D', 'O']);
+
+  // The motivation end to end: a key read ONLY through `?.` is "used", so
+  // `check` against a .env.example declaring it must not flag it as UNUSED.
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const path = require('node:path');
+  const { spawnSync } = require('node:child_process');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'env-saaf-check-'));
+  fs.writeFileSync(path.join(dir, 'app.js'), 'export const m = process.env?.MAYBE_KEY;\n');
+  fs.writeFileSync(path.join(dir, '.env.example'), 'MAYBE_KEY=\n');
+  const cli = path.join(__dirname, 'cli.js');
+  const out = spawnSync('node', [cli, 'check', dir], { encoding: 'utf8' });
+  assert.strictEqual(out.status, 0, out.stderr);
+  assert.ok(out.stdout.includes('all clean'), out.stdout);
+  assert.ok(!out.stdout.includes('UNUSED'), out.stdout);
+  // ...while a key declared but never read at all is still flagged (exit 1).
+  fs.writeFileSync(path.join(dir, '.env.example'), 'MAYBE_KEY=\nNEVER_READ=\n');
+  const out2 = spawnSync('node', [cli, 'check', dir], { encoding: 'utf8' });
+  assert.strictEqual(out2.status, 1);
+  assert.ok(out2.stdout.includes('UNUSED: NEVER_READ'), out2.stdout);
+  assert.ok(!out2.stdout.includes('UNUSED: MAYBE_KEY'), out2.stdout);
+  fs.rmSync(dir, { recursive: true, force: true });
+}
+
+{
+  const aliases = [
+    'local.BEFORE_DECLARATION;',
+    '// const phantom = /*',
+    'const visible = /* note */ process.env; visible.VISIBLE;',
+    '"const stringPhantom = /*";',
+    'const afterString = /* note */ process.env; afterString.AFTER_STRING;',
+    '\x60const templatePhantom = /*\x60;',
+    'const afterTemplate = /* note */ import.meta.env; afterTemplate.AFTER_TEMPLATE;',
+    'const tagged = import.meta.env\x60tagged\x60; tagged.EXTRA;',
+    'const multilineTag = process.env',
+    '\x60tagged\x60; multilineTag.EXTRA;',
+    'const before = /* gap */ process.env; before.BEFORE_SOURCE;',
+    'const comma = process.env, port = comma.COMMA;',
+    'const unrelated = /* gap */ fallback; /* gap */ process.env; unrelated.NOPE;',
+    'let increment = process.env',
+    '++count; increment.INCREMENT;',
+    'let decrement = process.env',
+    '--count; decrement.DECREMENT;',
+    'const $env = process.env;',
+    'let local = process.env',
+    'var vite = import.meta.env;',
+    '$env.Z; local["A"]; local[\x60B\x60]; vite.VITE_X; $env.Z;',
+    'const commented = process.env /* source */; commented.COMMENTED;',
+    '[...local.ARGS]; local.PORT$NAME;',
+    'config./* gap */local.OBJECT_ONLY; this.#local.OBJECT_ONLY;',
+    'const continued = process.env',
+    '["PORT"]; continued.length;',
+    'other.NOPE; wrapper.$env.NOPE; prefix$env.NOPE;',
+    '// local.COMMENT',
+    '/* local.BLOCK; const hidden = process.env; */ hidden.NOPE;',
+    '"const fake = process.env;"; fake.NOPE; "local.STRING";',
+    '\x60local.TEXT ${local.EXPRESSION}\x60;',
+    'const selected = process.env.SELECTED; selected.NOPE;',
+    'const copy = process.env || {}; copy.NOPE;',
+    'const { DIRECT } = process.env; import.meta.env?.VITE_DIRECT;',
+  ].join('\n');
+  assert.deepStrictEqual(scanCode(aliases),
+    ['A', 'AFTER_STRING', 'AFTER_TEMPLATE', 'ARGS', 'B', 'BEFORE_SOURCE', 'COMMA', 'COMMENTED', 'DECREMENT', 'DIRECT', 'EXPRESSION', 'INCREMENT', 'SELECTED', 'VISIBLE', 'VITE_DIRECT', 'VITE_X', 'Z']);
+}
+
 console.log('env-saaf v1.5.0: all tests passed');

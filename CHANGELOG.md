@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Added: `scanCode` detects static property reads through simple local environment aliases (fixes #252).
+
 - Fixed: `parseEnvFile` reports a line-numbered `SyntaxError` for invalid assignment keys instead of silently dropping them, without exposing their values (fixes #221).
 
 - Fixed: `number`, `int` and `port` reject hexadecimal, binary and octal strings (including array items), while decimal strings and numeric defaults keep working (fixes #219).
@@ -9,8 +11,11 @@
 - Added: the `semver` type accepts one optional lowercase `v` prefix (`v1.2.3`, `v1.2.3-rc.1`, `v1.2.3+build`), returned unchanged — the form `git describe` and release pipelines emit; `v1.2`, `vv1.2.3` and uppercase `V1.2.3` are still rejected (fixes #227).
 - Fixed: `validateSchema` now rejects contradictory bounds up front — `min` above `max`, `minLength` above `maxLength`, and an empty `choices` array — with a schema error naming the key, even when the variable is absent (fixes #220).
 - Fixed: `validateSchema` now rejects unknown schema rule options, such as misspelled `required` or `default`, with an `EnvSaafError` identifying the schema key and offending option, even when the corresponding environment variable is absent (fixes #218).
+- Added: `env-saaf init --from-example[=file]` infers a starter schema from an existing example file (default `.env.example`) instead of the fixed template — each key's sample value picks the rule type (port-looking number in 1024-65535 -> `port`, `true`/`false` -> `boolean`, http(s) URL -> `url`, email -> `email`, other integers -> `int`, decimals -> `number`, else `string`, empty -> `string`), every inferred rule is commented as inferred (sample values are never copied into the schema), code-scanned keys the example lacks are folded in as `string` rules, and the example file itself is left untouched; only the schema file is written, still requiring `--force` to overwrite (fixes #232).
+
 - Added: `test-cli.js`, a CLI integration suite wired into `npm test`, that runs `cli.js` as a real subprocess in throwaway temp projects and asserts process-level behaviour — exit codes, stdout vs stderr, `--json` shape, `check`/`scan`/`example --write`/`init` round-trips in CommonJS and `"type": "module"` projects, missing-directory errors — with a scrubbed child environment so developer env vars cannot leak in (fixes #237).
 - Added: `scanDir` (and therefore the CLI `scan`/`check`/`example`) also scans single-file components — `.vue`, `.svelte` and `.astro` files — alongside the existing `.js/.cjs/.mjs/.ts/.mts/.cts/.tsx/.jsx` list; `node_modules` and `.git*` skips are unchanged and the comment/string masking in `scanCode` keeps template markup from producing false positives (fixes #235).
+- Fixed: `scanCode` (and therefore `scanDir` and the CLI `scan`/`check`/`example` commands) now reports optional-chained reads — `process.env?.KEY`, `process.env?.['KEY']`, ``process.env?.[`KEY`]`` and the `import.meta.env?.…` equivalents — alongside the plain dot/bracket/destructuring forms, in the same sorted unique list, with the same rule that mentions inside comments and string literals do not count (fixes #222).
 - Docs: new "Migrating to env-saaf" README section with concrete, runnable before/after paths from `dotenv`, `dotenv-safe` and `envalid` (validator mapping table included), linked from the comparison section; `test.js` now executes the after-snippets so the guide cannot drift from the current API (fixes #236).
 
 - Added: `scanCode` (and therefore `scanDir` and the CLI `scan`/`check`/`example` commands) detects Vite-style `import.meta.env` reads — dot access (`import.meta.env.VITE_API_KEY`), bracket access and destructuring — returned in the same sorted list as `process.env` reads, with the same rule that mentions inside comments and string literals do not count (fixes #225).
