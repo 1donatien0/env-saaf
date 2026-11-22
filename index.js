@@ -339,11 +339,14 @@ function coerce(key, raw, type, trim = true, protocols, sensitive = false, of = 
       return s;
     }
     case 'semver': {
-      // Semantic version: MAJOR.MINOR.PATCH, no leading 'v', no leading
-      // zeroes in the numeric parts; pre-release and build suffixes are
-      // allowed (1.2.3-beta.1, 1.2.3+build.5). Returned unchanged.
+      // Semantic version: MAJOR.MINOR.PATCH, no leading zeroes in the
+      // numeric parts; pre-release and build suffixes are allowed
+      // (1.2.3-beta.1, 1.2.3+build.5). One optional lowercase 'v' prefix
+      // is accepted (v1.2.3 — what `git describe` and release pipelines
+      // emit); an uppercase 'V' or a double 'vv' is rejected. The value
+      // is returned unchanged, prefix included.
       const s = String(v);
-      if (!/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-((?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*)(?:\.(?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*))*))?(?:\+([0-9a-zA-Z-]+(?:\.[0-9a-zA-Z-]+)*))?$/.test(s)) {
+      if (!/^v?(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-((?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*)(?:\.(?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*))*))?(?:\+([0-9a-zA-Z-]+(?:\.[0-9a-zA-Z-]+)*))?$/.test(s)) {
         throw new Error(`${key}: expected a valid semantic version (e.g. ${TYPE_EXAMPLES.semver}), got "${shown}"`);
       }
       return s;
