@@ -4140,4 +4140,45 @@ assert.deepStrictEqual(
   fs.rmSync(dir, { recursive: true, force: true });
 }
 
+{
+  const aliases = [
+    'local.BEFORE_DECLARATION;',
+    '// const phantom = /*',
+    'const visible = /* note */ process.env; visible.VISIBLE;',
+    '"const stringPhantom = /*";',
+    'const afterString = /* note */ process.env; afterString.AFTER_STRING;',
+    '\x60const templatePhantom = /*\x60;',
+    'const afterTemplate = /* note */ import.meta.env; afterTemplate.AFTER_TEMPLATE;',
+    'const tagged = import.meta.env\x60tagged\x60; tagged.EXTRA;',
+    'const multilineTag = process.env',
+    '\x60tagged\x60; multilineTag.EXTRA;',
+    'const before = /* gap */ process.env; before.BEFORE_SOURCE;',
+    'const comma = process.env, port = comma.COMMA;',
+    'const unrelated = /* gap */ fallback; /* gap */ process.env; unrelated.NOPE;',
+    'let increment = process.env',
+    '++count; increment.INCREMENT;',
+    'let decrement = process.env',
+    '--count; decrement.DECREMENT;',
+    'const $env = process.env;',
+    'let local = process.env',
+    'var vite = import.meta.env;',
+    '$env.Z; local["A"]; local[\x60B\x60]; vite.VITE_X; $env.Z;',
+    'const commented = process.env /* source */; commented.COMMENTED;',
+    '[...local.ARGS]; local.PORT$NAME;',
+    'config./* gap */local.OBJECT_ONLY; this.#local.OBJECT_ONLY;',
+    'const continued = process.env',
+    '["PORT"]; continued.length;',
+    'other.NOPE; wrapper.$env.NOPE; prefix$env.NOPE;',
+    '// local.COMMENT',
+    '/* local.BLOCK; const hidden = process.env; */ hidden.NOPE;',
+    '"const fake = process.env;"; fake.NOPE; "local.STRING";',
+    '\x60local.TEXT ${local.EXPRESSION}\x60;',
+    'const selected = process.env.SELECTED; selected.NOPE;',
+    'const copy = process.env || {}; copy.NOPE;',
+    'const { DIRECT } = process.env; import.meta.env?.VITE_DIRECT;',
+  ].join('\n');
+  assert.deepStrictEqual(scanCode(aliases),
+    ['A', 'AFTER_STRING', 'AFTER_TEMPLATE', 'ARGS', 'B', 'BEFORE_SOURCE', 'COMMA', 'COMMENTED', 'DECREMENT', 'DIRECT', 'EXPRESSION', 'INCREMENT', 'SELECTED', 'VISIBLE', 'VITE_DIRECT', 'VITE_X', 'Z']);
+}
+
 console.log('env-saaf v1.5.0: all tests passed');

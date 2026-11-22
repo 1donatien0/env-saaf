@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Added: `scanCode` detects static property reads through simple local environment aliases (fixes #252).
+
 - Fixed: `parseEnvFile` reports a line-numbered `SyntaxError` for invalid assignment keys instead of silently dropping them, without exposing their values (fixes #221).
 
 - Fixed: `number`, `int` and `port` reject hexadecimal, binary and octal strings (including array items), while decimal strings and numeric defaults keep working (fixes #219).
