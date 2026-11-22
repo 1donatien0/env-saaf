@@ -1101,6 +1101,16 @@ function scanCode(text) {
     [/import\.meta\.env\.([A-Za-z_][A-Za-z0-9_]*)/g, 'import.meta.env'],
     [/import\.meta\.env\[['"]([A-Za-z_][A-Za-z0-9_]*)['"]\]/g, 'import.meta.env'],
     [/import\.meta\.env\[`([A-Za-z_][A-Za-z0-9_]*)`\]/g, 'import.meta.env'],
+    // Optional chaining (issue #222): `process.env?.KEY`, `process.env?.['KEY']`,
+    // `process.env?.[`KEY`]` — valid and increasingly common reads, same shapes
+    // as the plain forms above.
+    [/process\.env\?\.([A-Za-z_][A-Za-z0-9_]*)/g, 'process.env'],
+    [/process\.env\?\.\[['"]([A-Za-z_][A-Za-z0-9_]*)['"]\]/g, 'process.env'],
+    [/process\.env\?\.\[`([A-Za-z_][A-Za-z0-9_]*)`\]/g, 'process.env'],
+    // Optional chaining on import.meta.env (issue #222) as well.
+    [/import\.meta\.env\?\.([A-Za-z_][A-Za-z0-9_]*)/g, 'import.meta.env'],
+    [/import\.meta\.env\?\.\[['"]([A-Za-z_][A-Za-z0-9_]*)['"]\]/g, 'import.meta.env'],
+    [/import\.meta\.env\?\.\[`([A-Za-z_][A-Za-z0-9_]*)`\]/g, 'import.meta.env'],
   ];
   // The read itself must be code: a `process.env.X` in a comment or a string is
   // not a read. Bracket and destructured reads keep their key in a literal, so
