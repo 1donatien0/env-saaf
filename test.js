@@ -2858,7 +2858,69 @@ assert.deepStrictEqual(
   assert.strictEqual(nonThrowArr.errors.length, 1);
   assert.ok(nonThrowArr.errors[0].includes('PORTS[1]'));
 
-  // 11. generateExample produces a delimited placeholder (respecting separator, array default, and sensitive).
+  // 11. `minItems` / `maxItems` bound the item count (issue #207).
+  assert.deepStrictEqual(
+    validateEnv({ TAGS: { type: 'array', minItems: 2 } }, { TAGS: 'a,b' }).TAGS,
+    ['a', 'b'],
+  );
+  assert.deepStrictEqual(
+    validateEnv({ TAGS: { type: 'array', maxItems: 2 } }, { TAGS: 'a,b' }).TAGS,
+    ['a', 'b'],
+  );
+  assert.deepStrictEqual(
+    validateEnv({ TAGS: { type: 'array', minItems: 2, maxItems: 3 } }, { TAGS: 'a,b,c' }).TAGS,
+    ['a', 'b', 'c'],
+  );
+  assert.deepStrictEqual(
+    validateEnv({ TAGS: { type: 'array', minItems: 1, maxItems: 1 } }, { TAGS: 'solo' }).TAGS,
+    ['solo'],
+  );
+  assert.throws(
+    () => validateEnv({ TAGS: { type: 'array', minItems: 2 } }, { TAGS: 'only-one' }),
+    err => err instanceof EnvSaafError && err.errors[0] === 'TAGS: expected at least 2 items, got 1',
+  );
+  assert.throws(
+    () => validateEnv({ TAGS: { type: 'array', maxItems: 2 } }, { TAGS: 'a,b,c' }),
+    err => err instanceof EnvSaafError && err.errors[0] === 'TAGS: expected at most 2 items, got 3',
+  );
+  assert.throws(
+    () => validateEnv({ TAGS: { type: 'array', minItems: 2, maxItems: 3 } }, { TAGS: 'a,b,c,d' }),
+    err => err instanceof EnvSaafError && err.errors[0] === 'TAGS: expected 2–3 items, got 4',
+  );
+  // Bounds apply to defaults too, and to an empty array default.
+  assert.deepStrictEqual(
+    validateEnv({ TAGS: { type: 'array', minItems: 1, maxItems: 2, default: ['x'] } }, {}).TAGS,
+    ['x'],
+  );
+  assert.throws(
+    () => validateEnv({ TAGS: { type: 'array', minItems: 2, default: ['x'] } }, {}),
+    err => err instanceof EnvSaafError && err.errors[0] === 'TAGS: expected at least 2 items, got 1',
+  );
+  assert.throws(
+    () => validateEnv({ TAGS: { type: 'array', minItems: 1, default: [] } }, {}),
+    err => err instanceof EnvSaafError && err.errors[0] === 'TAGS: expected at least 1 items, got 0',
+  );
+  // Malformed options are rejected up front, even when the key is absent.
+  for (const bad of [{ minItems: -1 }, { maxItems: -2 }, { minItems: 1.5 }, { maxItems: '3' }, { minItems: 3, maxItems: 2 }]) {
+    assert.throws(
+      () => validateEnv({ TAGS: { type: 'array', ...bad } }, {}),
+      err => err instanceof EnvSaafError && err.errors[0].startsWith('TAGS:'),
+    );
+  }
+  assert.throws(
+    () => validateEnv({ TAGS: { type: 'array', minItems: 3, maxItems: 2 } }, {}),
+    err => err instanceof EnvSaafError && err.errors[0].includes('"minItems" must not exceed "maxItems"'),
+  );
+  assert.throws(
+    () => validateEnv({ NAME: { type: 'string', minItems: 1 } }, {}),
+    err => err instanceof EnvSaafError && err.errors[0].includes('"minItems" and "maxItems" only apply to type \'array\''),
+  );
+  assert.throws(
+    () => validateEnv({ N: { type: 'int', maxItems: 2 } }, {}),
+    err => err instanceof EnvSaafError && err.errors[0].includes('"minItems" and "maxItems" only apply to type \'array\''),
+  );
+
+  // 12. generateExample produces a delimited placeholder (respecting separator, array default, and sensitive).
   const exArr = generateExample({
     TAGS: { type: 'array', required: true },
     PORTS: { type: 'array', of: 'port', separator: ';' },
