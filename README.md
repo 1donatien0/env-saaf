@@ -541,6 +541,7 @@ CLI output is plain text by default, including in pipes and CI. For scripts that
 ```bash
 npx env-saaf --version      # print the installed version
 npx env-saaf scan ./src     # every env var your code actually uses
+                           # scans .js/.cjs/.mjs/.ts/.mts/.cts/.tsx/.jsx and .vue/.svelte/.astro components
 npx env-saaf check .        # code vs .env.example diff — exit 1 on any finding (CI-ready)
 npx env-saaf check . --file .env.sample  # compare against a differently-named template file instead
 npx env-saaf check . --json # machine-readable JSON output (ok/missing/extra/unused) for CI or tooling

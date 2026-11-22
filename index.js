@@ -1178,7 +1178,14 @@ function scanCode(text) {
   return [...found].sort();
 }
 
-/** Scan a folder (recursive, .js/.cjs/.mjs/.ts) for env usage. */
+// Issue #235: single-file components (.vue/.svelte/.astro) hold code too —
+// <script> blocks, Svelte instance scripts and Astro frontmatter all read
+// process.env / import.meta.env — so the directory walk includes them.
+// scanCode is text-based and already ignores comments/strings, so template
+// markup does not produce false positives in the common cases.
+const SCAN_EXTENSIONS = /\.(js|cjs|mjs|ts|mts|cts|tsx|jsx|vue|svelte|astro)$/;
+
+/** Scan a folder (recursive) for env usage in .js/.cjs/.mjs/.ts/.mts/.cts/.tsx/.jsx/.vue/.svelte/.astro files. */
 function scanDir(dir) {
   const found = new Set();
   const walk = (d) => {
@@ -1186,7 +1193,7 @@ function scanDir(dir) {
       if (e.name === 'node_modules' || e.name.startsWith('.git')) continue;
       const p = path.join(d, e.name);
       if (e.isDirectory()) walk(p);
-      else if (/\.(js|cjs|mjs|ts|mts|cts|tsx|jsx)$/.test(e.name)) scanCode(fs.readFileSync(p, 'utf8')).forEach(k => found.add(k));
+      else if (SCAN_EXTENSIONS.test(e.name)) scanCode(fs.readFileSync(p, 'utf8')).forEach(k => found.add(k));
     }
   };
   walk(dir);
