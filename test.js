@@ -4092,6 +4092,8 @@ assert.deepStrictEqual(
   assert.deepStrictEqual(validateEnv({ NS: { type: 'array', of: 'int', maxItems: 2 } }, { NS: '1,2' }).NS, [1, 2]);
   // minItems and maxItems together: capped by maxItems.
   assert.ok(generateExample({ NS: { type: 'array', of: 'int', minItems: 5, maxItems: 4 } }).includes('NS=1,2,3,1\n'));
+}
+
 // Issue #222: scanCode — optional chaining `process.env?.KEY` / `import.meta.env?.KEY`
 {
   // The reported case: an optional-chained read is a read.
