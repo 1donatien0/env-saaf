@@ -49,6 +49,29 @@ const KNOWN_TYPES = new Set(Object.keys(TYPE_EXAMPLES));
 const STRING_TYPES = new Set([
   'string', 'email', 'url', 'file', 'uuid', 'hex', 'ipv4', 'semver', 'base64', 'host',
 ]);
+const KNOWN_RULE_OPTIONS = new Set([
+  'type',
+  'required',
+  'requiredIf',
+  'default',
+  'choices',
+  'min',
+  'max',
+  'minLength',
+  'maxLength',
+  'length',
+  'protocols',
+  'pattern',
+  'validate',
+  'transform',
+  'trim',
+  'sensitive',
+  'of',
+  'separator',
+  'minItems',
+  'maxItems',
+  'aliases',
+]);
 
 // Issue #228: a group rule nests a sub-schema under one prefix, so
 // { DB: { prefix: 'DB_', schema: { HOST: {...} } } } reads the env var
@@ -146,6 +169,11 @@ function validateSchema(schema) {
       }
       continue;
     }
+    for (const opt of Object.keys(rule)) {
+      if (!KNOWN_RULE_OPTIONS.has(opt)) {
+        errors.push(`${key}: unknown option "${opt}"`);
+      }
+    }
     if (rule.type !== undefined && !KNOWN_TYPES.has(rule.type)) {
       errors.push(`${key}: unknown type "${rule.type}"`);
     }
@@ -171,13 +199,33 @@ function validateSchema(schema) {
         errors.push(`${key}: "${opt}" must be a number`);
       }
     }
+    // Issue #220: `min` above `max` describes a range that can never match,
+    // so it is a schema bug — reject it up front instead of failing oddly
+    // (or never) when the variable is checked.
+    if (rule.min !== undefined && rule.max !== undefined
+      && typeof rule.min === 'number' && typeof rule.max === 'number'
+      && Number.isFinite(rule.min) && Number.isFinite(rule.max)
+      && rule.min > rule.max) {
+      errors.push(`${key}: "min" must not exceed "max"`);
+    }
     for (const opt of ['minLength', 'maxLength']) {
       if (rule[opt] !== undefined && (!Number.isInteger(rule[opt]) || rule[opt] < 0)) {
         errors.push(`${key}: "minLength" and "maxLength" must be non-negative integers`);
       }
     }
+    // Issue #220: same as `min`/`max` — a length range that can never match.
+    if (rule.minLength !== undefined && rule.maxLength !== undefined
+      && Number.isInteger(rule.minLength) && Number.isInteger(rule.maxLength)
+      && rule.minLength > rule.maxLength) {
+      errors.push(`${key}: "minLength" must not exceed "maxLength"`);
+    }
     if (rule.length !== undefined && (!Number.isInteger(rule.length) || rule.length < 0)) {
       errors.push(`${key}: "length" must be a non-negative integer`);
+    }
+    // Issue #220: an empty `choices` list can never match any value — it is
+    // a schema bug, not a value that fails validation.
+    if (rule.choices !== undefined && Array.isArray(rule.choices) && rule.choices.length === 0) {
+      errors.push(`${key}: "choices" must be a non-empty array`);
     }
     // Issue #50: `protocols` is a non-empty array of schemes (e.g. ['https']);
     // a bare string, an empty array or a non-scheme entry is a schema bug.
@@ -394,11 +442,14 @@ function coerce(key, raw, type, trim = true, protocols, sensitive = false, of = 
       return s;
     }
     case 'semver': {
-      // Semantic version: MAJOR.MINOR.PATCH, no leading 'v', no leading
-      // zeroes in the numeric parts; pre-release and build suffixes are
-      // allowed (1.2.3-beta.1, 1.2.3+build.5). Returned unchanged.
+      // Semantic version: MAJOR.MINOR.PATCH, no leading zeroes in the
+      // numeric parts; pre-release and build suffixes are allowed
+      // (1.2.3-beta.1, 1.2.3+build.5). One optional lowercase 'v' prefix
+      // is accepted (v1.2.3 — what `git describe` and release pipelines
+      // emit); an uppercase 'V' or a double 'vv' is rejected. The value
+      // is returned unchanged, prefix included.
       const s = String(v);
-      if (!/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-((?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*)(?:\.(?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*))*))?(?:\+([0-9a-zA-Z-]+(?:\.[0-9a-zA-Z-]+)*))?$/.test(s)) {
+      if (!/^v?(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-((?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*)(?:\.(?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*))*))?(?:\+([0-9a-zA-Z-]+(?:\.[0-9a-zA-Z-]+)*))?$/.test(s)) {
         throw new Error(`${key}: expected a valid semantic version (e.g. ${TYPE_EXAMPLES.semver}), got "${shown}"`);
       }
       return s;
