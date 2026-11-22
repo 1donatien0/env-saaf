@@ -60,6 +60,18 @@ let writeOpt = null;
 let forceOpt = false;
 // Issue #230: --watch ('check' and 'scan' only) re-runs the command when watched inputs change.
 let watchOpt = false;
+
+// Issue #230: in watch mode an error exit must not kill the watcher — fatalExit
+// throws WatchExit instead, so watchLoop's runOnce can log the exit code and
+// keep watching. Outside watch mode fatalExit is exactly process.exit.
+let watchActive = false;
+class WatchExit extends Error {
+  constructor(code) { super(`exit ${code}`); this.code = code; }
+}
+function fatalExit(code) {
+  if (watchActive) throw new WatchExit(code);
+  process.exit(code);
+}
 const positional = [];
 for (let i = 1; i < argv.length; i++) {
   const a = argv[i];
@@ -153,7 +165,7 @@ function readEnvFile(filePath) {
     const message = `${path.relative(dir, filePath)}: ${detail}`;
     if (jsonMode) console.log(JSON.stringify({ ok: false, error: message }));
     else console.error(`env-saaf: ${message}`);
-    process.exit(2);
+    fatalExit(2);
   }
 }
 
@@ -222,7 +234,7 @@ function runCheck() {
     } else {
       console.error(`env-saaf: ${fileOpt} not found in ${dir} — ${hint}`);
     }
-    process.exit(2);
+    fatalExit(2);
   }
   const documented = Object.keys(readEnvFile(examplePath));
   const used = scanDir(dir);
@@ -249,7 +261,14 @@ function runCheck() {
     let schema;
     try {
       // Like --file, a relative schema path is relative to the checked directory.
-      schema = require(path.resolve(dir, schemaOpt));
+      const schemaPath = path.resolve(dir, schemaOpt);
+      // Issue #230: require() caches modules, so in watch mode a schema edit
+      // would otherwise re-run against the stale cached schema — drop the
+      // cache entry before loading (the init command uses the same pattern).
+      if (watchActive) {
+        try { delete require.cache[require.resolve(schemaPath)]; } catch { /* not loaded yet */ }
+      }
+      schema = require(schemaPath);
     } catch (e) {
       // Issue #184: when the schema file is one Node treats as an ES module,
       // say so plainly and name the fix instead of surfacing the raw
@@ -261,13 +280,13 @@ function runCheck() {
       const message = `env-saaf: cannot load schema ${schemaOpt}: ${detail}`;
       if (jsonMode) console.log(JSON.stringify({ ok: false, error: message }));
       else console.error(message);
-      process.exit(2);
+      fatalExit(2);
     }
     if (schema === null || typeof schema !== 'object' || Array.isArray(schema)) {
       const message = `env-saaf: schema ${schemaOpt} must export a schema object (module.exports = { KEY: { type: 'port', ... } })`;
       if (jsonMode) console.log(JSON.stringify({ ok: false, error: message }));
       else console.error(message);
-      process.exit(2);
+      fatalExit(2);
     }
     const targetName = fileExplicit ? fileOpt : (fs.existsSync(envPath) ? '.env' : null);
     if (targetName) {
@@ -331,8 +350,16 @@ function runCheck() {
 // available on Linux) plus the directory of the --schema file when it lives
 // outside the scanned tree. Ctrl-C exits cleanly with code 0.
 function watchLoop() {
+  watchActive = true;
   const runOnce = () => {
-    const code = cmd === 'scan' ? runScan() : runCheck();
+    let code;
+    try {
+      code = cmd === 'scan' ? runScan() : runCheck();
+    } catch (e) {
+      // Issue #230: error paths report their exit code and the loop survives.
+      if (e instanceof WatchExit) code = e.code;
+      else throw e;
+    }
     console.error(`env-saaf: [${new Date().toISOString()}] ${cmd} finished, exit ${code}`);
     return code;
   };
