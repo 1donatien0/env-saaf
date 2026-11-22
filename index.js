@@ -1182,6 +1182,34 @@ function scanCode(text) {
       if (/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) found.add(name);
     }
   }
+  const aliases = new Map();
+  const declaration = /(?<![$\p{ID_Continue}.])(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*(?:\/\*(?:[^*]|\*(?!\/))*\*\/\s*|\/\/[^\r\n]*(?:\r\n?|\n)\s*)*(process\.env|import\.meta\.env)/gu;
+  const boundary = /\s*/y;
+  const continuation = /(?!\+\+|--)(?:[.([+*/%&|^?=<>-]|!=|(?:in|instanceof)\b)/y;
+  for (const m of src.matchAll(declaration)) {
+    const end = m.index + m[0].length;
+    if (!isCode(m.index, m.index + 1) || !isCode(end - m[2].length, end) || aliases.has(m[1])) continue;
+    boundary.lastIndex = end;
+    const [spacing] = boundary.exec(codeView);
+    const next = boundary.lastIndex;
+    continuation.lastIndex = next;
+    // A line break ends the initializer only when the expression cannot continue.
+    if (next === codeView.length || /[;,}]/.test(codeView[next]) ||
+        (/[\r\n]/.test(spacing) && !continuation.test(codeView))) {
+      aliases.set(m[1], end);
+    }
+  }
+  if (aliases.size) {
+    const access = /(?<![#$\p{ID_Continue}])([A-Za-z_$][\w$]*)(?:\.([A-Za-z_]\w*)(?![$\p{ID_Continue}])|\[(['"\x60])([A-Za-z_]\w*)\3\])/gu;
+    for (const m of src.matchAll(access)) {
+      const declaredAt = aliases.get(m[1]);
+      if (declaredAt === undefined || declaredAt > m.index || !isCode(m.index, m.index + m[1].length)) continue;
+      let previous = m.index - 1;
+      while (previous >= 0 && /\s/.test(codeView[previous])) previous--;
+      if (codeView[previous] === '.' && codeView.slice(previous - 2, previous + 1) !== '...') continue;
+      found.add(m[2] ?? m[4]);
+    }
+  }
   return [...found].sort();
 }
 
