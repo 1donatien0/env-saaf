@@ -1440,12 +1440,19 @@ assert.deepStrictEqual(
     assert.throws(() => validateEnv({ V: { type: 'semver' } }, { V: bad }), /expected a valid semantic version/);
   }
 
-  // base64: standard base64 only (A-Za-z0-9+/ with '=' padding, length a multiple of 4).
-  assert.strictEqual(validateEnv({ B: { type: 'base64' } }, { B: 'aGVsbG8=' }).B, 'aGVsbG8=');
-  assert.strictEqual(validateEnv({ B: { type: 'base64' } }, { B: 'aGVsbG8gd29ybGQ=' }).B, 'aGVsbG8gd29ybGQ=');
-  assert.strictEqual(validateEnv({ B: { type: 'base64' } }, { B: 'AA==' }).B, 'AA==');
-  for (const bad of ['not base64!', 'aGVsbG8', 'aGVsbG8===', 'aGVs-bG8=', 'aGVs_bG8=', '====']) {
-    assert.throws(() => validateEnv({ B: { type: 'base64' } }, { B: bad }), /expected a valid base64 string/);
+  // Base64 accepts either alphabet with optional complete padding.
+  const base64Schema = { B: { type: 'base64', trim: false } };
+  for (const value of [
+    'aGVsbG8=', 'aGVsbG8gd29ybGQ=', 'AA==', 'aGVsbG8', 'AA', 'AAAA',
+    '+/8=', '+/8', '-_8=', '-_8', '/w==', '/w', '_w==', '_w', '+/AA', '-_AA',
+  ]) {
+    assert.strictEqual(validateEnv(base64Schema, { B: value }).B, value);
+  }
+  for (const bad of [
+    'not!!base64', 'a', 'AAAAA', 'aGVsbG8===', '====', 'AA=', 'AAA==',
+    'AAAA=', 'A===', 'AA=A', 'AA==AAAA', 'AA A', 'AA==\n', '+_8=', '-/8',
+  ]) {
+    assert.throws(() => validateEnv(base64Schema, { B: bad }), /expected a valid base64 string/);
   }
   // minLength/maxLength work on the new string types too.
   assert.throws(() => validateEnv({ IP: { type: 'ipv4', minLength: 20 } }, { IP: '1.2.3.4' }), /at least 20 characters/);
@@ -4224,11 +4231,9 @@ assert.deepStrictEqual(
     ['A', 'AFTER_STRING', 'AFTER_TEMPLATE', 'ARGS', 'B', 'BEFORE_SOURCE', 'COMMA', 'COMMENTED', 'DECREMENT', 'DIRECT', 'EXPRESSION', 'INCREMENT', 'SELECTED', 'VISIBLE', 'VITE_DIRECT', 'VITE_X', 'Z']);
 }
 
-console.log('env-saaf v1.5.0: all tests passed');
-
 // Issue #230: watch-mode integration test — spawn `cli.js check --watch` as a
 // subprocess, edit files, and assert it re-runs (debounced) and exits 0 on Ctrl-C.
-(async () => {
+const watchModeTest = (async () => {
   const { spawn } = require('node:child_process');
   const fs = require('node:fs');
   const os = require('node:os');
@@ -4285,12 +4290,12 @@ console.log('env-saaf v1.5.0: all tests passed');
     fs.rmSync(dir, { recursive: true, force: true });
   }
   console.log('watch-mode tests passed');
-})().catch((err) => { console.error(err); process.exit(1); });
+})();
 
 // Issue #230 (review blockers): watch mode survives error exits (missing
 // template, malformed env file) and picks up --schema edits instead of
 // re-running against the require()-cached schema.
-(async () => {
+const watchModeErrorPathTest = (async () => {
   const { spawn } = require('node:child_process');
   const fs = require('node:fs');
   const os = require('node:os');
@@ -4349,4 +4354,8 @@ console.log('env-saaf v1.5.0: all tests passed');
     fs.rmSync(dir, { recursive: true, force: true });
   }
   console.log('watch-mode error-path tests passed');
-})().catch((err) => { console.error(err); process.exit(1); });
+})();
+
+Promise.all([watchModeTest, watchModeErrorPathTest])
+  .then(() => console.log('env-saaf v1.5.0: all tests passed'))
+  .catch((err) => { console.error(err); process.exit(1); });
