@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Added: `env-saaf init --from-example[=file]` infers a starter schema from an existing example file (default `.env.example`) instead of the fixed template — each key's sample value picks the rule type (port-looking number in 1024-65535 -> `port`, `true`/`false` -> `boolean`, http(s) URL -> `url`, email -> `email`, other integers -> `int`, decimals -> `number`, else `string`, empty -> `string`), every inferred rule is commented as inferred (sample values are never copied into the schema), code-scanned keys the example lacks are folded in as `string` rules, and the example file itself is left untouched; only the schema file is written, still requiring `--force` to overwrite (fixes #232).
+
 - Added: `test-cli.js`, a CLI integration suite wired into `npm test`, that runs `cli.js` as a real subprocess in throwaway temp projects and asserts process-level behaviour — exit codes, stdout vs stderr, `--json` shape, `check`/`scan`/`example --write`/`init` round-trips in CommonJS and `"type": "module"` projects, missing-directory errors — with a scrubbed child environment so developer env vars cannot leak in (fixes #237).
 
 - Added: `scanCode` (and therefore `scanDir` and the CLI `scan`/`check`/`example` commands) detects Vite-style `import.meta.env` reads — dot access (`import.meta.env.VITE_API_KEY`), bracket access and destructuring — returned in the same sorted list as `process.env` reads, with the same rule that mentions inside comments and string literals do not count (fixes #225).
