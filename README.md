@@ -548,6 +548,7 @@ npx env-saaf check . --schema ./env.schema.js  # also validate the values in .en
 npx env-saaf scan ./src --json  # JSON list of used vars
 npx env-saaf example ./src  # draft a .env.example from a code scan
 npx env-saaf example ./src --write  # save the draft to .env.example (refuses, exit 1, when the scan finds no variables)
+npx env-saaf example . --schema ./env.schema.js  # generate .env.example from a schema instead — with type placeholders and alias/requiredIf annotations
 npx env-saaf init .  # scaffold a starter env.schema.js (commented type examples) + a matching .env.example (refuses to overwrite without --force)
 ```
 
@@ -615,7 +616,7 @@ PORT=3000
 API_KEY=
 ```
 
-Keys that look like secrets (`API_KEY`, `DB_PASSWORD`, …) get an empty placeholder — nothing safe to suggest for them. Other keys get a type-based placeholder, and an explicit `default` is used as-is.
+Keys that look like secrets (`API_KEY`, `DB_PASSWORD`, …) get an empty placeholder — nothing safe to suggest for them. Other keys get a type-based placeholder, and an explicit `default` is used as-is. Keys with `aliases` note the deprecated fallback names (`# type: url, required; also accepts DATABASE_URL (deprecated)`), and keys with `requiredIf` note the condition (`# type: url; required when MODE is 'production'`, or `required when MODE is one of 'staging', 'production'` for the `in` form).
 
 ### Log config without leaking secrets
 
