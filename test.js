@@ -202,6 +202,64 @@ assert.ok(!ex.includes('sk_live'));
   fs.rmSync(dir, { recursive: true, force: true });
 }
 
+// Issue #235: scanDir also scans single-file components (.vue/.svelte/.astro)
+{
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const path = require('node:path');
+  const { scanDir } = require('./index');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'env-saaf-scan-sfc-'));
+  try {
+    // Vue: <script> block reads. Comments and string literals inside the
+    // script do not count (the same scanCode masking as for .js files).
+    fs.writeFileSync(path.join(dir, 'App.vue'), [
+      '<template><p>{{ title }}</p></template>',
+      '<script setup>',
+      "const api = process.env.VITE_API_URL;",
+      "const key = import.meta.env.VITE_PUBLIC_KEY;",
+      '// process.env.IN_VUE_COMMENT',
+      'const doc = "process.env.IN_VUE_STRING";',
+      '</script>',
+      '',
+    ].join('\n'));
+    // Svelte: instance script reads.
+    fs.writeFileSync(path.join(dir, 'Widget.svelte'), [
+      '<script>let host = process.env.SVELTE_HOST;</script>',
+      '<p>hello</p>',
+      '',
+    ].join('\n'));
+    // Astro: frontmatter reads.
+    fs.writeFileSync(path.join(dir, 'Page.astro'), [
+      '---',
+      "const db = process.env.DATABASE_URL;",
+      '---',
+      '<html></html>',
+      '',
+    ].join('\n'));
+    // Nested directory: the walk is recursive.
+    fs.mkdirSync(path.join(dir, 'src', 'components'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'src', 'components', 'Nested.vue'), 'export const x = process.env.NESTED_VUE;\n');
+    // Skips stay intact: node_modules and .git* are never scanned.
+    fs.mkdirSync(path.join(dir, 'node_modules', 'dep'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'node_modules', 'dep', 'index.js'), 'process.env.IN_NODE_MODULES;\n');
+    fs.mkdirSync(path.join(dir, '.git', 'hooks'), { recursive: true });
+    fs.writeFileSync(path.join(dir, '.git', 'hooks', 'h.js'), 'process.env.IN_GIT;\n');
+    // Non-code extensions are still ignored.
+    fs.writeFileSync(path.join(dir, 'page.html'), '<script>process.env.IN_HTML;</script>\n');
+    fs.writeFileSync(path.join(dir, 'styles.css'), '/* process.env.IN_CSS */\n');
+
+    assert.deepStrictEqual(scanDir(dir), [
+      'DATABASE_URL',
+      'NESTED_VUE',
+      'SVELTE_HOST',
+      'VITE_API_URL',
+      'VITE_PUBLIC_KEY',
+    ]);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+}
+
 // Issue #14: parseEnvFile — strip inline comments after unquoted values;
 // '#' inside quotes is safe; a comment after a quoted value is stripped too
 {
