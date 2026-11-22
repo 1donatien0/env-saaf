@@ -217,4 +217,11 @@ export function scanDir(dir: string): string[];
 export function diffEnv(usedKeys: string[], documentedKeys: string[]): { usedNotDocumented: string[]; documentedNotUsed: string[] };
 export function maskValue(value: unknown): string;
 export function maskSecrets<T extends Record<string, unknown>>(obj: T): Record<keyof T, string>;
+/**
+ * Generate `.env.example` text from a schema. Values are placeholders/defaults
+ * only — never real secrets. Array rules get example items of their `of` type
+ * (`1,2,3` for `int`, `3000,8080,5432` for `port`, ...), sized to fit
+ * `minItems`/`maxItems` and joined by `separator`, so the output validates
+ * against the schema it was generated from.
+ */
 export function generateExample(schema: EnvSchema): string;

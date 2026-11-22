@@ -1161,6 +1161,49 @@ function maskSecrets(obj) {
   return out;
 }
 
+// Placeholder items for `type: 'array'`, per `of` item type (issue #223): every
+// item is a literal that itself validates against that item type, so a generated
+// .env.example passes `check` out of the box. No item contains a comma, so the
+// default separator never splits one item in two (JSON items are single-key
+// objects for the same reason).
+const ARRAY_ITEM_EXAMPLES = {
+  string: ['a', 'b', 'c'],
+  email: ['user@example.com', 'admin@example.com', 'dev@example.com'],
+  number: ['1.5', '2.5', '3.5'],
+  int: ['1', '2', '3'],
+  boolean: ['true', 'false', 'true'],
+  url: ['https://a.example', 'https://b.example', 'https://c.example'],
+  uuid: ['550e8400-e29b-41d4-a716-446655440000', '6ba7b810-9dad-11d1-80b4-00c04fd430c8', '7c9e6679-7425-40de-944b-e07fc1f90ae7'],
+  hex: ['deadbeef', 'cafebabe', '0123abcd'],
+  ipv4: ['192.168.0.1', '10.0.0.1', '172.16.0.1'],
+  semver: ['1.0.0', '2.0.0', '0.1.0'],
+  base64: ['aGVsbG8=', 'd29ybGQ=', 'Zm9vYmFy'],
+  port: ['3000', '8080', '5432'],
+  date: ['2026-01-31', '2026-06-30', '2026-12-31'],
+  duration: ['500ms', '30s', '15m'],
+  host: ['localhost', 'db.internal', '10.0.0.5'],
+  json: ['{"a":1}', '{"b":2}', '{"c":3}'],
+  file: ['./a.json', './b.json', './c.json'],
+};
+
+/** Placeholder for an `array` rule: example items of the `of` type, sized to fit minItems/maxItems, joined by `separator`. */
+function arrayPlaceholder(rule) {
+  const examples = ARRAY_ITEM_EXAMPLES[rule.of || 'string'] || ARRAY_ITEM_EXAMPLES.string;
+  let count = Math.max(3, rule.minItems || 0);
+  if (rule.maxItems !== undefined) count = Math.min(count, Math.max(1, rule.maxItems));
+  const items = [];
+  for (let i = 0; i < count; i++) items.push(examples[i % examples.length]);
+  return items.join(rule.separator || ',');
+}
+
+/** Placeholder for a scalar (non-array) rule, per its declared type. */
+function scalarPlaceholder(type) {
+  return type === 'port' ? '3000' : type === 'url' ? 'https://example.com'
+    : type === 'ipv4' ? '192.168.0.1' : type === 'semver' ? '1.0.0'
+    : type === 'date' ? '2026-01-31' : type === 'duration' ? '15m' : type === 'host' ? 'localhost'
+    : type === 'file' ? './config.json' : 'your_value_here';
+}
+
 /** Generate .env.example text from a schema. Values are placeholders/defaults only — never real secrets. */
 function generateExample(schema) {
   // A key that looks like a secret gets an empty placeholder — there is
@@ -1173,6 +1216,9 @@ function generateExample(schema) {
     // Issue #206: note aliases and requiredIf in the comment, so the
     // generated file documents the fallbacks and conditions a reader needs.
     let comment = `# type: ${rule.type || 'string'}${rule.required ? ', required' : ''}${rule.choices ? ', one of: ' + rule.choices.join('|') : ''}`;
+    // Issue #223: name the item type on array rules, so the generated file
+    // documents what each comma-separated item must look like.
+    if (rule.type === 'array') comment += `, items: ${rule.of || 'string'}`;
     if (Array.isArray(rule.aliases) && rule.aliases.length) {
       comment += `; also accepts ${rule.aliases.join(', ')} (deprecated)`;
     }
@@ -1190,11 +1236,13 @@ function generateExample(schema) {
     const placeholder = rule.default !== undefined
       ? (rule.type === 'array' && Array.isArray(rule.default) ? rule.default.join(rule.separator || ',') : rule.default)
       : looksSecret ? ''
-      : (rule.type === 'port' ? 3000 : rule.type === 'url' ? 'https://example.com'
-        : rule.type === 'ipv4' ? '192.168.0.1' : rule.type === 'semver' ? '1.0.0'
-        : rule.type === 'date' ? '2026-01-31' : rule.type === 'duration' ? '15m' : rule.type === 'host' ? 'localhost'
-        : rule.type === 'file' ? './config.json'
-        : rule.type === 'array' ? ['a', 'b', 'c'].join(rule.separator || ',') : 'your_value_here');
+      : rule.type === 'array'
+        // Issue #223: build the array placeholder from the `of` item type's own
+        // examples, so each suggested item validates (fallback: string items).
+        // The item count respects minItems/maxItems so the placeholder passes
+        // those bounds too — examples cycle when more than three are needed.
+        ? arrayPlaceholder(rule)
+        : scalarPlaceholder(rule.type);
     lines.push(`${key}=${placeholder}`);
   }
   return lines.join('\n') + '\n';
