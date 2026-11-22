@@ -64,6 +64,41 @@ assert.deepStrictEqual(parseEnvFile('PORT=3000\nNAME="my app"\n'), { PORT: '3000
 assert.deepStrictEqual(scanCode('process.env.API_URL; const { PORT } = process.env;'), ['API_URL', 'PORT']);
 assert.deepStrictEqual(diffEnv(['A', 'B'], ['A', 'C']), { usedNotDocumented: ['B'], documentedNotUsed: ['C'] });
 
+// Issue #221: assignment-shaped lines with invalid keys must not disappear.
+{
+  const secret = 'do-not-echo-this-value';
+  for (const key of ['app.name', 'MY-KEY', 'MY KEY', '9NAME', '', '?', '??']) {
+    assert.throws(
+      () => parseEnvFile(`${key}=${secret}`),
+      err => err instanceof SyntaxError && err.message === 'line 1: expected KEY=VALUE',
+    );
+    for (const newline of ['\n', '\r\n']) {
+      for (const prefix of ['', 'export ', 'export\t']) {
+        const input = ['# comment with KEY=VALUE', '', 'CERT="one', 'two"',
+          ` ${prefix}${key}=${secret} # trailing`, 'PLAIN=1'].join(newline);
+        assert.throws(
+          () => parseEnvFile(input),
+          err => err instanceof SyntaxError && err.message === 'line 5: expected KEY=VALUE'
+            && !err.message.includes(secret),
+        );
+      }
+    }
+  }
+  // Invalid-looking assignments inside comments and quoted values are data.
+  for (const newline of ['\n', '\r\n']) {
+    const input = ['# app.name=ignored', '\t# MY-KEY=ignored', '',
+      'export _NAME9 = "a=b # literal" # MY KEY=ignored',
+      "SINGLE='MY KEY=literal'", 'MULTI="first', 'app.name=literal',
+      'MY-KEY=literal', 'MY KEY=literal', 'last" # ignored=comment',
+      'PLAIN=1 # app.name=ignored', 'EMPTY= # MY-KEY=ignored'].join(newline);
+    assert.deepStrictEqual(parseEnvFile(input), {
+      _NAME9: 'a=b # literal', SINGLE: 'MY KEY=literal',
+      MULTI: 'first\napp.name=literal\nMY-KEY=literal\nMY KEY=literal\nlast',
+      PLAIN: '1', EMPTY: '',
+    });
+  }
+}
+
 // Issue #69: deterministic combinations of the documented .env syntax.
 {
   let seed = 0x62a47f21;
@@ -73,7 +108,8 @@ assert.deepStrictEqual(diffEnv(['A', 'B'], ['A', 'C']), { usedNotDocumented: ['B
   };
   const spaces = ['', ' ', '  ', '\t'];
   const fragments = ['sample', '42', 'x=y', 'with#hash', 'café', 'path\\part'];
-  const noise = ['', '# comment', '? = value', "UNCLOSED='", '??='];
+  // Malformed assignments are errors (#221); only use them as comments here.
+  const noise = ['', '# comment', '# ? = value', "UNCLOSED='", '# ??='];
 
   for (let sample = 0; sample < 128; sample++) {
     const newline = pick(['\n', '\r\n']);
@@ -200,6 +236,64 @@ assert.ok(!ex.includes('sk_live'));
   fs.writeFileSync(path.join(dir, 'c.ts'), 'export const z = process.env.FROM_TS;');
   assert.deepStrictEqual(scanDir(dir), ['FROM_CTS', 'FROM_MTS', 'FROM_TS']);
   fs.rmSync(dir, { recursive: true, force: true });
+}
+
+// Issue #235: scanDir also scans single-file components (.vue/.svelte/.astro)
+{
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const path = require('node:path');
+  const { scanDir } = require('./index');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'env-saaf-scan-sfc-'));
+  try {
+    // Vue: <script> block reads. Comments and string literals inside the
+    // script do not count (the same scanCode masking as for .js files).
+    fs.writeFileSync(path.join(dir, 'App.vue'), [
+      '<template><p>{{ title }}</p></template>',
+      '<script setup>',
+      "const api = process.env.VITE_API_URL;",
+      "const key = import.meta.env.VITE_PUBLIC_KEY;",
+      '// process.env.IN_VUE_COMMENT',
+      'const doc = "process.env.IN_VUE_STRING";',
+      '</script>',
+      '',
+    ].join('\n'));
+    // Svelte: instance script reads.
+    fs.writeFileSync(path.join(dir, 'Widget.svelte'), [
+      '<script>let host = process.env.SVELTE_HOST;</script>',
+      '<p>hello</p>',
+      '',
+    ].join('\n'));
+    // Astro: frontmatter reads.
+    fs.writeFileSync(path.join(dir, 'Page.astro'), [
+      '---',
+      "const db = process.env.DATABASE_URL;",
+      '---',
+      '<html></html>',
+      '',
+    ].join('\n'));
+    // Nested directory: the walk is recursive.
+    fs.mkdirSync(path.join(dir, 'src', 'components'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'src', 'components', 'Nested.vue'), 'export const x = process.env.NESTED_VUE;\n');
+    // Skips stay intact: node_modules and .git* are never scanned.
+    fs.mkdirSync(path.join(dir, 'node_modules', 'dep'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'node_modules', 'dep', 'index.js'), 'process.env.IN_NODE_MODULES;\n');
+    fs.mkdirSync(path.join(dir, '.git', 'hooks'), { recursive: true });
+    fs.writeFileSync(path.join(dir, '.git', 'hooks', 'h.js'), 'process.env.IN_GIT;\n');
+    // Non-code extensions are still ignored.
+    fs.writeFileSync(path.join(dir, 'page.html'), '<script>process.env.IN_HTML;</script>\n');
+    fs.writeFileSync(path.join(dir, 'styles.css'), '/* process.env.IN_CSS */\n');
+
+    assert.deepStrictEqual(scanDir(dir), [
+      'DATABASE_URL',
+      'NESTED_VUE',
+      'SVELTE_HOST',
+      'VITE_API_URL',
+      'VITE_PUBLIC_KEY',
+    ]);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 }
 
 // Issue #14: parseEnvFile — strip inline comments after unquoted values;
@@ -1189,6 +1283,55 @@ assert.deepStrictEqual(
   assert.strictEqual(validateEnv({ S: { type: 'string', min: 1 } }, { S: 'x' }).S, 'x');
 }
 
+// Issue #219: numeric env strings are decimal, not JavaScript radix literals.
+{
+  const expected = { number: 'expected a number', int: 'expected an integer', port: 'expected a port' };
+  for (const type of ['number', 'int', 'port']) {
+    for (const raw of ['0x10', '0X10', '0b101', '0B101', '0o17', '0O17']) {
+      for (const trim of [true, false]) {
+        for (const value of [raw, ` \t${raw}\n`]) {
+          assert.throws(
+            () => validateEnv({ N: { type, trim } }, { N: value }),
+            err => err instanceof EnvSaafError && err.errors[0].includes(`N: ${expected[type]}`),
+          );
+          assert.throws(
+            () => validateEnv({ N: { type: 'array', of: type, trim } }, { N: `1,${value}` }),
+            err => err instanceof EnvSaafError && err.errors[0].includes(`N[1]: ${expected[type]}`),
+          );
+        }
+      }
+      assert.throws(() => validateEnv({ N: { type, default: raw } }, {}), EnvSaafError);
+    }
+    for (const [raw, value] of [['42', 42], ['+42', 42], ['042', 42], ['1e3', 1000], ['0', 0]]) {
+      for (const trim of [true, false]) {
+        assert.strictEqual(validateEnv({ N: { type, trim } }, { N: ` ${raw} ` }).N, value);
+        assert.deepStrictEqual(
+          validateEnv({ N: { type: 'array', of: type, trim } }, { N: ` ${raw} ,1` }).N,
+          [value, 1],
+        );
+      }
+    }
+    for (const value of [0x10, 0b101, 0o17]) {
+      assert.strictEqual(validateEnv({ N: { type, default: value } }, {}).N, value);
+      assert.strictEqual(validateEnv({ N: { type } }, { N: value }).N, value);
+    }
+    assert.deepStrictEqual(
+      validateEnv({ N: { type: 'array', of: type, default: [16, 5, 15] } }, {}).N,
+      [16, 5, 15],
+    );
+    const result = validateEnv({ N: { type, sensitive: true } }, { N: '0x1F90' }, { throwOnError: false });
+    assert.deepStrictEqual(result.env, {});
+    assert.strictEqual(result.errors.length, 1);
+    assert.ok(result.errors[0].includes(expected[type]));
+    assert.ok(!result.errors[0].includes('0x1F90'));
+  }
+  assert.strictEqual(validateEnv({ N: { type: 'number' } }, { N: '.5' }).N, 0.5);
+  for (const type of ['number', 'int']) {
+    assert.strictEqual(validateEnv({ N: { type } }, { N: '-3' }).N, -3);
+  }
+  assert.strictEqual(validateEnv({ N: { type: 'string' } }, { N: '0x10' }).N, '0x10');
+}
+
 // Issues #32 + #48: 'json' type (parse JSON values) and minLength/maxLength for strings.
 {
   // json: objects, arrays and primitives are parsed and returned as-is.
@@ -1473,6 +1616,32 @@ assert.deepStrictEqual(
     assert.strictEqual(check.stdout, '');
     assert.match(check.stderr, /\.env: line 1: expected KEY=VALUE/);
     assert.doesNotMatch(check.stderr, /fake secret value/);
+
+    // Issue #221: invalid assignment keys use the same CLI error contract.
+    fs.writeFileSync(path.join(dir, '.env.example'), '# config\napp.name=private-value\n');
+    const invalidKey = run('scan', dir, '--json');
+    assert.strictEqual(invalidKey.status, 2);
+    assert.strictEqual(invalidKey.stderr, '');
+    const invalidKeyError = JSON.parse(invalidKey.stdout);
+    assert.strictEqual(invalidKeyError.ok, false);
+    assert.match(invalidKeyError.error, /\.env\.example: line 2: expected KEY=VALUE/);
+    assert.doesNotMatch(invalidKey.stdout, /private-value/);
+
+    fs.writeFileSync(path.join(dir, '.env.example'), 'FOO=\n');
+    fs.writeFileSync(path.join(dir, '.env'), 'FOO=ok\r\nMY-KEY=private-value\r\n');
+    const invalidEnv = run('check', dir);
+    assert.strictEqual(invalidEnv.status, 2);
+    assert.strictEqual(invalidEnv.stdout, '');
+    assert.match(invalidEnv.stderr, /\.env: line 2: expected KEY=VALUE/);
+    assert.doesNotMatch(invalidEnv.stderr, /private-value/);
+    const target = {};
+    assert.throws(
+      () => require('./index').loadEnv({ FOO: { type: 'string' } }, {
+        path: path.join(dir, '.env'), env: target, assign: true,
+      }),
+      err => err instanceof SyntaxError && err.message === 'line 2: expected KEY=VALUE',
+    );
+    assert.deepStrictEqual(target, {});
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
