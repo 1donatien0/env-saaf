@@ -172,19 +172,19 @@ const env = validateEnv({
 
 ### Per-key `transform` — one custom step after coercion
 
-Some values need one small custom step after type coercion that env-saaf cannot guess — splitting a comma-separated list, normalising case:
+Some values need one small custom step after type coercion that env-saaf cannot guess — normalising case, adjusting a numeric unit, or post-processing a parsed array:
 
 ```js
 const { validateEnv } = require('env-saaf');
 
 const env = validateEnv({
-  ALLOWED_ORIGINS: { type: 'string', transform: v => v.split(',').map(s => s.trim()) },
+  ALLOWED_ORIGINS: { type: 'array', transform: xs => xs.map(s => s.toLowerCase()) },
   SHOUTY_NAME:     { type: 'string', transform: v => v.toUpperCase() },
 });
-// env.ALLOWED_ORIGINS is an array, env.SHOUTY_NAME is upper-cased
+// env.ALLOWED_ORIGINS is a lower-cased string[], env.SHOUTY_NAME is upper-cased
 ```
 
-The transform runs after coercion and after the `choices` check; if it throws, the error is collected like any other validation error (with the key named). It runs only on values actually provided — not on `default` values (defaults are still coerced and validated like any value, so a bad default fails with an error naming the key). In TypeScript the result type for that key is inferred from the transform's return type.
+The transform runs after coercion, built-in checks (`min`/`max`, `minLength`/`maxLength`, `length`, `choices`, `pattern`), and custom `validate`; if it throws, the error is collected like any other validation error (with the key named). Its return value is verified against the rule's declared `type` (e.g. `number`/`int`/`port`/`duration` must remain a finite number/integer/port, `boolean` a boolean, `date` a valid `Date`, `array` an array of `of` items, `string` and string-typed rules a valid string) — returning the wrong type produces a validation error naming the key and expected type. It runs only on values actually provided — not on `default` values (defaults are still coerced and validated like any value, so a bad default fails with an error naming the key). In TypeScript the result type for that key is inferred from the transform's return type.
 
 ### `email` type and `pattern` — validate formats
 

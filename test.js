@@ -1043,9 +1043,9 @@ assert.deepStrictEqual(
   const { validateEnv, loadEnv } = require('./index');
   // the issue's own examples: split a comma list, normalise case
   const t1 = validateEnv({
-    ALLOWED_ORIGINS: { type: 'string', transform: v => v.split(',').map(s => s.trim()) },
+    ALLOWED_ORIGINS: { type: 'array', transform: xs => xs.map(s => s.toLowerCase()) },
     SHOUTY_NAME: { type: 'string', transform: v => v.toUpperCase() },
-  }, { ALLOWED_ORIGINS: 'a.com, b.com ,c.com', SHOUTY_NAME: 'hello' });
+  }, { ALLOWED_ORIGINS: 'A.COM, B.COM ,c.com', SHOUTY_NAME: 'hello' });
   assert.deepStrictEqual(t1.ALLOWED_ORIGINS, ['a.com', 'b.com', 'c.com']);
   assert.strictEqual(t1.SHOUTY_NAME, 'HELLO');
   // transform runs AFTER coercion and the choices check: a port arrives as a number
@@ -1091,9 +1091,9 @@ assert.deepStrictEqual(
   const os = require('node:os');
   const path = require('node:path');
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'env-saaf-transform-'));
-  fs.writeFileSync(path.join(dir, '.env'), 'ALLOWED_ORIGINS=a.com, b.com\n');
+  fs.writeFileSync(path.join(dir, '.env'), 'ALLOWED_ORIGINS=A.COM, B.COM\n');
   const loaded = loadEnv(
-    { ALLOWED_ORIGINS: { type: 'string', required: true, transform: v => v.split(',').map(s => s.trim()) } },
+    { ALLOWED_ORIGINS: { type: 'array', required: true, transform: xs => xs.map(s => s.toLowerCase()) } },
     { path: path.join(dir, '.env'), env: {} }
   );
   assert.deepStrictEqual(loaded.ALLOWED_ORIGINS, ['a.com', 'b.com']);
@@ -1469,8 +1469,8 @@ assert.deepStrictEqual(
   // A transform returning an object is also JSON-stringified on assign.
   const t2 = {};
   loadEnv(
-    { OBJ: { type: 'string', required: true, transform: (v) => ({ raw: v }) } },
-    { path: (() => { const f = path.join(dir, '.env2'); fs.writeFileSync(f, 'OBJ=x\n'); return f; })(), env: t2, assign: true }
+    { OBJ: { type: 'json', required: true, transform: (v) => ({ raw: v }) } },
+    { path: (() => { const f = path.join(dir, '.env2'); fs.writeFileSync(f, 'OBJ=\'"x"\'\n'); return f; })(), env: t2, assign: true }
   );
   assert.strictEqual(t2.OBJ, '{"raw":"x"}');
   assert.deepStrictEqual(JSON.parse(t2.OBJ), { raw: 'x' });
@@ -3039,12 +3039,12 @@ assert.deepStrictEqual(
       {
         PORT: { type: 'port', required: true, aliases: ['APP_PORT'] },
         ORIGINS: {
-          type: 'string',
+          type: 'array',
           aliases: ['CORS_ORIGINS'],
-          transform: v => v.split(',').map(s => s.trim()),
+          transform: xs => xs.map(s => s.toLowerCase()),
         },
       },
-      { APP_PORT: '8080', CORS_ORIGINS: 'a.com, b.com' },
+      { APP_PORT: '8080', CORS_ORIGINS: 'A.COM, B.COM' },
       { onWarn: msg => warnings.push(msg) },
     );
     assert.strictEqual(res.PORT, 8080);
@@ -3419,15 +3419,15 @@ assert.deepStrictEqual(
   const transformedRes = validateEnv(
     {
       LIST: {
-        type: 'string',
-        validate: v => { order.push(['validate', v]); return v.includes(',') || 'needs comma'; },
-        transform: v => { order.push(['transform', v]); return v.split(','); },
+        type: 'array',
+        validate: xs => { order.push(['validate', xs]); return xs.length >= 2 || 'needs two'; },
+        transform: xs => { order.push(['transform', xs]); return xs.map(s => s.toUpperCase()); },
       },
     },
     { LIST: 'a,b' },
   );
-  assert.deepStrictEqual(transformedRes.LIST, ['a', 'b']);
-  assert.deepStrictEqual(order, [['validate', 'a,b'], ['transform', 'a,b']]);
+  assert.deepStrictEqual(transformedRes.LIST, ['A', 'B']);
+  assert.deepStrictEqual(order, [['validate', ['a', 'b']], ['transform', ['a', 'b']]]);
 
   let transformCalledAfterFail = false;
   assert.throws(
@@ -3436,7 +3436,7 @@ assert.deepStrictEqual(
         LIST: {
           type: 'string',
           validate: () => 'bad list',
-          transform: v => { transformCalledAfterFail = true; return v.split(','); },
+          transform: v => { transformCalledAfterFail = true; return v.toUpperCase(); },
         },
       },
       { LIST: 'a' },
@@ -3509,6 +3509,179 @@ assert.deepStrictEqual(
   );
   assert.deepStrictEqual(collected.env, { GOOD: 5 });
   assert.deepStrictEqual(collected.errors, ['BAD: must exceed 10']);
+}
+
+// Issue #210: post-transform return value is verified against the declared type.
+{
+  const { validateEnv, EnvSaafError, maskValue } = require('./index');
+
+  // 1. Acceptance criteria: int transform returning string, string/omitted-type returning number.
+  assert.throws(
+    () => validateEnv({ N: { type: 'int', transform: () => 'oops' } }, { N: '5' }),
+    err => err instanceof EnvSaafError
+      && err.errors.length === 1
+      && err.errors[0].includes('N:')
+      && err.errors[0].includes('integer'),
+  );
+  assert.throws(
+    () => validateEnv({ A: { type: 'string', transform: () => 42 } }, { A: 'x' }),
+    err => err instanceof EnvSaafError
+      && err.errors.length === 1
+      && err.errors[0].includes('A:')
+      && err.errors[0].includes('string'),
+  );
+  assert.throws(
+    () => validateEnv({ A: { transform: () => 42 } }, { A: 'x' }),
+    err => err instanceof EnvSaafError
+      && err.errors.length === 1
+      && err.errors[0].includes('A:')
+      && err.errors[0].includes('string'),
+  );
+
+  // 2. Transforms returning valid values of the declared type pass unchanged
+  // (and post-transform values do not re-run choices/min/max/pattern).
+  const fixedDate = new Date('2026-06-01T00:00:00Z');
+  const valid = validateEnv(
+    {
+      S: { type: 'string', choices: ['a', 'b'], transform: v => v.toUpperCase() },
+      N: { type: 'number', min: 1, max: 10, transform: n => n * 10.5 },
+      I: { type: 'int', transform: n => n + 1 },
+      P: { type: 'port', transform: n => n + 1 },
+      D: { type: 'duration', transform: ms => ms * 2 },
+      B: { type: 'boolean', transform: b => !b },
+      DT: { type: 'date', transform: () => fixedDate },
+      J: { type: 'json', transform: v => ({ wrapped: v }) },
+      J_NULL: { type: 'json', transform: () => null },
+      ARR: { type: 'array', of: 'int', transform: xs => xs.map(x => x * 2) },
+      EMAIL: { type: 'email', transform: v => v.toLowerCase() },
+      URL: { type: 'url', protocols: ['https'], transform: v => v.replace(/\/$/, '') },
+    },
+    {
+      S: 'a',
+      N: '2',
+      I: '4',
+      P: '3000',
+      D: '1s',
+      B: 'true',
+      DT: '2026-01-31',
+      J: '{"k":1}',
+      J_NULL: '123',
+      ARR: '1,2,3',
+      EMAIL: 'USER@EXAMPLE.COM',
+      URL: 'https://example.com/',
+    },
+  );
+  assert.strictEqual(valid.S, 'A');
+  assert.strictEqual(valid.N, 21);
+  assert.strictEqual(valid.I, 5);
+  assert.strictEqual(valid.P, 3001);
+  assert.strictEqual(valid.D, 2000);
+  assert.strictEqual(valid.B, false);
+  assert.strictEqual(valid.DT, fixedDate);
+  assert.deepStrictEqual(valid.J, { wrapped: { k: 1 } });
+  assert.strictEqual(valid.J_NULL, null);
+  assert.deepStrictEqual(valid.ARR, [2, 4, 6]);
+  assert.strictEqual(valid.EMAIL, 'user@example.com');
+  assert.strictEqual(valid.URL, 'https://example.com');
+
+  // 3. Invalid post-transform values are rejected across all type categories.
+  const badCases = [
+    [{ N: { type: 'number', transform: () => NaN } }, { N: '1' }, /N: expected a number/],
+    [{ N: { type: 'number', transform: () => Infinity } }, { N: '1' }, /N: expected a number/],
+    [{ N: { type: 'number', transform: () => '5' } }, { N: '1' }, /N: expected a number/],
+    [{ I: { type: 'int', transform: () => 3.5 } }, { I: '1' }, /I: expected an integer/],
+    [{ I: { type: 'int', transform: () => '5' } }, { I: '1' }, /I: expected an integer/],
+    [{ P: { type: 'port', transform: () => 70000 } }, { P: '3000' }, /P: expected a port/],
+    [{ P: { type: 'port', transform: () => '3000' } }, { P: '3000' }, /P: expected a port/],
+    [{ D: { type: 'duration', transform: () => -5 } }, { D: '1s' }, /D: expected a duration/],
+    [{ D: { type: 'duration', transform: () => '1s' } }, { D: '1s' }, /D: expected a duration/],
+    [{ B: { type: 'boolean', transform: () => 'true' } }, { B: 'true' }, /B: expected a boolean/],
+    [{ B: { type: 'boolean', transform: () => 1 } }, { B: 'true' }, /B: expected a boolean/],
+    [{ DT: { type: 'date', transform: () => '2026-01-31' } }, { DT: '2026-01-31' }, /DT: expected a valid ISO 8601 date/],
+    [{ DT: { type: 'date', transform: () => new Date('invalid') } }, { DT: '2026-01-31' }, /DT: expected a valid ISO 8601 date/],
+    [{ J: { type: 'json', transform: () => undefined } }, { J: '{}' }, /J: expected valid JSON/],
+    [{ J: { type: 'json', transform: () => NaN } }, { J: '{}' }, /J: expected valid JSON/],
+    [{ L: { type: 'array', transform: () => 'a,b' } }, { L: 'a,b' }, /L: expected an array/],
+    [{ L: { type: 'array', of: 'int', transform: xs => [...xs, 'oops'] } }, { L: '1,2' }, /L\[2\]: expected an integer/],
+    [{ L: { type: 'array', of: 'url', protocols: ['https'], transform: () => ['http://example.com'] } }, { L: 'https://example.com' }, /L\[0\]: expected a URL with one of these protocols/],
+    [{ E: { type: 'email', transform: () => 42 } }, { E: 'a@b.co' }, /E: expected a email string/],
+    [{ E: { type: 'email', transform: () => 'not-an-email' } }, { E: 'a@b.co' }, /E: expected a valid email address/],
+    [{ H: { type: 'hex', transform: () => 1234 } }, { H: 'deadbeef' }, /H: expected a hex string/],
+    [{ U: { type: 'url', protocols: ['https'], transform: () => 'http://example.com' } }, { U: 'https://example.com' }, /U: expected a URL with one of these protocols/],
+    [{ NUL: { type: 'string', transform: () => Object.create(null) } }, { NUL: 'x' }, /NUL: expected a string/],
+  ];
+  for (const [schema, envInput, pattern] of badCases) {
+    assert.throws(() => validateEnv(schema, envInput), pattern);
+  }
+
+  // 4. `default` + `transform`: bad defaults fail type validation even with transform;
+  // valid defaults do not invoke transform and pass unchanged.
+  assert.throws(
+    () => validateEnv({ N: { type: 'int', default: 'oops', transform: x => x + 1 } }, {}),
+    /N: expected an integer/,
+  );
+  assert.throws(
+    () => validateEnv({ N: { type: 'int', default: 'oops', transform: x => x + 1 } }, { N: '' }),
+    /N: expected an integer/,
+  );
+  let defaultRanTransform = false;
+  assert.strictEqual(
+    validateEnv({ N: { type: 'int', default: 5, transform: () => { defaultRanTransform = true; return 'oops'; } } }, {}).N,
+    5,
+  );
+  assert.strictEqual(defaultRanTransform, false);
+
+  // 5. Execution order, non-throwing mode, Pass 2 requiredIf, aliases, and sensitive masking.
+  let seenByValidate;
+  assert.throws(
+    () => validateEnv(
+      {
+        N: {
+          type: 'int',
+          validate: v => { seenByValidate = v; return true; },
+          transform: () => 'oops',
+        },
+      },
+      { N: '5' },
+    ),
+    /N: expected an integer/,
+  );
+  assert.strictEqual(seenByValidate, 5);
+
+  const nonThrowing = validateEnv(
+    {
+      GOOD: { type: 'int', transform: n => n + 1 },
+      BAD: { type: 'int', transform: () => 'oops' },
+      DEP: { type: 'string', requiredIf: { key: 'BAD', equals: 'oops' } },
+    },
+    { GOOD: '1', BAD: '5' },
+    { throwOnError: false },
+  );
+  assert.deepStrictEqual(nonThrowing.env, { GOOD: 2 });
+  assert.strictEqual(nonThrowing.errors.length, 1);
+  assert.ok(nonThrowing.errors[0].includes('BAD: expected an integer'));
+
+  const aliasWarnings = [];
+  assert.throws(
+    () => validateEnv(
+      { N: { type: 'int', aliases: ['OLD_N'], transform: () => 'oops' } },
+      { OLD_N: '5' },
+      { onWarn: m => aliasWarnings.push(m) },
+    ),
+    /N: expected an integer/,
+  );
+  assert.strictEqual(aliasWarnings.length, 1);
+
+  const rawSecret = 'super_secret_token_99';
+  assert.throws(
+    () => validateEnv(
+      { TOK: { type: 'int', sensitive: true, transform: () => rawSecret } },
+      { TOK: '7' },
+    ),
+    err => err instanceof EnvSaafError
+      && !err.message.includes(rawSecret)
+      && err.errors[0].includes(maskValue(rawSecret)),
+  );
 }
 
 // Issue #211: string-only options (`pattern`, `minLength`, `maxLength`) must be

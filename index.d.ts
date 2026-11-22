@@ -67,9 +67,10 @@ export interface EnvRule {
    */
   validate?: (value: any, env: Record<string, string | undefined>) => boolean | string | void | null;
   /**
-   * Custom step applied after coercion and the `choices` check; its return
-   * value is what lands in the result (e.g. split a comma list into an
-   * array). Runs only on values actually provided, not on `default`s.
+   * Custom step applied after coercion, built-in checks, and `validate`; its
+   * return value must match the rule's declared `type` and is what lands in
+   * the result (e.g. normalise case or adjust a number). Runs only on values
+   * actually provided, not on `default`s.
    */
   transform?: (value: any) => any;
   /**
