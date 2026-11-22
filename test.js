@@ -4182,3 +4182,128 @@ assert.deepStrictEqual(
 }
 
 console.log('env-saaf v1.5.0: all tests passed');
+
+// Issue #230: watch-mode integration test — spawn `cli.js check --watch` as a
+// subprocess, edit files, and assert it re-runs (debounced) and exits 0 on Ctrl-C.
+(async () => {
+  const { spawn } = require('node:child_process');
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const path = require('node:path');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'env-saaf-watch-'));
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  try {
+    fs.writeFileSync(path.join(dir, '.env.example'), 'PORT=\n');
+    fs.writeFileSync(path.join(dir, '.env'), 'PORT=3000\n');
+    fs.writeFileSync(path.join(dir, 'app.js'), 'console.log(process.env.PORT);\n');
+    const childEnv = { PATH: process.env.PATH || '' };
+    if (process.platform === 'win32') { if (process.env.SYSTEMROOT) childEnv.SYSTEMROOT = process.env.SYSTEMROOT; }
+    else if (process.env.HOME) childEnv.HOME = process.env.HOME;
+    const child = spawn(process.execPath, [path.join(__dirname, 'cli.js'), 'check', dir, '--watch'], { cwd: dir, env: childEnv });
+    let out = '';
+    child.stdout.on('data', (d) => { out += d; });
+    child.stderr.on('data', (d) => { out += d; });
+    const waitFor = async (pred, what, timeoutMs = 8000) => {
+      const start = Date.now();
+      while (!(typeof pred === 'function' ? pred() : pred.test(out))) {
+        if (Date.now() - start > timeoutMs) throw new Error(`timed out waiting for ${what}; output so far:\n${out}`);
+        await sleep(50);
+      }
+    };
+    const runCount = () => (out.match(/check finished, exit/g) || []).length;
+
+    // initial run happens and reports the clean state
+    await waitFor(/all clean/, 'initial result');
+    assert.ok(/watching/.test(out), 'watch banner printed');
+    assert.strictEqual(runCount(), 1);
+
+    // editing the source re-runs the check and reports the new MISSING key
+    fs.appendFileSync(path.join(dir, 'app.js'), 'console.log(process.env.NEW_KEY);\n');
+    await waitFor(() => /MISSING in \.env\.example: NEW_KEY/.test(out) && runCount() >= 2, 're-run after source edit');
+    assert.strictEqual(runCount(), 2);
+
+    // editing the real .env re-runs too (EXTRA finding)
+    fs.appendFileSync(path.join(dir, '.env'), 'LOCAL_ONLY=1\n');
+    await waitFor(() => /EXTRA in \.env: LOCAL_ONLY/.test(out) && runCount() >= 3, 're-run after .env edit');
+
+    // debounce: two rapid successive saves collapse into a single re-run
+    const before = runCount();
+    fs.appendFileSync(path.join(dir, 'app.js'), '// touch 1\n');
+    await sleep(25);
+    fs.appendFileSync(path.join(dir, 'app.js'), '// touch 2\n');
+    await sleep(900);
+    assert.strictEqual(runCount() - before, 1, `two rapid saves must collapse into one re-run (got ${runCount() - before})`);
+
+    // Ctrl-C exits cleanly with code 0
+    const exitCode = await new Promise((resolve) => { child.on('exit', resolve); child.kill('SIGINT'); });
+    assert.strictEqual(exitCode, 0, 'SIGINT in watch mode exits 0');
+    assert.ok(/stopped watching/.test(out), 'prints a stop message');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+  console.log('watch-mode tests passed');
+})().catch((err) => { console.error(err); process.exit(1); });
+
+// Issue #230 (review blockers): watch mode survives error exits (missing
+// template, malformed env file) and picks up --schema edits instead of
+// re-running against the require()-cached schema.
+(async () => {
+  const { spawn } = require('node:child_process');
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const path = require('node:path');
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'env-saaf-watch2-'));
+  try {
+    fs.writeFileSync(path.join(dir, 'app.js'), 'console.log(process.env.PORT);\n');
+    fs.writeFileSync(path.join(dir, 'env.schema.cjs'), 'module.exports = { PORT: { type: "int", min: 1, max: 65535 } };\n');
+    const childEnv = { PATH: process.env.PATH || '' };
+    if (process.platform === 'win32') { if (process.env.SYSTEMROOT) childEnv.SYSTEMROOT = process.env.SYSTEMROOT; }
+    else if (process.env.HOME) childEnv.HOME = process.env.HOME;
+    const child = spawn(process.execPath, [path.join(__dirname, 'cli.js'), 'check', dir, '--schema', 'env.schema.cjs', '--watch'], { cwd: dir, env: childEnv });
+    let out = '';
+    child.stdout.on('data', (d) => { out += d; });
+    child.stderr.on('data', (d) => { out += d; });
+    let exited = null;
+    child.on('exit', (code) => { exited = code; });
+    const waitFor = async (pred, what, timeoutMs = 8000) => {
+      const start = Date.now();
+      while (!(typeof pred === 'function' ? pred() : pred.test(out))) {
+        if (Date.now() - start > timeoutMs) throw new Error(`timed out waiting for ${what}; output so far:\n${out}`);
+        await sleep(50);
+      }
+    };
+    const runCount = () => (out.match(/check finished, exit/g) || []).length;
+
+    // Blocker 1a: starting watch with no .env.example reports exit 2 but keeps watching.
+    await waitFor(/\.env\.example not found/, 'missing template message');
+    await waitFor(/check finished, exit 2/, 'missing template exit-2 line');
+    await sleep(400);
+    assert.strictEqual(exited, null, 'watcher must not exit on a missing template');
+
+    // Creating the template re-runs and goes clean.
+    fs.writeFileSync(path.join(dir, '.env.example'), 'PORT=\n');
+    await waitFor(() => /all clean/.test(out) && runCount() >= 2, 'clean re-run after template appears');
+
+    // Blocker 1b: a malformed template mid-watch (duplicate key) reports the error,
+    // logs exit 2, and the watcher stays alive; fixing it recovers.
+    fs.writeFileSync(path.join(dir, '.env.example'), 'PORT=\nPORT=1\n');
+    await waitFor(() => /duplicate key PORT/.test(out) && /check finished, exit 2/.test(out) && runCount() >= 3, 'duplicate-key error with exit 2, watcher alive');
+    await sleep(400);
+    assert.strictEqual(exited, null, 'watcher must not exit on a malformed template');
+    fs.writeFileSync(path.join(dir, '.env.example'), 'PORT=\n');
+    await waitFor(() => /all clean/.test(out) && runCount() >= 4, 'recovery after template fix');
+
+    // Blocker 2: a --schema edit must re-run against the NEW schema (no stale require cache).
+    fs.writeFileSync(path.join(dir, '.env'), 'PORT=3000\n');
+    await waitFor(() => runCount() >= 5, 're-run after .env appears');
+    fs.writeFileSync(path.join(dir, 'env.schema.cjs'), 'module.exports = { PORT: { type: "int", min: 1, max: 100 } };\n');
+    await waitFor(() => /INVALID: PORT/.test(out) && /check finished, exit 1/.test(out), 'schema edit picked up (INVALID from the new schema)');
+
+    const exitCode = await new Promise((resolve) => { child.on('exit', resolve); child.kill('SIGINT'); });
+    assert.strictEqual(exitCode, 0, 'SIGINT in watch mode exits 0');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+  console.log('watch-mode error-path tests passed');
+})().catch((err) => { console.error(err); process.exit(1); });

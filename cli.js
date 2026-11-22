@@ -2,14 +2,14 @@
 'use strict';
 /**
  * env-saaf CLI
- *   env-saaf check [dir] [--file name] [--schema file] [--json] — scan code for process.env usage, compare with
+ *   env-saaf check [dir] [--file name] [--schema file] [--json] [--watch] — scan code for process.env usage, compare with
  *                           .env.example (or the --file given); exit 1 if anything
  *                           used is not documented. --schema also validates the values
  *                           of the real .env file against the schema the file exports
  *                           (issue #90); --json emits machine-readable output. A scaffold
  *                           with no code usage yet passes with a single note instead of
  *                           one UNUSED line per key (issue #170).
- *   env-saaf scan  [dir] [--file name] [--json]  — just list the env vars your code uses; keys in
+ *   env-saaf scan  [dir] [--file name] [--json] [--watch] — just list the env vars your code uses; keys in
  *                           .env.example (or the --file given) that no code reads are reported
  *                           as UNUSED warnings (stderr; `unused` in --json), never an exit code
  *   env-saaf example [dir] [--write[=file]] [--force] [--schema file] — print a .env.example draft from code
@@ -45,7 +45,7 @@ if (argv.includes('--version') || argv.includes('-v')) {
 // Output is already plain in every mode, including when NO_COLOR is set.
 while (argv[0] === '--no-color') argv.shift();
 const cmd = argv[0];
-const USAGE = 'Usage: env-saaf check [dir] [--file name] [--schema file] [--json] | env-saaf scan [dir] [--file name] [--json] | env-saaf example [dir] [--write[=file]] [--force] [--schema file] | env-saaf init [dir] [--schema file] [--force] [--from-example[=file]]\n'
+const USAGE = 'Usage: env-saaf check [dir] [--file name] [--schema file] [--json] [--watch] | env-saaf scan [dir] [--file name] [--json] [--watch] | env-saaf example [dir] [--write[=file]] [--force] [--schema file] | env-saaf init [dir] [--schema file] [--force] [--from-example[=file]]\n'
   + 'Global options: --no-color, --version / -v (before or after the command).';
 // --help / -h / help: print usage and exit 0 (asking for help is not an error — this used to exit 2)
 if (cmd === '--help' || cmd === '-h' || cmd === 'help') {
@@ -58,12 +58,28 @@ if (cmd === '--help' || cmd === '-h' || cmd === 'help') {
 // --json: machine-readable output for check and scan
 // --write / --write=<file> ('example' only): save the draft to .env.example (or the file
 // named) instead of printing it; --force allows overwriting an existing file
+// --watch ('check' and 'scan' only): run once, then re-run (debounced) whenever the scanned
+// tree, the env template or the schema file changes (issue #230)
 let fileOpt = '.env.example';
 let fileExplicit = false;
 let schemaOpt = null;
 let jsonMode = false;
 let writeOpt = null;
 let forceOpt = false;
+// Issue #230: --watch ('check' and 'scan' only) re-runs the command when watched inputs change.
+let watchOpt = false;
+
+// Issue #230: in watch mode an error exit must not kill the watcher — fatalExit
+// throws WatchExit instead, so watchLoop's runOnce can log the exit code and
+// keep watching. Outside watch mode fatalExit is exactly process.exit.
+let watchActive = false;
+class WatchExit extends Error {
+  constructor(code) { super(`exit ${code}`); this.code = code; }
+}
+function fatalExit(code) {
+  if (watchActive) throw new WatchExit(code);
+  process.exit(code);
+}
 let fromExampleOpt = null; // null = off; true = bare flag; string = --from-example=file
 const positional = [];
 for (let i = 1; i < argv.length; i++) {
@@ -81,6 +97,7 @@ for (let i = 1; i < argv.length; i++) {
   else if (a === '--write') writeOpt = '.env.example';
   else if (a.startsWith('--write=')) writeOpt = a.slice('--write='.length) || '.env.example';
   else if (a === '--force') forceOpt = true;
+  else if (a === '--watch') watchOpt = true;
   else if (a === '--from-example') fromExampleOpt = true;
   else if (a.startsWith('--from-example=')) fromExampleOpt = a.slice('--from-example='.length) || '.env.example';
   else if (a !== '--no-color') positional.push(a);
@@ -223,7 +240,7 @@ function readEnvFile(filePath) {
     const message = `${path.relative(dir, filePath)}: ${detail}`;
     if (jsonMode) console.log(JSON.stringify({ ok: false, error: message }));
     else console.error(`env-saaf: ${message}`);
-    process.exit(2);
+    fatalExit(2);
   }
 }
 
@@ -255,7 +272,10 @@ function schemaIsEsm(schemaPath) {
   }
 }
 
-if (cmd === 'scan') {
+// Issue #230: the scan/check bodies are plain functions so watch mode can
+// re-run them; the non-watch path below calls them exactly once, keeping
+// output and exit codes byte-for-byte unchanged.
+function runScan() {
   const vars = scanDir(dir);
   // Issue #63: the reverse drift — keys declared in the template that no code reads any more.
   // Only a warning: stdout stays the plain list of used vars and the exit code is unchanged.
@@ -275,7 +295,10 @@ if (cmd === 'scan') {
     else console.error('No process.env usage found.');
     if (unused) unused.forEach(k => console.error(`UNUSED: ${k} (in ${fileOpt}, never used in code)`));
   }
-} else if (cmd === 'check') {
+  return 0;
+}
+
+function runCheck() {
   const examplePath = path.join(dir, fileOpt);
   if (!fs.existsSync(examplePath)) {
     // Issue #89: point at the command that drafts the file instead of dead-ending
@@ -286,7 +309,7 @@ if (cmd === 'scan') {
     } else {
       console.error(`env-saaf: ${fileOpt} not found in ${dir} — ${hint}`);
     }
-    process.exit(2);
+    fatalExit(2);
   }
   const documented = Object.keys(readEnvFile(examplePath));
   const used = scanDir(dir);
@@ -313,7 +336,14 @@ if (cmd === 'scan') {
     let schema;
     try {
       // Like --file, a relative schema path is relative to the checked directory.
-      schema = require(path.resolve(dir, schemaOpt));
+      const schemaPath = path.resolve(dir, schemaOpt);
+      // Issue #230: require() caches modules, so in watch mode a schema edit
+      // would otherwise re-run against the stale cached schema — drop the
+      // cache entry before loading (the init command uses the same pattern).
+      if (watchActive) {
+        try { delete require.cache[require.resolve(schemaPath)]; } catch { /* not loaded yet */ }
+      }
+      schema = require(schemaPath);
     } catch (e) {
       // Issue #184: when the schema file is one Node treats as an ES module,
       // say so plainly and name the fix instead of surfacing the raw
@@ -325,13 +355,13 @@ if (cmd === 'scan') {
       const message = `env-saaf: cannot load schema ${schemaOpt}: ${detail}`;
       if (jsonMode) console.log(JSON.stringify({ ok: false, error: message }));
       else console.error(message);
-      process.exit(2);
+      fatalExit(2);
     }
     if (schema === null || typeof schema !== 'object' || Array.isArray(schema)) {
       const message = `env-saaf: schema ${schemaOpt} must export a schema object (module.exports = { KEY: { type: 'port', ... } })`;
       if (jsonMode) console.log(JSON.stringify({ ok: false, error: message }));
       else console.error(message);
-      process.exit(2);
+      fatalExit(2);
     }
     const targetName = fileExplicit ? fileOpt : (fs.existsSync(envPath) ? '.env' : null);
     if (targetName) {
@@ -386,7 +416,72 @@ if (cmd === 'scan') {
   // Issue #113: the exit code follows the same `ok` the JSON output reports, so a
   // typo'd key in .env (EXTRA / MISSING), or a documented-but-unused key, can no
   // longer print a finding and still pass a CI job. UNUSED counts as a finding.
-  process.exit(ok ? 0 : 1);
+  return ok ? 0 : 1;
+}
+
+// Issue #230: watch mode. Runs the command once, then re-runs it (debounced
+// ~150ms) whenever a watched file changes. Watched inputs: the whole scanned
+// tree (each subdirectory individually, since recursive fs.watch is not
+// available on Linux) plus the directory of the --schema file when it lives
+// outside the scanned tree. Ctrl-C exits cleanly with code 0.
+function watchLoop() {
+  watchActive = true;
+  const runOnce = () => {
+    let code;
+    try {
+      code = cmd === 'scan' ? runScan() : runCheck();
+    } catch (e) {
+      // Issue #230: error paths report their exit code and the loop survives.
+      if (e instanceof WatchExit) code = e.code;
+      else throw e;
+    }
+    console.error(`env-saaf: [${new Date().toISOString()}] ${cmd} finished, exit ${code}`);
+    return code;
+  };
+  console.error(`env-saaf: watching ${dir} (${cmd}) — press Ctrl-C to stop`);
+  runOnce();
+
+  const watchDirs = new Set();
+  const collect = (d) => {
+    const abs = path.resolve(d);
+    if (watchDirs.has(abs)) return;
+    watchDirs.add(abs);
+    let entries;
+    try { entries = fs.readdirSync(abs, { withFileTypes: true }); } catch { return; }
+    for (const e of entries) {
+      if (e.isDirectory() && e.name !== 'node_modules' && !e.name.startsWith('.git')) collect(path.join(abs, e.name));
+    }
+  };
+  collect(dir);
+  if (schemaOpt) {
+    const schemaDir = path.dirname(path.resolve(dir, schemaOpt));
+    const inside = [...watchDirs].some(w => schemaDir === w || schemaDir.startsWith(w + path.sep));
+    if (!inside) collect(schemaDir);
+  }
+
+  const watchers = [];
+  let scheduled = null;
+  const onChange = () => {
+    if (scheduled) clearTimeout(scheduled);
+    scheduled = setTimeout(() => { scheduled = null; runOnce(); }, 150);
+  };
+  for (const d of watchDirs) {
+    try { watchers.push(fs.watch(d, onChange)); } catch { /* removed mid-watch */ }
+  }
+  process.on('SIGINT', () => {
+    if (scheduled) clearTimeout(scheduled);
+    for (const w of watchers) { try { w.close(); } catch { /* already closed */ } }
+    console.error('env-saaf: stopped watching');
+    process.exit(0);
+  });
+}
+
+if (cmd === 'scan' || cmd === 'check') {
+  if (watchOpt) {
+    watchLoop(); // runs until Ctrl-C
+  } else {
+    process.exit(cmd === 'scan' ? runScan() : runCheck());
+  }
 } else if (cmd === 'example') {
   // Issue #206: with --schema <file>, generate the example from the schema
   // (type placeholders plus alias/requiredIf annotations) instead of the code
