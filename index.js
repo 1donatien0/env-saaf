@@ -322,7 +322,35 @@ function validateSchema(schema) {
       }
     }
   }
-  if (errors.length) throw new EnvSaafError(errors);
+  // Issue #228: aliases inside a group are FULL env names, and each group used
+  // to be validated with its own fresh alias map — so an alias in one group
+  // could name another group's key (or a flat key) and one env var would then
+  // silently feed two rules. Run the alias collision check over the FLATTENED
+  // schema as well; the per-group recursion above already reports the
+  // within-group cases, and the dedupe below keeps every message single.
+  const flatKeys = new Set(Object.keys(flattenSchema(schema).flat));
+  const flatAliasOwners = new Map();
+  for (const [fkey, frule] of Object.entries(flattenSchema(schema).flat)) {
+    if (frule === null || typeof frule !== 'object' || Array.isArray(frule)
+      || !Array.isArray(frule.aliases)
+      || frule.aliases.some(a => typeof a !== 'string' || a.trim() === '')) continue; // already reported above
+    for (const alias of frule.aliases) {
+      if (flatKeys.has(alias)) {
+        errors.push(`${fkey}: alias "${alias}" conflicts with a declared schema key`);
+      } else if (flatAliasOwners.has(alias) && flatAliasOwners.get(alias) !== fkey) {
+        errors.push(`${fkey}: alias "${alias}" is already used by "${flatAliasOwners.get(alias)}"`);
+      } else {
+        flatAliasOwners.set(alias, fkey);
+      }
+    }
+  }
+  if (errors.length) throw new EnvSaafError([...new Set(errors)]);
+}
+
+// Numeric configuration strings are decimal; Number() alone also accepts
+// JavaScript radix prefixes. Numeric values (including defaults) stay unchanged.
+function decimalNumber(value) {
+  return typeof value === 'string' && /^\s*0[xob]/i.test(value) ? NaN : Number(value);
 }
 
 function coerce(key, raw, type, trim = true, protocols, sensitive = false, of = 'string', separator = ',') {
@@ -352,14 +380,14 @@ function coerce(key, raw, type, trim = true, protocols, sensitive = false, of = 
       // Reject NaN as well as non-finite results (Infinity, -Infinity, and
       // exponent overflow like '1e999'): Number() parses them without error,
       // and a silent Infinity breaks downstream maths (issue #175).
-      const n = Number(v);
+      const n = decimalNumber(v);
       if (v === '' || !Number.isFinite(n)) throw new Error(`${key}: expected a number (e.g. ${TYPE_EXAMPLES.number}), got "${shown}"`);
       return n;
     }
     case 'int': {
       // Whole numbers only: counts, retries, pool sizes. '1e3' is 1000, so
       // it passes; '3.5', 'abc', and non-finite values ('Infinity', '1e999') do not.
-      const n = Number(v);
+      const n = decimalNumber(v);
       if (v === '' || !Number.isFinite(n) || !Number.isInteger(n)) throw new Error(`${key}: expected an integer (e.g. ${TYPE_EXAMPLES.int}), got "${shown}"`);
       return n;
     }
@@ -562,7 +590,7 @@ function coerce(key, raw, type, trim = true, protocols, sensitive = false, of = 
       return s;
     }
     case 'port': {
-      const n = Number(v);
+      const n = decimalNumber(v);
       const zeroWithoutValue = n === 0 && typeof v !== 'number'
         && (typeof v !== 'string' || v.trim() === '');
       if (zeroWithoutValue || !Number.isInteger(n) || n < 0 || n > 65535) {
@@ -1056,11 +1084,8 @@ function parseEnvFile(text) {
     if (!t || t.startsWith('#')) continue;
     const m = t.replace(/^export\s+/, '').match(/^([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$/);
     if (!m) {
-      // Ignore an equals sign in an inline comment. Avoid echoing file contents.
-      if (!t.split(/\s+#/, 1)[0].includes('=')) {
-        throw new SyntaxError(`line ${i + 1}: expected KEY=VALUE`);
-      }
-      continue;
+      // Reject malformed assignments as well as bare lines, without echoing values.
+      throw new SyntaxError(`line ${i + 1}: expected KEY=VALUE`);
     }
     const key = m[1];
     if (seen.has(key)) {
@@ -1292,7 +1317,14 @@ function scanCode(text) {
   return [...found].sort();
 }
 
-/** Scan a folder (recursive, .js/.cjs/.mjs/.ts) for env usage. */
+// Issue #235: single-file components (.vue/.svelte/.astro) hold code too —
+// <script> blocks, Svelte instance scripts and Astro frontmatter all read
+// process.env / import.meta.env — so the directory walk includes them.
+// scanCode is text-based and already ignores comments/strings, so template
+// markup does not produce false positives in the common cases.
+const SCAN_EXTENSIONS = /\.(js|cjs|mjs|ts|mts|cts|tsx|jsx|vue|svelte|astro)$/;
+
+/** Scan a folder (recursive) for env usage in .js/.cjs/.mjs/.ts/.mts/.cts/.tsx/.jsx/.vue/.svelte/.astro files. */
 function scanDir(dir) {
   const found = new Set();
   const walk = (d) => {
@@ -1300,7 +1332,7 @@ function scanDir(dir) {
       if (e.name === 'node_modules' || e.name.startsWith('.git')) continue;
       const p = path.join(d, e.name);
       if (e.isDirectory()) walk(p);
-      else if (/\.(js|cjs|mjs|ts|mts|cts|tsx|jsx)$/.test(e.name)) scanCode(fs.readFileSync(p, 'utf8')).forEach(k => found.add(k));
+      else if (SCAN_EXTENSIONS.test(e.name)) scanCode(fs.readFileSync(p, 'utf8')).forEach(k => found.add(k));
     }
   };
   walk(dir);

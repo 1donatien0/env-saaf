@@ -2,11 +2,16 @@
 
 ## Unreleased
 
+- Fixed: `parseEnvFile` reports a line-numbered `SyntaxError` for invalid assignment keys instead of silently dropping them, without exposing their values (fixes #221).
+
+- Fixed: `number`, `int` and `port` reject hexadecimal, binary and octal strings (including array items), while decimal strings and numeric defaults keep working (fixes #219).
+
 - Added: grouped (nested) schemas — a rule with a `schema` object and a `prefix` (and no `type`) reads inner rules from prefixed env vars (`DB_` + `HOST` -> `DB_HOST`) and nests the result (`{ DB: { HOST, ... } }`); errors name the full env var; `strict`/`aliases`/`requiredIf`/`default`/`transform` work inside groups (aliases and requiredIf keys use full env names there); `generateExample` emits the flat prefixed keys with a group comment; `loadEnv` assign writes flat names; `validateSchema` is now exported and rejects malformed groups up front (bad prefix/schema shape, `type` on a group, nested groups, prefix collisions) (fixes #228).
 - Added: the `semver` type accepts one optional lowercase `v` prefix (`v1.2.3`, `v1.2.3-rc.1`, `v1.2.3+build`), returned unchanged — the form `git describe` and release pipelines emit; `v1.2`, `vv1.2.3` and uppercase `V1.2.3` are still rejected (fixes #227).
 - Fixed: `validateSchema` now rejects contradictory bounds up front — `min` above `max`, `minLength` above `maxLength`, and an empty `choices` array — with a schema error naming the key, even when the variable is absent (fixes #220).
 - Fixed: `validateSchema` now rejects unknown schema rule options, such as misspelled `required` or `default`, with an `EnvSaafError` identifying the schema key and offending option, even when the corresponding environment variable is absent (fixes #218).
 - Added: `test-cli.js`, a CLI integration suite wired into `npm test`, that runs `cli.js` as a real subprocess in throwaway temp projects and asserts process-level behaviour — exit codes, stdout vs stderr, `--json` shape, `check`/`scan`/`example --write`/`init` round-trips in CommonJS and `"type": "module"` projects, missing-directory errors — with a scrubbed child environment so developer env vars cannot leak in (fixes #237).
+- Added: `scanDir` (and therefore the CLI `scan`/`check`/`example`) also scans single-file components — `.vue`, `.svelte` and `.astro` files — alongside the existing `.js/.cjs/.mjs/.ts/.mts/.cts/.tsx/.jsx` list; `node_modules` and `.git*` skips are unchanged and the comment/string masking in `scanCode` keeps template markup from producing false positives (fixes #235).
 
 - Added: `scanCode` (and therefore `scanDir` and the CLI `scan`/`check`/`example` commands) detects Vite-style `import.meta.env` reads — dot access (`import.meta.env.VITE_API_KEY`), bracket access and destructuring — returned in the same sorted list as `process.env` reads, with the same rule that mentions inside comments and string literals do not count (fixes #225).
 

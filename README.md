@@ -46,12 +46,12 @@ Environment inputs are strings. Output below is before an optional `transform`.
 | Type | Accepted input | JavaScript output | Additional rule options |
 | --- | --- | --- | --- |
 | `string` | Any non-missing text (default type) | `string` | `trim`, `minLength`, `maxLength`, `pattern` |
-| `number` | Non-empty text accepted by `Number()`, including fractions and exponent notation. Rejects `NaN` and non-finite values. | `number` | `trim`, `min`, `max` |
-| `int` | Numeric text resolving to an integer, e.g. `42`, `1e3` | `number` | `trim`, `min`, `max` |
+| `number` | Non-empty decimal text, including fractions and exponent notation. Rejects radix prefixes (`0x`, `0b`, `0o`), `NaN` and non-finite values. | `number` | `trim`, `min`, `max` |
+| `int` | Decimal text resolving to an integer, e.g. `42`, `1e3`; no radix prefixes | `number` | `trim`, `min`, `max` |
 | `boolean` | Case-insensitive `true/false`, `1/0`, `yes/no`, `on/off`, `y/n` | `boolean` | None |
 | `url` | Absolute URL accepted by `new URL()`, without normalization | `string` | `trim`, `minLength`, `maxLength`, `pattern`, `protocols` |
 | `file` | Path to an existing, readable regular file. Relative paths use the process working directory. | `string` | `trim`, `minLength`, `maxLength`, `pattern` |
-| `port` | Numeric text resolving to an integer from 0 to 65535 | `number` | `min`, `max` |
+| `port` | Decimal text resolving to an integer from 0 to 65535; no radix prefixes | `number` | `min`, `max` |
 | `email` | One `@`, non-empty local part, domain with an interior dot, no leading or trailing domain dot, no whitespace | `string` | `trim`, `minLength`, `maxLength`, `pattern` |
 | `json` | Valid JSON text (object, array or primitive). Accepts already-parsed defaults. | Parsed JSON value | `trim`. For numeric results, `min` and `max`. |
 | `uuid` | Canonical 8-4-4-4-12 hexadecimal groups, either case | `string` | `trim`, `minLength`, `maxLength`, `pattern` |
@@ -376,7 +376,7 @@ Use `${VAR:-fallback}` to supply a fallback when a value is unset or expands to 
 
 Quoted values may also span several lines (PEM keys, JSON blobs) — parsing continues until the closing quote. A backslash-escaped quote (`\'` inside single quotes, `\"` inside double quotes) stays part of the value, so `B='it\'s'` is `it's`; other backslashes, such as a Windows path, are kept as-is.
 
-A bare line without `=` raises a syntax error with its line number. Use `KEY=` for an empty value.
+A bare line without `=`, or an assignment with an invalid key (such as `app.name`, `MY-KEY` or `MY KEY`), raises a syntax error with its line number, without echoing the value. Keys must match `[A-Za-z_][A-Za-z0-9_]*`. Use `KEY=` for an empty value.
 
 The manual way still works too — parse the file and pass it in:
 
@@ -569,6 +569,7 @@ CLI output is plain text by default, including in pipes and CI. For scripts that
 ```bash
 npx env-saaf --version      # print the installed version
 npx env-saaf scan ./src     # every env var your code actually uses
+                           # scans .js/.cjs/.mjs/.ts/.mts/.cts/.tsx/.jsx and .vue/.svelte/.astro components
 npx env-saaf check .        # code vs .env.example diff — exit 1 on any finding (CI-ready)
 npx env-saaf check . --file .env.sample  # compare against a differently-named template file instead
 npx env-saaf check . --json # machine-readable JSON output (ok/missing/extra/unused) for CI or tooling
