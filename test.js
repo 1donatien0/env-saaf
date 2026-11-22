@@ -1189,6 +1189,55 @@ assert.deepStrictEqual(
   assert.strictEqual(validateEnv({ S: { type: 'string', min: 1 } }, { S: 'x' }).S, 'x');
 }
 
+// Issue #219: numeric env strings are decimal, not JavaScript radix literals.
+{
+  const expected = { number: 'expected a number', int: 'expected an integer', port: 'expected a port' };
+  for (const type of ['number', 'int', 'port']) {
+    for (const raw of ['0x10', '0X10', '0b101', '0B101', '0o17', '0O17']) {
+      for (const trim of [true, false]) {
+        for (const value of [raw, ` \t${raw}\n`]) {
+          assert.throws(
+            () => validateEnv({ N: { type, trim } }, { N: value }),
+            err => err instanceof EnvSaafError && err.errors[0].includes(`N: ${expected[type]}`),
+          );
+          assert.throws(
+            () => validateEnv({ N: { type: 'array', of: type, trim } }, { N: `1,${value}` }),
+            err => err instanceof EnvSaafError && err.errors[0].includes(`N[1]: ${expected[type]}`),
+          );
+        }
+      }
+      assert.throws(() => validateEnv({ N: { type, default: raw } }, {}), EnvSaafError);
+    }
+    for (const [raw, value] of [['42', 42], ['+42', 42], ['042', 42], ['1e3', 1000], ['0', 0]]) {
+      for (const trim of [true, false]) {
+        assert.strictEqual(validateEnv({ N: { type, trim } }, { N: ` ${raw} ` }).N, value);
+        assert.deepStrictEqual(
+          validateEnv({ N: { type: 'array', of: type, trim } }, { N: ` ${raw} ,1` }).N,
+          [value, 1],
+        );
+      }
+    }
+    for (const value of [0x10, 0b101, 0o17]) {
+      assert.strictEqual(validateEnv({ N: { type, default: value } }, {}).N, value);
+      assert.strictEqual(validateEnv({ N: { type } }, { N: value }).N, value);
+    }
+    assert.deepStrictEqual(
+      validateEnv({ N: { type: 'array', of: type, default: [16, 5, 15] } }, {}).N,
+      [16, 5, 15],
+    );
+    const result = validateEnv({ N: { type, sensitive: true } }, { N: '0x1F90' }, { throwOnError: false });
+    assert.deepStrictEqual(result.env, {});
+    assert.strictEqual(result.errors.length, 1);
+    assert.ok(result.errors[0].includes(expected[type]));
+    assert.ok(!result.errors[0].includes('0x1F90'));
+  }
+  assert.strictEqual(validateEnv({ N: { type: 'number' } }, { N: '.5' }).N, 0.5);
+  for (const type of ['number', 'int']) {
+    assert.strictEqual(validateEnv({ N: { type } }, { N: '-3' }).N, -3);
+  }
+  assert.strictEqual(validateEnv({ N: { type: 'string' } }, { N: '0x10' }).N, '0x10');
+}
+
 // Issues #32 + #48: 'json' type (parse JSON values) and minLength/maxLength for strings.
 {
   // json: objects, arrays and primitives are parsed and returned as-is.
