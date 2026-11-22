@@ -412,6 +412,81 @@ function coerce(key, raw, type, trim = true, protocols, sensitive = false, of = 
   }
 }
 
+function safeString(v) {
+  try { return String(v); }
+  catch { return Object.prototype.toString.call(v); }
+}
+
+// Verify a post-transform value still matches the rule's declared `type`
+// (issue #210). Unlike `coerce()`, this never converts a wrong JS type such as
+// turning `42` into `'42'` for `type: 'string'` or `'5'` into `5` for `type: 'int'`.
+function verifyTransformedType(key, val, type, protocols, sensitive, of) {
+  const rawStr = safeString(val);
+  const shown = sensitive ? maskValue(rawStr) : rawStr;
+  switch (type) {
+    case 'string':
+      if (typeof val !== 'string') {
+        throw new Error(`${key}: expected a string (e.g. ${TYPE_EXAMPLES.string}), got "${shown}"`);
+      }
+      return val;
+    case 'number':
+      if (typeof val !== 'number' || !Number.isFinite(val)) {
+        throw new Error(`${key}: expected a number (e.g. ${TYPE_EXAMPLES.number}), got "${shown}"`);
+      }
+      return val;
+    case 'int':
+      if (typeof val !== 'number' || !Number.isFinite(val) || !Number.isInteger(val)) {
+        throw new Error(`${key}: expected an integer (e.g. ${TYPE_EXAMPLES.int}), got "${shown}"`);
+      }
+      return val;
+    case 'port':
+      if (typeof val !== 'number' || !Number.isInteger(val) || val < 0 || val > 65535) {
+        throw new Error(`${key}: expected a port (0-65535, e.g. ${TYPE_EXAMPLES.port}), got "${shown}"`);
+      }
+      return val;
+    case 'duration':
+      if (typeof val !== 'number' || !Number.isFinite(val) || val < 0) {
+        throw new Error(`${key}: expected a duration (e.g. ${TYPE_EXAMPLES.duration}), got "${shown}"`);
+      }
+      return val;
+    case 'boolean':
+      if (typeof val !== 'boolean') {
+        throw new Error(`${key}: expected a boolean (e.g. ${TYPE_EXAMPLES.boolean}), got "${shown}"`);
+      }
+      return val;
+    case 'date':
+      if (!(val instanceof Date) || Number.isNaN(val.getTime())) {
+        throw new Error(`${key}: expected a valid ISO 8601 date (e.g. ${TYPE_EXAMPLES.date}), got "${shown}"`);
+      }
+      return val;
+    case 'json':
+      if (val === undefined || typeof val === 'function' || typeof val === 'symbol'
+        || typeof val === 'bigint' || (typeof val === 'number' && !Number.isFinite(val))) {
+        throw new Error(`${key}: expected valid JSON (e.g. ${TYPE_EXAMPLES.json}), got "${shown}"`);
+      }
+      return val;
+    case 'array': {
+      if (!Array.isArray(val)) {
+        throw new Error(`${key}: expected an array (e.g. ${TYPE_EXAMPLES.array}), got "${shown}"`);
+      }
+      const itemType = of || 'string';
+      for (let i = 0; i < val.length; i++) {
+        verifyTransformedType(`${key}[${i}]`, val[i], itemType, protocols, sensitive);
+      }
+      return val;
+    }
+    default:
+      // Remaining built-in types ('email', 'url', 'file', 'uuid', 'hex',
+      // 'ipv4', 'semver', 'base64', 'host') are string-valued: reject
+      // non-strings before delegating to `coerce()` so e.g. `42` is never
+      // silently stringified to `'42'`.
+      if (typeof val !== 'string') {
+        throw new Error(`${key}: expected a ${type} string (e.g. ${TYPE_EXAMPLES[type]}), got "${shown}"`);
+      }
+      return coerce(key, val, type, false, protocols, sensitive);
+  }
+}
+
 function maskSensitiveMessage(msg, raw, val, sensitive) {
   if (!sensitive) return msg;
   const rawStr = String(raw);
@@ -489,8 +564,9 @@ function validateEnv(schema, env = process.env, options = {}) {
     }
     const sensitive = rule.sensitive === true;
     const shown = sensitive ? maskValue(raw) : raw;
+    const type = rule.type || 'string';
     try {
-      const val = coerce(key, raw, rule.type || 'string', rule.trim !== false, rule.protocols, sensitive, rule.of, rule.separator);
+      const val = coerce(key, raw, type, rule.trim !== false, rule.protocols, sensitive, rule.of, rule.separator);
       // min/max: allowed range for numeric values (number, int, port, duration).
       // Runs right after coercion, before choices/pattern/transform; the
       // error names the allowed range. min alone or max alone both work.
@@ -594,20 +670,23 @@ function validateEnv(schema, env = process.env, options = {}) {
       }
       // transform: one custom step after coercion and all validation checks.
       // It runs only on values actually provided (not on defaults, which are
-      // still coerced and validated). A
-      // throwing transform is collected like any other validation error,
-      // with the key named — never thrown raw.
+      // still coerced and validated). A throwing transform is collected like
+      // any other validation error, with the key named — never thrown raw.
+      // Its return value is verified against the declared `type` (issue #210).
       if (rule.transform !== undefined && !usingDefault) {
         if (typeof rule.transform !== 'function') {
           errors.push(`${key}: "transform" must be a function`);
           continue;
         }
+        let transformed;
         try {
-          out[key] = rule.transform(val);
+          transformed = rule.transform(val);
         } catch (e) {
           const msg = maskSensitiveMessage(e.message, raw, val, sensitive);
           errors.push(`${key}: transform failed: ${msg}`);
+          continue;
         }
+        out[key] = verifyTransformedType(key, transformed, type, rule.protocols, sensitive, rule.of);
         continue;
       }
       out[key] = val;
