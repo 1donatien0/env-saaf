@@ -36,7 +36,7 @@ const TYPE_EXAMPLES = {
   port: '3000',
   date: '2026-01-31',
   file: './config.json',
-  duration: '500ms, 30s, 15m, 2h, 1d, 1w',
+  duration: '500ms, 30s, 15m, 2h, 1d, 1w, 1h30m',
   host: 'db.internal, localhost, 10.0.0.5',
   array: 'a,b,c',
 };
@@ -345,10 +345,11 @@ function coerce(key, raw, type, trim = true, protocols, sensitive = false, of = 
     }
     case 'duration': {
       // Human durations: '500ms', '30s', '15m', '2h', '1d', '1w' become
-      // milliseconds; a bare number is already milliseconds. Units are
-      // case-insensitive and decimals are allowed ('1.5h'), negatives and
-      // unknown units are rejected. A number passed directly (e.g. as a
-      // default) is taken as milliseconds, like the number type.
+      // milliseconds; compounds ('1h30m', '2d12h') sum their parts. A bare
+      // number is already milliseconds. Units are case-insensitive and
+      // decimals are allowed ('1.5h'), negatives and unknown units are
+      // rejected. A number passed directly (e.g. as a default) is taken
+      // as milliseconds, like the number type.
       if (typeof v === 'number') {
         if (!Number.isFinite(v) || v < 0) {
           throw new Error(`${key}: expected a duration (e.g. ${TYPE_EXAMPLES.duration}), got "${shown}"`);
@@ -356,12 +357,32 @@ function coerce(key, raw, type, trim = true, protocols, sensitive = false, of = 
         return v;
       }
       const s = String(v).trim();
-      const m = /^(\d+(?:\.\d+)?)\s*(ms|s|m|h|d|w)?$/i.exec(s);
-      if (!m) {
-        throw new Error(`${key}: expected a duration (e.g. ${TYPE_EXAMPLES.duration}), got "${shown}"`);
+      const mult = { ms: 1, s: 1000, m: 60000, h: 3600000, d: 86400000, w: 604800000 };
+      let ms;
+      if (/^\d+(?:\.\d+)?$/.test(s)) {
+        // A bare number is already milliseconds.
+        ms = Number(s);
+      } else {
+        // Compound durations (issue #224): a sequence of number+unit parts
+        // is summed — '1h30m', '1h 30m', '2d12h'. Every part needs an
+        // explicit unit, so a trailing bare number ('1h30') is rejected,
+        // as are unknown units and negatives (they never match a part).
+        const part = /(\d+(?:\.\d+)?)\s*(ms|s|m|h|d|w)/iy;
+        let pos = 0, total = 0, parts = 0;
+        while (pos < s.length) {
+          part.lastIndex = pos;
+          const pm = part.exec(s);
+          if (!pm) break;
+          total += Number(pm[1]) * mult[pm[2].toLowerCase()];
+          parts++;
+          pos = part.lastIndex;
+          while (pos < s.length && s[pos] === ' ') pos++;
+        }
+        if (!parts || pos !== s.length) {
+          throw new Error(`${key}: expected a duration (e.g. ${TYPE_EXAMPLES.duration}), got "${shown}"`);
+        }
+        ms = total;
       }
-      const mult = { ms: 1, s: 1000, m: 60000, h: 3600000, d: 86400000, w: 604800000 }[m[2] ? m[2].toLowerCase() : 'ms'];
-      const ms = Number(m[1]) * mult;
       if (!Number.isFinite(ms)) {
         throw new Error(`${key}: expected a duration (e.g. ${TYPE_EXAMPLES.duration}), got "${shown}"`);
       }

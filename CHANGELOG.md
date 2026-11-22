@@ -2,7 +2,8 @@
 
 ## Unreleased
 
-- Docs: add Bun and Deno usage examples to README, covering `bun add`, CommonJS/ESM imports, Deno's `npm:` specifier, and Deno permission flags (fixes #177).
+- Added: the `duration` type accepts compound durations — a sequence of number+unit parts is summed into milliseconds, so `1h30m` and `1h 30m` are 5,400,000 ms and `2d12h` is 216,000,000 ms; every part needs an explicit unit (a trailing bare number like `1h30` is rejected), single values and bare numbers behave as before, and the error example now shows `1h30m` (fixes #224).
+
 - Fixed: `validateEnv` now verifies that a `transform` return value matches the rule's declared `type` (primitives, `Date`, `array` and its `of` items, `json`, and string-formatted types), failing with a validation error naming the key and expected type instead of letting wrong types pass through; custom `validate` still sees the pre-transform value and `default` values continue to be type-checked via coercion (fixes #210).
 
 - Fixed: `validateSchema` now rejects `pattern`, `minLength`, and `maxLength` up front when used on non-string types (`number`, `int`, `port`, `duration`, `boolean`, `date`, `array`, `json`), throwing a schema error naming the key and option even when the variable is absent; string-valued types (`string`, `email`, `url`, `file`, `uuid`, `hex`, `ipv4`, `semver`, `base64`, `host`) and numeric `min`/`max` bounds keep working unchanged (fixes #211).
