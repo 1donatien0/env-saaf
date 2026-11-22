@@ -1351,6 +1351,25 @@ assert.deepStrictEqual(
   for (const bad of ['1wk', '1week', '1ww', 'w', '-1w', '1.w', '1e2w']) {
     assert.throws(() => validateEnv(schema, { TIMEOUT: bad }), /expected a duration/);
   }
+  // Issue #224: compound durations sum their parts.
+  assert.strictEqual(validateEnv(schema, { TIMEOUT: '1h30m' }).TIMEOUT, 5400000);
+  assert.strictEqual(validateEnv(schema, { TIMEOUT: '1h 30m' }).TIMEOUT, 5400000);
+  assert.strictEqual(validateEnv(schema, { TIMEOUT: '2d12h' }).TIMEOUT, 216000000);
+  assert.strictEqual(validateEnv(schema, { TIMEOUT: '500ms250ms' }).TIMEOUT, 750);
+  assert.strictEqual(validateEnv(schema, { TIMEOUT: '1.5h30m' }).TIMEOUT, 7200000);
+  assert.strictEqual(validateEnv(schema, { TIMEOUT: '1H30M' }).TIMEOUT, 5400000);
+  assert.strictEqual(validateEnv(schema, { TIMEOUT: '1w1d' }).TIMEOUT, 691200000);
+  // min/max apply to the summed total.
+  assert.strictEqual(validateEnv({ TIMEOUT: { type: 'duration', max: 5400000 } }, { TIMEOUT: '1h30m' }).TIMEOUT, 5400000);
+  assert.throws(() => validateEnv({ TIMEOUT: { type: 'duration', max: 5399999 } }, { TIMEOUT: '1h30m' }), /expected a number at most 5399999/);
+  // A trailing bare number, a leading unit and mixed junk are rejected.
+  for (const bad of ['1h30', 'h30m', '1h30x', '1h 30', '1h30min']) {
+    assert.throws(() => validateEnv(schema, { TIMEOUT: bad }), /expected a duration/);
+  }
+  // Array items share the coercion path.
+  assert.deepStrictEqual(
+    validateEnv({ TIMEOUTS: { type: 'array', of: 'duration' } }, { TIMEOUTS: '1h30m,45s' }).TIMEOUTS,
+    [5400000, 45000]);
 }
 
 // Issue #44: 'host' type — a hostname or IP address, with no scheme, path or port.
@@ -2089,7 +2108,7 @@ assert.deepStrictEqual(
     ['port', 'abc', '0-65535, e.g. 3000'],
     ['date', '2026-02-31', 'e.g. 2026-01-31'],
     ['file', './definitely-missing-env-saaf-file.json', 'e.g. ./config.json'],
-    ['duration', '15min', 'e.g. 500ms, 30s, 15m, 2h, 1d, 1w'],
+    ['duration', '15min', 'e.g. 500ms, 30s, 15m, 2h, 1d, 1w, 1h30m'],
     ['host', 'https://db.internal', 'e.g. db.internal, localhost, 10.0.0.5'],
   ];
   for (const [type, bad, expectedHint] of cases) {
