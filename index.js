@@ -1080,7 +1080,7 @@ function codeOnly(src) {
   return out.join('');
 }
 
-/** Find every process.env.KEY usage in JS/TS source text. Returns sorted unique names. */
+/** Find every env read in JS/TS source text — `process.env.KEY` and Vite-style `import.meta.env.KEY`. Returns sorted unique names. */
 function scanCode(text) {
   const src = String(text);
   const code = codeOnly(src);
@@ -1089,24 +1089,29 @@ function scanCode(text) {
     return true;
   };
   const found = new Set();
+  // Each pattern is paired with the head whose span must be real code.
   const patterns = [
-    /process\.env\.([A-Za-z_][A-Za-z0-9_]*)/g,
-    /process\.env\[['"]([A-Za-z_][A-Za-z0-9_]*)['"]\]/g,
+    [/process\.env\.([A-Za-z_][A-Za-z0-9_]*)/g, 'process.env'],
+    [/process\.env\[['"]([A-Za-z_][A-Za-z0-9_]*)['"]\]/g, 'process.env'],
     // Backtick bracket access with a plain identifier — `process.env[`KEY`]`:
     // a template with ${} interpolation cannot be known statically and
     // stays unmatched (the identifier charset excludes $ and {).
-    /process\.env\[`([A-Za-z_][A-Za-z0-9_]*)`\]/g,
+    [/process\.env\[`([A-Za-z_][A-Za-z0-9_]*)`\]/g, 'process.env'],
+    // Vite exposes env through import.meta.env (issue #225) — same shapes.
+    [/import\.meta\.env\.([A-Za-z_][A-Za-z0-9_]*)/g, 'import.meta.env'],
+    [/import\.meta\.env\[['"]([A-Za-z_][A-Za-z0-9_]*)['"]\]/g, 'import.meta.env'],
+    [/import\.meta\.env\[`([A-Za-z_][A-Za-z0-9_]*)`\]/g, 'import.meta.env'],
   ];
   // The read itself must be code: a `process.env.X` in a comment or a string is
   // not a read. Bracket and destructured reads keep their key in a literal, so
-  // only the `process.env` they hang off has to be code.
-  for (const re of patterns) {
+  // only the env object they hang off has to be code.
+  for (const [re, head] of patterns) {
     for (const m of src.matchAll(re)) {
-      if (isCode(m.index, m.index + 'process.env'.length)) found.add(m[1]);
+      if (isCode(m.index, m.index + head.length)) found.add(m[1]);
     }
   }
   const codeView = code.split(MASKED).join(' ');
-  const destructure = /(?:const|let|var)\s*\{([^}]+)\}\s*=\s*process\.env/g;
+  const destructure = /(?:const|let|var)\s*\{([^}]+)\}\s*=\s*(?:process\.env|import\.meta\.env)/g;
   for (const m of codeView.matchAll(destructure)) {
     for (const part of m[1].split(',')) {
       const name = part.split(':')[0].split('=')[0].trim();

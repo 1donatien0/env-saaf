@@ -598,6 +598,29 @@ assert.ok(!ex.includes('sk_live'));
   );
 }
 
+// Issue #225: scanCode — Vite-style import.meta.env reads (dot, bracket, destructuring)
+{
+  assert.deepStrictEqual(scanCode('const k = import.meta.env.VITE_API_KEY;'), ['VITE_API_KEY']);
+  assert.deepStrictEqual(
+    scanCode("const a = import.meta.env['VITE_A']; const b = import.meta.env[`VITE_B`];"),
+    ['VITE_A', 'VITE_B']
+  );
+  assert.deepStrictEqual(
+    scanCode('const { VITE_MODE, VITE_NAME: name } = import.meta.env;'),
+    ['VITE_MODE', 'VITE_NAME']
+  );
+  // Mixed with process.env reads in one source: one sorted, unique list.
+  assert.deepStrictEqual(
+    scanCode('import.meta.env.VITE_API_KEY; process.env.PORT; import.meta.env.VITE_API_KEY;'),
+    ['PORT', 'VITE_API_KEY']
+  );
+  // Mentions inside comments and string literals are not reads.
+  assert.deepStrictEqual(
+    scanCode('// set import.meta.env.VITE_NOPE first\nconst s = "import.meta.env.VITE_ALSO_NOPE";'),
+    []
+  );
+}
+
 // Issue #18: boolean type — also accept 'on'/'off' (and 'y'/'n')
 {
   const b = (v) => validateEnv({ F: { type: 'boolean' } }, { F: v }).F;
