@@ -1155,6 +1155,16 @@ function scanCode(text) {
     [/import\.meta\.env\.([A-Za-z_][A-Za-z0-9_]*)/g, 'import.meta.env'],
     [/import\.meta\.env\[['"]([A-Za-z_][A-Za-z0-9_]*)['"]\]/g, 'import.meta.env'],
     [/import\.meta\.env\[`([A-Za-z_][A-Za-z0-9_]*)`\]/g, 'import.meta.env'],
+    // Optional chaining (issue #222): `process.env?.KEY`, `process.env?.['KEY']`,
+    // `process.env?.[`KEY`]` — valid and increasingly common reads, same shapes
+    // as the plain forms above.
+    [/process\.env\?\.([A-Za-z_][A-Za-z0-9_]*)/g, 'process.env'],
+    [/process\.env\?\.\[['"]([A-Za-z_][A-Za-z0-9_]*)['"]\]/g, 'process.env'],
+    [/process\.env\?\.\[`([A-Za-z_][A-Za-z0-9_]*)`\]/g, 'process.env'],
+    // Optional chaining on import.meta.env (issue #222) as well.
+    [/import\.meta\.env\?\.([A-Za-z_][A-Za-z0-9_]*)/g, 'import.meta.env'],
+    [/import\.meta\.env\?\.\[['"]([A-Za-z_][A-Za-z0-9_]*)['"]\]/g, 'import.meta.env'],
+    [/import\.meta\.env\?\.\[`([A-Za-z_][A-Za-z0-9_]*)`\]/g, 'import.meta.env'],
   ];
   // The read itself must be code: a `process.env.X` in a comment or a string is
   // not a read. Bracket and destructured reads keep their key in a literal, so
@@ -1170,6 +1180,42 @@ function scanCode(text) {
     for (const part of m[1].split(',')) {
       const name = part.split(':')[0].split('=')[0].trim();
       if (/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) found.add(name);
+    }
+  }
+  const aliases = new Map();
+  const declaration = /(?<![$\p{ID_Continue}.])(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=/gu;
+  const trivia = /(?:\s|\/\*(?:[^*]|\*(?!\/))*\*\/|\/\/[^\r\n\u2028\u2029]*)*/y;
+  const source = /(?:process\.env|import\.meta\.env)/y;
+  const continuation = /(?!\+\+|--)(?:[.([+*\/%&|^?=<>-]|\x60|!=|(?:in|instanceof)\b)/y;
+  for (const m of src.matchAll(declaration)) {
+    const afterEquals = m.index + m[0].length;
+    if (!isCode(m.index, afterEquals) || aliases.has(m[1])) continue;
+    // Skip comments without hiding strings or consuming the next declaration.
+    trivia.lastIndex = afterEquals;
+    trivia.exec(src);
+    const sourceStart = trivia.lastIndex;
+    source.lastIndex = sourceStart;
+    if (!source.test(src) || !isCode(sourceStart, source.lastIndex)) continue;
+    const end = source.lastIndex;
+    trivia.lastIndex = end;
+    const [spacing] = trivia.exec(src);
+    const next = trivia.lastIndex;
+    continuation.lastIndex = next;
+    // A line break ends the initializer only when the expression cannot continue.
+    if (next === src.length || /[;,}]/.test(src[next]) ||
+        (/[\r\n\u2028\u2029]/.test(spacing) && !continuation.test(src))) {
+      aliases.set(m[1], end);
+    }
+  }
+  if (aliases.size) {
+    const access = /(?<![#$\p{ID_Continue}])([A-Za-z_$][\w$]*)(?:\.([A-Za-z_]\w*)(?![$\p{ID_Continue}])|\[(['"\x60])([A-Za-z_]\w*)\3\])/gu;
+    for (const m of src.matchAll(access)) {
+      const declaredAt = aliases.get(m[1]);
+      if (declaredAt === undefined || declaredAt > m.index || !isCode(m.index, m.index + m[1].length)) continue;
+      let previous = m.index - 1;
+      while (previous >= 0 && /\s/.test(codeView[previous])) previous--;
+      if (codeView[previous] === '.' && codeView.slice(previous - 2, previous + 1) !== '...') continue;
+      found.add(m[2] ?? m[4]);
     }
   }
   return [...found].sort();

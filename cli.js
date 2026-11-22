@@ -23,6 +23,14 @@
  *                           string entries and listed on stdout (issue #171). In a
  *                           "type": "module" project the starter is env.schema.cjs
  *                           instead, so it still loads with require() (issue #184)
+ *   env-saaf init  [dir] --from-example[=file] [--schema file] [--force] — like the
+ *                           above, but the starter schema is inferred from an
+ *                           existing example file (default .env.example): each key's
+ *                           sample value picks the rule type (port-looking number ->
+ *                           port, true/false -> boolean, http(s) URL -> url, email ->
+ *                           email, integer -> int, decimal -> number, else string),
+ *                           every inferred rule is commented as inferred, and the
+ *                           example file itself is left untouched (issue #232)
  */
 const fs = require('node:fs');
 const path = require('node:path');
@@ -37,7 +45,7 @@ if (argv.includes('--version') || argv.includes('-v')) {
 // Output is already plain in every mode, including when NO_COLOR is set.
 while (argv[0] === '--no-color') argv.shift();
 const cmd = argv[0];
-const USAGE = 'Usage: env-saaf check [dir] [--file name] [--schema file] [--json] [--watch] | env-saaf scan [dir] [--file name] [--json] [--watch] | env-saaf example [dir] [--write[=file]] [--force] [--schema file] | env-saaf init [dir] [--schema file] [--force]\n'
+const USAGE = 'Usage: env-saaf check [dir] [--file name] [--schema file] [--json] [--watch] | env-saaf scan [dir] [--file name] [--json] [--watch] | env-saaf example [dir] [--write[=file]] [--force] [--schema file] | env-saaf init [dir] [--schema file] [--force] [--from-example[=file]]\n'
   + 'Global options: --no-color, --version / -v (before or after the command).';
 // --help / -h / help: print usage and exit 0 (asking for help is not an error — this used to exit 2)
 if (cmd === '--help' || cmd === '-h' || cmd === 'help') {
@@ -72,6 +80,7 @@ function fatalExit(code) {
   if (watchActive) throw new WatchExit(code);
   process.exit(code);
 }
+let fromExampleOpt = null; // null = off; true = bare flag; string = --from-example=file
 const positional = [];
 for (let i = 1; i < argv.length; i++) {
   const a = argv[i];
@@ -89,9 +98,18 @@ for (let i = 1; i < argv.length; i++) {
   else if (a.startsWith('--write=')) writeOpt = a.slice('--write='.length) || '.env.example';
   else if (a === '--force') forceOpt = true;
   else if (a === '--watch') watchOpt = true;
+  else if (a === '--from-example') fromExampleOpt = true;
+  else if (a.startsWith('--from-example=')) fromExampleOpt = a.slice('--from-example='.length) || '.env.example';
   else if (a !== '--no-color') positional.push(a);
 }
 const dir = positional[0] || process.cwd();
+// Issue #232: with a bare `--from-example`, a second positional names the
+// example file instead of being mistaken for the directory.
+let exampleOpt = null;
+if (fromExampleOpt !== null) {
+  if (fromExampleOpt === true) exampleOpt = positional[1] || '.env.example';
+  else exampleOpt = fromExampleOpt;
+}
 
 // Issue #60: the scaffold `init` writes. Commented examples of the main types
 // so a new user sees what is available at a glance; the .env.example that
@@ -134,6 +152,63 @@ ${scanned}};
 // produce a duplicate entry in the generated schema. The test pinning a fresh
 // scaffold to exactly these keys keeps this list from drifting off the template.
 const starterKeys = ['APP_NAME', 'RETRIES', 'DEBUG', 'PORT', 'API_URL', 'SUPPORT_EMAIL', 'SHUTDOWN_TIMEOUT', 'DB_HOST'];
+
+// Issue #232: infer a starter rule type from a sample value found in an
+// existing example file. Priority order (first match wins): a port-looking
+// number -> 'port', true/false -> 'boolean', an http(s) URL -> 'url', an
+// email -> 'email', an integer -> 'int', a decimal -> 'number', anything
+// else -> 'string' (including empty values). "Port-looking" means a whole
+// number in 1024-65535 — the range app servers actually listen on; smaller
+// whole numbers are more often counts or flags, so they infer as 'int'.
+function inferTypeFromSample(sample) {
+  const v = String(sample).trim();
+  if (v === '') return 'string';
+  if (/^-?\d+$/.test(v)) {
+    const n = Number(v);
+    return n >= 1024 && n <= 65535 ? 'port' : 'int';
+  }
+  if (/^(true|false)$/i.test(v)) return 'boolean';
+  if (/^https?:\/\//i.test(v)) {
+    // Match the 'url' validator: new URL() must parse the value and the scheme
+    // must be http(s) — 'http://host:abc' has an invalid port, check rejects it,
+    // so it must not infer as 'url' (falls through to 'string').
+    try {
+      const parsed = new URL(v);
+      if (parsed.protocol === 'http:' || parsed.protocol === 'https:') return 'url';
+    } catch { /* not a parseable URL — fall through */ }
+  }
+  if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v)) {
+    // Match the 'email' validator: the domain must not start or end with a
+    // dot — 'a@.b.com' fails check ("domain may not start with a dot"), so it
+    // must not infer as 'email' (falls through to 'string').
+    const domain = v.slice(v.indexOf('@') + 1);
+    if (!domain.startsWith('.') && !domain.endsWith('.')) return 'email';
+  }
+  if (Number.isFinite(Number(v))) return 'number';
+  return 'string';
+}
+
+// Issue #232: build the starter schema text from parsed example entries
+// ([[key, sample], ...]). Every inferred rule carries a comment saying it was
+// inferred and should be reviewed — the sample value itself is deliberately
+// NOT echoed into the comment, so a password in .env.example cannot leak into
+// the committed schema. Keys the code scan already found are folded in as
+// string rules (same as the fixed scaffold does) unless the example already
+// lists them, so nothing is duplicated.
+function schemaFromExample(hint, exampleName, entries, scannedKeys = []) {
+  const jsKey = k => (/^[A-Za-z_$][A-Za-z0-9_$]*$/.test(k) ? k : JSON.stringify(k));
+  const seen = new Set(entries.map(([k]) => k));
+  const inferred = entries.map(([k, sample]) => {
+    const type = inferTypeFromSample(sample);
+    return `  // inferred as '${type}' from the sample value in ${exampleName} — review this rule\n  ${jsKey(k)}: { type: '${type}' },`;
+  });
+  const extra = scannedKeys.filter(k => !seen.has(k));
+  const scanned = extra.length
+    ? `\n  // Found by scanning this project's code (process.env reads) — not in ${exampleName};\n  // typed as string for now; tighten the type, or delete, as needed.\n`
+      + extra.map(k => `  ${jsKey(k)}: { type: 'string' },\n`).join('')
+    : '';
+  return `// Starter schema inferred by env-saaf init --from-example from ${exampleName} — review every rule.\n// ${hint}\nmodule.exports = {\n${inferred.join('\n')}\n${scanned}};\n`;
+}
 
 // Issue #133: validate the directory argument before any command uses it.
 // scanDir's readdirSync otherwise throws a raw Node stack trace for a file
@@ -484,12 +559,29 @@ if (cmd === 'scan' || cmd === 'check') {
     console.error(`env-saaf: schema ${schemaName} would be treated as an ES module in this project — use a .cjs file instead (e.g. --schema env.schema.cjs)`);
     process.exit(2);
   }
-  const existing = [schemaName, '.env.example'].filter(n => fs.existsSync(path.join(dir, n)));
+  // Issue #232: with --from-example the example file already exists and is
+  // left untouched, so only the schema file participates in the refusal.
+  const existing = exampleOpt
+    ? [schemaName].filter(n => fs.existsSync(path.join(dir, n)))
+    : [schemaName, '.env.example'].filter(n => fs.existsSync(path.join(dir, n)));
   if (existing.length && !forceOpt) {
     const verb = existing.length === 1 ? 'already exists' : 'already exist';
     const them = existing.length === 1 ? 'it' : 'them';
     console.error(`env-saaf: ${existing.join(' and ')} ${verb} in ${dir} — pass --force to overwrite ${them}`);
     process.exit(1);
+  }
+
+  // Issue #232: --from-example infers the starter from an existing example
+  // file instead of the fixed template. The example is parsed with the same
+  // parser `check` uses, so quotes/comments/interpolation behave identically.
+  let entries = null;
+  if (exampleOpt) {
+    const examplePath = path.join(dir, exampleOpt);
+    if (!fs.existsSync(examplePath) || !fs.statSync(examplePath).isFile()) {
+      console.error(`env-saaf: ${exampleOpt} not found in ${dir} — nothing to infer a schema from`);
+      process.exit(2);
+    }
+    entries = Object.entries(readEnvFile(examplePath));
   }
 
   // The example runs from the project root, even when init received a directory.
@@ -522,19 +614,34 @@ if (cmd === 'scan' || cmd === 'check') {
   // MISSING lines to merge by hand. Keys the fixed scaffold already declares
   // are not duplicated; a directory with no code yet scans to nothing and the
   // scaffold is exactly as before.
-  const discovered = scanDir(dir).filter(k => !starterKeys.includes(k));
-  fs.writeFileSync(schemaPath, starterSchema(hint, discovered));
+  const discovered = exampleOpt
+    ? scanDir(dir) // schemaFromExample drops the ones the example already lists
+    : scanDir(dir).filter(k => !starterKeys.includes(k));
+  if (exampleOpt) {
+    fs.writeFileSync(schemaPath, schemaFromExample(hint, exampleOpt, entries, discovered));
+  } else {
+    fs.writeFileSync(schemaPath, starterSchema(hint, discovered));
+  }
   // Load the file just written and generate the example from it: the scaffold
   // goes through the same require a user's schema would take, so a broken
   // starter fails loudly here instead of shipping. The cache entry is dropped
   // so a --force re-run in the same process reads the new content.
   delete require.cache[require.resolve(schemaPath)];
   const starter = require(schemaPath);
-  fs.writeFileSync(path.join(dir, '.env.example'), generateExample(starter));
   const keys = Object.keys(starter).length;
-  console.log(`env-saaf: wrote ${schemaName} and .env.example (${keys} variable${keys === 1 ? '' : 's'})`);
+  if (exampleOpt) {
+    // The example file already exists — it is the input, not an output, so it
+    // is never written (or overwritten) here.
+    console.log(`env-saaf: wrote ${schemaName} inferred from ${exampleOpt} (${keys} variable${keys === 1 ? '' : 's'}) — ${exampleOpt} left untouched`);
+  } else {
+    fs.writeFileSync(path.join(dir, '.env.example'), generateExample(starter));
+    console.log(`env-saaf: wrote ${schemaName} and .env.example (${keys} variable${keys === 1 ? '' : 's'})`);
+  }
   if (discovered.length) {
-    console.log(`env-saaf: folded in ${discovered.length} key${discovered.length === 1 ? '' : 's'} found by scanning the code: ${discovered.join(', ')}`);
+    const folded = exampleOpt ? discovered.filter(k => !entries.some(([ek]) => ek === k)) : discovered;
+    if (folded.length) {
+      console.log(`env-saaf: folded in ${folded.length} key${folded.length === 1 ? '' : 's'} found by scanning the code: ${folded.join(', ')}`);
+    }
   }
 } else {
   console.log(USAGE);
