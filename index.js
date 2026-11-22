@@ -113,13 +113,33 @@ function validateSchema(schema) {
         errors.push(`${key}: "${opt}" must be a number`);
       }
     }
+    // Issue #220: `min` above `max` describes a range that can never match,
+    // so it is a schema bug — reject it up front instead of failing oddly
+    // (or never) when the variable is checked.
+    if (rule.min !== undefined && rule.max !== undefined
+      && typeof rule.min === 'number' && typeof rule.max === 'number'
+      && Number.isFinite(rule.min) && Number.isFinite(rule.max)
+      && rule.min > rule.max) {
+      errors.push(`${key}: "min" must not exceed "max"`);
+    }
     for (const opt of ['minLength', 'maxLength']) {
       if (rule[opt] !== undefined && (!Number.isInteger(rule[opt]) || rule[opt] < 0)) {
         errors.push(`${key}: "minLength" and "maxLength" must be non-negative integers`);
       }
     }
+    // Issue #220: same as `min`/`max` — a length range that can never match.
+    if (rule.minLength !== undefined && rule.maxLength !== undefined
+      && Number.isInteger(rule.minLength) && Number.isInteger(rule.maxLength)
+      && rule.minLength > rule.maxLength) {
+      errors.push(`${key}: "minLength" must not exceed "maxLength"`);
+    }
     if (rule.length !== undefined && (!Number.isInteger(rule.length) || rule.length < 0)) {
       errors.push(`${key}: "length" must be a non-negative integer`);
+    }
+    // Issue #220: an empty `choices` list can never match any value — it is
+    // a schema bug, not a value that fails validation.
+    if (rule.choices !== undefined && Array.isArray(rule.choices) && rule.choices.length === 0) {
+      errors.push(`${key}: "choices" must be a non-empty array`);
     }
     // Issue #50: `protocols` is a non-empty array of schemes (e.g. ['https']);
     // a bare string, an empty array or a non-scheme entry is a schema bug.

@@ -3833,6 +3833,37 @@ assert.deepStrictEqual(
       && err.errors.includes('PORT: unknown option "defualt"'),
   );
 
+  // Issue #220: contradictory bounds are schema errors, even for absent keys.
+  assert.throws(
+    () => validateEnv({ N: { type: 'number', min: 10, max: 5 } }, { N: '7' }),
+    err => err instanceof EnvSaafError && err.errors.includes('N: "min" must not exceed "max"'),
+  );
+  assert.throws(
+    () => validateEnv({ N: { type: 'number', min: 10, max: 5 } }, {}),
+    err => err instanceof EnvSaafError && err.errors.includes('N: "min" must not exceed "max"'),
+  );
+  assert.throws(
+    () => validateEnv({ S: { type: 'string', minLength: 10, maxLength: 5 } }, { S: 'hello' }),
+    err => err instanceof EnvSaafError && err.errors.includes('S: "minLength" must not exceed "maxLength"'),
+  );
+  assert.throws(
+    () => validateEnv({ S: { type: 'string', minLength: 10, maxLength: 5 } }, {}),
+    err => err instanceof EnvSaafError && err.errors.includes('S: "minLength" must not exceed "maxLength"'),
+  );
+  assert.throws(
+    () => validateEnv({ M: { type: 'string', choices: [] } }, { M: 'a' }),
+    err => err instanceof EnvSaafError && err.errors.includes('M: "choices" must be a non-empty array'),
+  );
+  assert.throws(
+    () => validateEnv({ M: { type: 'string', choices: [] } }, {}),
+    err => err instanceof EnvSaafError && err.errors.includes('M: "choices" must be a non-empty array'),
+  );
+  // Valid combinations keep working exactly as before.
+  assert.strictEqual(validateEnv({ N: { type: 'number', min: 5, max: 10 } }, { N: '7' }).N, 7);
+  assert.strictEqual(validateEnv({ N: { type: 'number', min: 5, max: 5 } }, { N: '5' }).N, 5);
+  assert.strictEqual(validateEnv({ S: { type: 'string', minLength: 2, maxLength: 5 } }, { S: 'hey' }).S, 'hey');
+  assert.strictEqual(validateEnv({ M: { type: 'string', choices: ['a', 'b'] } }, { M: 'a' }).M, 'a');
+
   // Several valid options together must continue working.
   assert.strictEqual(
     validateEnv(
