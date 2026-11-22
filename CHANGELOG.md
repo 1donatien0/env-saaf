@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Fixed: `validateSchema` now rejects `pattern`, `minLength`, and `maxLength` up front when used on non-string types (`number`, `int`, `port`, `duration`, `boolean`, `date`, `array`, `json`), throwing a schema error naming the key and option even when the variable is absent; string-valued types (`string`, `email`, `url`, `file`, `uuid`, `hex`, `ipv4`, `semver`, `base64`, `host`) and numeric `min`/`max` bounds keep working unchanged (fixes #211).
+
 - Added: `generateExample` now annotates `aliases` and `requiredIf` in `.env.example` comments — an aliased key notes its deprecated fallback names (`also accepts DATABASE_URL (deprecated)`), and a conditionally required key notes its condition (`required when MODE is 'production'`, or `is one of ...` for the `in` form); keys without these options keep the existing format, and `sensitive: true` placeholders stay empty. `example --schema <file>` generates the same annotated file from a schema via the CLI (fixes #206).
 
 - Added: `minItems` / `maxItems` rule options for the `array` type — bound the number of items (both non-negative integers, `minItems` must not exceed `maxItems`); a violation reports the key with the count and the bound (e.g. `TAGS: expected at least 2 items, got 1`), the bounds apply to `default` values too, and malformed values or use on a non-`array` rule are rejected up front (fixes #207).
