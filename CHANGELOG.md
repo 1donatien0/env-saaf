@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Fixed: `validateSchema` now rejects unknown schema rule options, such as misspelled `required` or `default`, with an `EnvSaafError` identifying the schema key and offending option, even when the corresponding environment variable is absent (fixes #218).
 - Added: `test-cli.js`, a CLI integration suite wired into `npm test`, that runs `cli.js` as a real subprocess in throwaway temp projects and asserts process-level behaviour — exit codes, stdout vs stderr, `--json` shape, `check`/`scan`/`example --write`/`init` round-trips in CommonJS and `"type": "module"` projects, missing-directory errors — with a scrubbed child environment so developer env vars cannot leak in (fixes #237).
 
 - Added: `scanCode` (and therefore `scanDir` and the CLI `scan`/`check`/`example` commands) detects Vite-style `import.meta.env` reads — dot access (`import.meta.env.VITE_API_KEY`), bracket access and destructuring — returned in the same sorted list as `process.env` reads, with the same rule that mentions inside comments and string literals do not count (fixes #225).
