@@ -57,7 +57,7 @@ Environment inputs are strings. Output below is before an optional `transform`.
 | `uuid` | Canonical 8-4-4-4-12 hexadecimal groups, either case | `string` | `trim`, `minLength`, `maxLength`, `pattern` |
 | `hex` | One or more hexadecimal characters, no `0x` prefix | `string` | `trim`, `length`, `minLength`, `maxLength`, `pattern` |
 | `ipv4` | Four decimal octets, each 0 to 255; no leading zeroes | `string` | `trim`, `minLength`, `maxLength`, `pattern` |
-| `semver` | `MAJOR.MINOR.PATCH`, optional prerelease and build suffixes. Excludes `v` prefixes and leading numeric zeroes. | `string` | `trim`, `minLength`, `maxLength`, `pattern` |
+| `semver` | `MAJOR.MINOR.PATCH`, optional prerelease and build suffixes, and one optional lowercase `v` prefix (`v1.2.3`). Leading numeric zeroes and uppercase `V` are rejected. | `string` | `trim`, `minLength`, `maxLength`, `pattern` |
 | `base64` | Standard alphabet, length multiple of four, padding where needed. Excludes base64url. | `string` | `trim`, `minLength`, `maxLength`, `pattern` |
 | `date` | Valid `YYYY-MM-DD` or datetime with `T` and hours/minutes; optional seconds, fraction and `Z` or numeric offset. Accepts valid `Date` defaults. | `Date` | `trim` |
 | `duration` | Human duration: `500ms`, `30s`, `15m`, `2h`, `1d`, `1w`, compounds like `1h30m`; a bare number is milliseconds | `number` (milliseconds) | `trim`, `min`, `max` |
@@ -241,7 +241,7 @@ const env = validateEnv({
 });
 ```
 
-`ipv4` accepts a dotted-quad address (`192.168.0.1` passes, `256.1.1.1` and `1.2.3` do not); an octet with a leading zero (`01.2.3.4`) is rejected because it is ambiguous. `semver` accepts `MAJOR.MINOR.PATCH` with optional pre-release and build suffixes (`1.2.3-beta.1` passes, `1.2` and `v1.2.3` do not — the leading `v` is rejected). `base64` accepts standard base64 only (`A-Za-z0-9+/` with `=` padding, length a multiple of 4); base64url (`-` and `_`) is not accepted. All three return the value unchanged, and `minLength`/`maxLength` work on them like on any other string type.
+`ipv4` accepts a dotted-quad address (`192.168.0.1` passes, `256.1.1.1` and `1.2.3` do not); an octet with a leading zero (`01.2.3.4`) is rejected because it is ambiguous. `semver` accepts `MAJOR.MINOR.PATCH` with optional pre-release and build suffixes (`1.2.3-beta.1` passes) and one optional lowercase `v` prefix (`v1.2.3` passes, returned unchanged — the form `git describe` and release pipelines emit); `1.2`, `vv1.2.3` and uppercase `V1.2.3` do not. `base64` accepts standard base64 only (`A-Za-z0-9+/` with `=` padding, length a multiple of 4); base64url (`-` and `_`) is not accepted. All three return the value unchanged, and `minLength`/`maxLength` work on them like on any other string type.
 
 ### `date` type — ISO 8601 dates as `Date` objects
 
