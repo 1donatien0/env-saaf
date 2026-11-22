@@ -1200,9 +1200,9 @@ assert.deepStrictEqual(
   // Combines with pattern: length is checked first, then the pattern.
   assert.throws(() => validateEnv({ S: { type: 'string', minLength: 5, pattern: /^[a-z]+$/ } }, { S: 'ab1' }), /at least 5 characters/);
   assert.throws(() => validateEnv({ S: { type: 'string', minLength: 2, pattern: /^[a-z]+$/ } }, { S: 'ab1' }), /expected to match/);
-  // Applies to email and url values too; non-string values skip the check.
+  // Applies to email and url values too; non-string types are rejected up front.
   assert.throws(() => validateEnv({ E: { type: 'email', maxLength: 5 } }, { E: 'a@b.co' }), /at most 5 characters/);
-  assert.strictEqual(validateEnv({ N: { type: 'number', minLength: 5 } }, { N: '42' }).N, 42);
+  assert.throws(() => validateEnv({ N: { type: 'number', minLength: 5 } }, { N: '42' }), /N: "minLength" only applies to string types/);
   // Bad option values are a clear rule error, not a crash.
   assert.throws(() => validateEnv({ S: { type: 'string', minLength: -1 } }, { S: 'abc' }), /non-negative integers/);
   assert.throws(() => validateEnv({ S: { type: 'string', maxLength: 2.5 } }, { S: 'abc' }), /non-negative integers/);
@@ -3681,6 +3681,93 @@ assert.deepStrictEqual(
     err => err instanceof EnvSaafError
       && !err.message.includes(rawSecret)
       && err.errors[0].includes(maskValue(rawSecret)),
+  );
+}
+
+// Issue #211: string-only options (`pattern`, `minLength`, `maxLength`) must be
+// rejected up front on non-string types instead of silently doing nothing.
+{
+  const fs = require('node:fs');
+  const path = require('node:path');
+
+  // Exact reproduction from issue #211 (present and absent, throwing and non-throwing).
+  for (const env of [{ N: '42' }, {}]) {
+    assert.throws(
+      () => validateEnv({ N: { type: 'int', pattern: /^4/ } }, env),
+      err => err instanceof EnvSaafError
+        && err.errors.length === 1
+        && err.errors[0].includes('N:')
+        && err.errors[0].includes('"pattern"'),
+    );
+  }
+  assert.throws(
+    () => validateEnv({ N: { type: 'int', pattern: /^4/ } }, {}, { throwOnError: false }),
+    err => err instanceof EnvSaafError && err.errors[0].includes('N:') && err.errors[0].includes('"pattern"'),
+  );
+
+  // Every non-string type rejects pattern, minLength, and maxLength up front.
+  const nonStringCases = [
+    ['int', { N: '42' }],
+    ['number', { N: '3.14' }],
+    ['port', { N: '3000' }],
+    ['duration', { N: '15m' }],
+    ['boolean', { N: 'true' }],
+    ['date', { N: '2026-01-31' }],
+    ['array', { N: 'a,b' }],
+    ['json', { N: '{"a":1}' }],
+  ];
+  for (const [type, env] of nonStringCases) {
+    for (const [opt, val] of [['pattern', /^a/], ['minLength', 1], ['maxLength', 5]]) {
+      for (const inputEnv of [env, {}]) {
+        assert.throws(
+          () => validateEnv({ K: { type, [opt]: val } }, inputEnv),
+          err => err instanceof EnvSaafError
+            && err.errors.some(e => e.includes('K:') && e.includes(`"${opt}"`) && e.includes(`'${type}'`)),
+          `expected ${type} to reject ${opt}`,
+        );
+      }
+    }
+  }
+
+  // Omitted type defaults to 'string' and all string-valued types keep working.
+  assert.strictEqual(
+    validateEnv({ S: { pattern: /^[a-z]+$/, minLength: 2, maxLength: 5 } }, { S: 'abc' }).S,
+    'abc',
+  );
+  const tmpDir = fs.mkdtempSync(path.join(__dirname, 'issue-211-test-'));
+  const tmpFile = path.join(tmpDir, 'sample.txt');
+  fs.writeFileSync(tmpFile, 'ok');
+  try {
+    const stringCases = [
+      ['string', 'hello', /^h/, 2, 10],
+      ['email', 'user@example.com', /@example\.com$/, 5, 30],
+      ['url', 'https://example.com', /^https:\/\//, 10, 40],
+      ['file', tmpFile, /sample\.txt$/, 5, 300],
+      ['uuid', '550e8400-e29b-41d4-a716-446655440000', /^550e8400-/, 36, 36],
+      ['hex', 'deadbeef', /^dead/, 4, 16],
+      ['ipv4', '192.168.0.1', /^192\.168\./, 7, 15],
+      ['semver', '1.2.3-beta.1', /^1\.2\.3/, 5, 20],
+      ['base64', 'aGVsbG8=', /^aGVs/, 4, 16],
+      ['host', 'db.internal', /\.internal$/, 3, 30],
+    ];
+    for (const [type, raw, pattern, minLength, maxLength] of stringCases) {
+      assert.strictEqual(
+        validateEnv({ S: { type, pattern, minLength, maxLength } }, { S: raw }).S,
+        raw,
+        `expected ${type} to allow pattern/minLength/maxLength`,
+      );
+    }
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+
+  // Numeric min/max bounds continue working on numeric types.
+  assert.strictEqual(validateEnv({ N: { type: 'int', min: 1, max: 50 } }, { N: '42' }).N, 42);
+
+  // Unknown type with string-only option reports only the unknown type error.
+  assert.throws(
+    () => validateEnv({ K: { type: 'emial', pattern: /@/ } }, {}),
+    err => err instanceof EnvSaafError && err.errors.length === 1 && err.errors[0].includes('unknown type "emial"'),
   );
 }
 
