@@ -222,6 +222,12 @@ function validateSchema(schema) {
   if (errors.length) throw new EnvSaafError(errors);
 }
 
+// Numeric configuration strings are decimal; Number() alone also accepts
+// JavaScript radix prefixes. Numeric values (including defaults) stay unchanged.
+function decimalNumber(value) {
+  return typeof value === 'string' && /^\s*0[xob]/i.test(value) ? NaN : Number(value);
+}
+
 function coerce(key, raw, type, trim = true, protocols, sensitive = false, of = 'string', separator = ',') {
   // trim: false (issue #84) keeps the raw value exactly as provided — for
   // values where the whitespace IS the value (a password with a significant
@@ -249,14 +255,14 @@ function coerce(key, raw, type, trim = true, protocols, sensitive = false, of = 
       // Reject NaN as well as non-finite results (Infinity, -Infinity, and
       // exponent overflow like '1e999'): Number() parses them without error,
       // and a silent Infinity breaks downstream maths (issue #175).
-      const n = Number(v);
+      const n = decimalNumber(v);
       if (v === '' || !Number.isFinite(n)) throw new Error(`${key}: expected a number (e.g. ${TYPE_EXAMPLES.number}), got "${shown}"`);
       return n;
     }
     case 'int': {
       // Whole numbers only: counts, retries, pool sizes. '1e3' is 1000, so
       // it passes; '3.5', 'abc', and non-finite values ('Infinity', '1e999') do not.
-      const n = Number(v);
+      const n = decimalNumber(v);
       if (v === '' || !Number.isFinite(n) || !Number.isInteger(n)) throw new Error(`${key}: expected an integer (e.g. ${TYPE_EXAMPLES.int}), got "${shown}"`);
       return n;
     }
@@ -459,7 +465,7 @@ function coerce(key, raw, type, trim = true, protocols, sensitive = false, of = 
       return s;
     }
     case 'port': {
-      const n = Number(v);
+      const n = decimalNumber(v);
       const zeroWithoutValue = n === 0 && typeof v !== 'number'
         && (typeof v !== 'string' || v.trim() === '');
       if (zeroWithoutValue || !Number.isInteger(n) || n < 0 || n > 65535) {
