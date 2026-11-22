@@ -3813,4 +3813,47 @@ assert.deepStrictEqual(
   );
 }
 
+// Issue #234: maskSecrets recurses into plain objects/arrays; cycles get a placeholder
+{
+  // The issue's example: the masked structure mirrors the input shape and
+  // scalar leaves use today's maskValue shapes.
+  const out = maskSecrets({ DB: { PASSWORD: 'hunter2' }, TAGS: ['a', 'b'] });
+  assert.deepStrictEqual(out, { DB: { PASSWORD: 'hu***r2' }, TAGS: ['****', '****'] });
+  // Flat input behaves byte-for-byte as today.
+  assert.deepStrictEqual(maskSecrets({ KEY: 'sk_live_123456', EMPTY: '' }), { KEY: 'sk***56', EMPTY: '' });
+  assert.deepStrictEqual(
+    maskSecrets({ N: 12345, B: true, Z: null }),
+    { N: maskValue(12345), B: maskValue(true), Z: maskValue(null) }
+  );
+  // Deep nesting and arrays of objects keep their shape.
+  assert.deepStrictEqual(
+    maskSecrets({ a: { b: { c: { d: 'secret-value' } } }, list: [{ X: 'abcdef' }, 'xy', 42] }),
+    { a: { b: { c: { d: 'se***ue' } } }, list: [{ X: 'ab***ef' }, '****', '****'] }
+  );
+  // Non-plain values (Date, class instances) are leaves via maskValue, as today.
+  const when = new Date('2026-01-01T00:00:00.000Z');
+  assert.deepStrictEqual(maskSecrets({ AT: when }), { AT: maskValue(when) });
+  class Cfg { constructor() { this.token = 'abcdef'; } }
+  const cfg = new Cfg();
+  assert.deepStrictEqual(maskSecrets({ C: cfg }), { C: maskValue(cfg) });
+  // A self-referencing object returns without hanging: the repeated reference
+  // becomes a fixed placeholder.
+  const cyc = { NAME: 'abcdef' };
+  cyc.self = cyc;
+  assert.deepStrictEqual(maskSecrets(cyc), { NAME: 'ab***ef', self: '[Circular]' });
+  // Same for a cycle through an array.
+  const arr = ['abcdef'];
+  arr.push(arr);
+  assert.deepStrictEqual(maskSecrets({ LIST: arr }), { LIST: ['ab***ef', '[Circular]'] });
+  // A repeated (non-cyclic) reference is also replaced with the placeholder.
+  const shared = { TOKEN: 'abcdef' };
+  assert.deepStrictEqual(maskSecrets({ A: shared, B: shared }), { A: { TOKEN: 'ab***ef' }, B: '[Circular]' });
+  // The input is not mutated, and empty containers pass through.
+  const input = { DB: { PASSWORD: 'hunter2' } };
+  maskSecrets(input);
+  assert.deepStrictEqual(input, { DB: { PASSWORD: 'hunter2' } });
+  assert.deepStrictEqual(maskSecrets({}), {});
+  assert.deepStrictEqual(maskSecrets({ LIST: [] }), { LIST: [] });
+}
+
 console.log('env-saaf v1.5.0: all tests passed');

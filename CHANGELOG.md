@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Added: `maskSecrets` now recurses into nested plain objects and arrays — the returned structure mirrors the input shape and every scalar leaf is masked with the existing `maskValue` rules, so parsed configs and request contexts log safely (`{ DB: { PASSWORD: 'hunter2' } }` → `{ DB: { PASSWORD: 'hu***r2' } }`). Non-plain values (`Date`, class instances) remain leaves via `maskValue`, a repeated reference (e.g. a cycle) is replaced with the fixed placeholder `'[Circular]'` instead of hanging, flat input is byte-for-byte unchanged, the input is never mutated, and the TypeScript return type mirrors the shape recursively via the new exported `Masked<T>` type (fixes #234).
+
 - Added: `scanCode` (and therefore `scanDir` and the CLI `scan`/`check`/`example` commands) detects Vite-style `import.meta.env` reads — dot access (`import.meta.env.VITE_API_KEY`), bracket access and destructuring — returned in the same sorted list as `process.env` reads, with the same rule that mentions inside comments and string literals do not count (fixes #225).
 
 - Added: the `duration` type accepts compound durations — a sequence of number+unit parts is summed into milliseconds, so `1h30m` and `1h 30m` are 5,400,000 ms and `2d12h` is 216,000,000 ms; every part needs an explicit unit (a trailing bare number like `1h30` is rejected), single values and bare numbers behave as before, and the error example now shows `1h30m` (fixes #224).

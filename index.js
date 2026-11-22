@@ -1154,11 +1154,26 @@ function maskValue(v) {
   return s.slice(0, 2) + '***' + s.slice(-2);
 }
 
-/** Return a copy of an env object with every value masked — safe to print/log. */
+/** Return a copy of an env object with every value masked — safe to print/log.
+ *  Plain objects and arrays are walked recursively (issue #234), so the masked
+ *  structure mirrors the input shape; scalar leaves use the maskValue rules.
+ *  Non-plain values (Date, RegExp, class instances) stay leaves via maskValue.
+ *  A repeated reference (e.g. a cycle) is replaced with a fixed placeholder
+ *  instead of hanging. The input is never mutated. */
 function maskSecrets(obj) {
-  const out = {};
-  for (const [k, v] of Object.entries(obj)) out[k] = maskValue(v);
-  return out;
+  const seen = new Set();
+  const walk = (value) => {
+    if (value === null || typeof value !== 'object') return maskValue(value);
+    if (seen.has(value)) return '[Circular]';
+    seen.add(value);
+    if (Array.isArray(value)) return value.map(walk);
+    const proto = Object.getPrototypeOf(value);
+    if (proto !== Object.prototype && proto !== null) return maskValue(value);
+    const out = {};
+    for (const [k, v] of Object.entries(value)) out[k] = walk(v);
+    return out;
+  };
+  return walk(obj);
 }
 
 /** Generate .env.example text from a schema. Values are placeholders/defaults only — never real secrets. */
