@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Added: `minItems` / `maxItems` rule options for the `array` type — bound the number of items (both non-negative integers, `minItems` must not exceed `maxItems`); a violation reports the key with the count and the bound (e.g. `TAGS: expected at least 2 items, got 1`), the bounds apply to `default` values too, and malformed values or use on a non-`array` rule are rejected up front (fixes #207).
+
 - Fixed: reject aliases that collide with declared schema keys or are shared by different rules before validating environment values, including with `throwOnError: false` (fixes #205).
 
 - Fixed: `validateSchema` now rejects a rule that sets both `required: true` and `requiredIf`, and a `requiredIf` that names its own key — both are contradictory combinations that used to be silently accepted (`required` winning, the self-reference never firing) (fixes #204).

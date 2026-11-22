@@ -96,6 +96,14 @@ export interface EnvRule {
    */
   separator?: string;
   /**
+   * Minimum / maximum number of items for `type: 'array'` (both
+   * non-negative integers; `minItems` must not exceed `maxItems`). A
+   * violation reports the key with the count and the bound. Rejected up
+   * front on non-`array` rules.
+   */
+  minItems?: number;
+  maxItems?: number;
+  /**
    * Deprecated variable names accepted as fallbacks when this key is unset
    * (e.g. `['OLD_NAME']`). The first populated alias supplies the value and
    * emits a deprecation warning; if the canonical key is also set, the

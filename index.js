@@ -121,6 +121,23 @@ function validateSchema(schema) {
     if (rule.separator !== undefined && (typeof rule.separator !== 'string' || rule.separator.length === 0)) {
       errors.push(`${key}: "separator" must be a non-empty string`);
     }
+    // Issue #207: `minItems` / `maxItems` bound the item count of an `array`
+    // rule. Both must be non-negative integers, `minItems` must not exceed
+    // `maxItems`, and the options only apply to `type: 'array'` — on any
+    // other type they would be dead config, so they are rejected up front.
+    for (const opt of ['minItems', 'maxItems']) {
+      if (rule[opt] !== undefined && (!Number.isInteger(rule[opt]) || rule[opt] < 0)) {
+        errors.push(`${key}: "${opt}" must be a non-negative integer`);
+      }
+    }
+    if (rule.minItems !== undefined && rule.maxItems !== undefined
+      && Number.isInteger(rule.minItems) && Number.isInteger(rule.maxItems)
+      && rule.minItems > rule.maxItems) {
+      errors.push(`${key}: "minItems" must not exceed "maxItems"`);
+    }
+    if ((rule.minItems !== undefined || rule.maxItems !== undefined) && rule.type !== 'array') {
+      errors.push(`${key}: "minItems" and "maxItems" only apply to type 'array'`);
+    }
     if (rule.aliases !== undefined) {
       const bad = !Array.isArray(rule.aliases)
         || rule.aliases.some(a => typeof a !== 'string' || a.trim() === '');
@@ -484,6 +501,20 @@ function validateEnv(schema, env = process.env, options = {}) {
           const range = rule.min !== undefined && rule.max !== undefined ? `${rule.min}–${rule.max}`
             : rule.min !== undefined ? `at least ${rule.min}` : `at most ${rule.max}`;
           errors.push(`${key}: expected a number ${range}, got "${shown}"`);
+          continue;
+        }
+      }
+      // minItems/maxItems: allowed item count for array values (issue #207).
+      // Runs right after coercion, before choices/pattern; the error names
+      // the count and the bound. Either option works alone, and defaults go
+      // through the same check because they are coerced here too.
+      if (Array.isArray(val) && (rule.minItems !== undefined || rule.maxItems !== undefined)) {
+        const lo = rule.minItems !== undefined ? rule.minItems : 0;
+        const hi = rule.maxItems !== undefined ? rule.maxItems : Infinity;
+        if (val.length < lo || val.length > hi) {
+          const range = rule.minItems !== undefined && rule.maxItems !== undefined ? `${rule.minItems}–${rule.maxItems} items`
+            : rule.minItems !== undefined ? `at least ${rule.minItems} items` : `at most ${rule.maxItems} items`;
+          errors.push(`${key}: expected ${range}, got ${val.length}`);
           continue;
         }
       }
