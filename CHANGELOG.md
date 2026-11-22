@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Added: the `semver` type accepts one optional lowercase `v` prefix (`v1.2.3`, `v1.2.3-rc.1`, `v1.2.3+build`), returned unchanged — the form `git describe` and release pipelines emit; `v1.2`, `vv1.2.3` and uppercase `V1.2.3` are still rejected (fixes #227).
+- Fixed: `validateSchema` now rejects contradictory bounds up front — `min` above `max`, `minLength` above `maxLength`, and an empty `choices` array — with a schema error naming the key, even when the variable is absent (fixes #220).
+- Fixed: `validateSchema` now rejects unknown schema rule options, such as misspelled `required` or `default`, with an `EnvSaafError` identifying the schema key and offending option, even when the corresponding environment variable is absent (fixes #218).
 - Added: `env-saaf init --from-example[=file]` infers a starter schema from an existing example file (default `.env.example`) instead of the fixed template — each key's sample value picks the rule type (port-looking number in 1024-65535 -> `port`, `true`/`false` -> `boolean`, http(s) URL -> `url`, email -> `email`, other integers -> `int`, decimals -> `number`, else `string`, empty -> `string`), every inferred rule is commented as inferred (sample values are never copied into the schema), code-scanned keys the example lacks are folded in as `string` rules, and the example file itself is left untouched; only the schema file is written, still requiring `--force` to overwrite (fixes #232).
 
 - Added: `test-cli.js`, a CLI integration suite wired into `npm test`, that runs `cli.js` as a real subprocess in throwaway temp projects and asserts process-level behaviour — exit codes, stdout vs stderr, `--json` shape, `check`/`scan`/`example --write`/`init` round-trips in CommonJS and `"type": "module"` projects, missing-directory errors — with a scrubbed child environment so developer env vars cannot leak in (fixes #237).
