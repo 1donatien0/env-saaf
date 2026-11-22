@@ -239,6 +239,12 @@ export interface LoadEnvOptions {
 
 export function loadEnv<S extends EnvSchema>(schema: S, options?: LoadEnvOptions): EnvResult<S>;
 export function parseEnvFile(text: string): Record<string, string>;
+/**
+ * Find every env read in JS/TS source text — `process.env.KEY`,
+ * `process.env?.KEY` (optional chaining), bracket/template forms and
+ * destructuring, plus the Vite-style `import.meta.env` equivalents.
+ * Mentions inside comments and string literals do not count.
+ */
 export function scanCode(text: string): string[];
 export function scanDir(dir: string): string[];
 export function diffEnv(usedKeys: string[], documentedKeys: string[]): { usedNotDocumented: string[]; documentedNotUsed: string[] };
