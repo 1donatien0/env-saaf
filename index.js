@@ -1183,19 +1183,27 @@ function scanCode(text) {
     }
   }
   const aliases = new Map();
-  const declaration = /(?<![$\p{ID_Continue}.])(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*(?:\/\*(?:[^*]|\*(?!\/))*\*\/\s*|\/\/[^\r\n]*(?:\r\n?|\n)\s*)*(process\.env|import\.meta\.env)/gu;
-  const boundary = /\s*/y;
-  const continuation = /(?!\+\+|--)(?:[.([+*/%&|^?=<>-]|!=|(?:in|instanceof)\b)/y;
+  const declaration = /(?<![$\p{ID_Continue}.])(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=/gu;
+  const trivia = /(?:\s|\/\*(?:[^*]|\*(?!\/))*\*\/|\/\/[^\r\n\u2028\u2029]*)*/y;
+  const source = /(?:process\.env|import\.meta\.env)/y;
+  const continuation = /(?!\+\+|--)(?:[.([+*\/%&|^?=<>-]|\x60|!=|(?:in|instanceof)\b)/y;
   for (const m of src.matchAll(declaration)) {
-    const end = m.index + m[0].length;
-    if (!isCode(m.index, m.index + 1) || !isCode(end - m[2].length, end) || aliases.has(m[1])) continue;
-    boundary.lastIndex = end;
-    const [spacing] = boundary.exec(codeView);
-    const next = boundary.lastIndex;
+    const afterEquals = m.index + m[0].length;
+    if (!isCode(m.index, afterEquals) || aliases.has(m[1])) continue;
+    // Skip comments without hiding strings or consuming the next declaration.
+    trivia.lastIndex = afterEquals;
+    trivia.exec(src);
+    const sourceStart = trivia.lastIndex;
+    source.lastIndex = sourceStart;
+    if (!source.test(src) || !isCode(sourceStart, source.lastIndex)) continue;
+    const end = source.lastIndex;
+    trivia.lastIndex = end;
+    const [spacing] = trivia.exec(src);
+    const next = trivia.lastIndex;
     continuation.lastIndex = next;
     // A line break ends the initializer only when the expression cannot continue.
-    if (next === codeView.length || /[;,}]/.test(codeView[next]) ||
-        (/[\r\n]/.test(spacing) && !continuation.test(codeView))) {
+    if (next === src.length || /[;,}]/.test(src[next]) ||
+        (/[\r\n\u2028\u2029]/.test(spacing) && !continuation.test(src))) {
       aliases.set(m[1], end);
     }
   }
