@@ -3814,3 +3814,64 @@ assert.deepStrictEqual(
 }
 
 console.log('env-saaf v1.5.0: all tests passed');
+
+// Issue #230: watch-mode integration test — spawn `cli.js check --watch` as a
+// subprocess, edit files, and assert it re-runs (debounced) and exits 0 on Ctrl-C.
+(async () => {
+  const { spawn } = require('node:child_process');
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const path = require('node:path');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'env-saaf-watch-'));
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  try {
+    fs.writeFileSync(path.join(dir, '.env.example'), 'PORT=\n');
+    fs.writeFileSync(path.join(dir, '.env'), 'PORT=3000\n');
+    fs.writeFileSync(path.join(dir, 'app.js'), 'console.log(process.env.PORT);\n');
+    const childEnv = { PATH: process.env.PATH || '' };
+    if (process.platform === 'win32') { if (process.env.SYSTEMROOT) childEnv.SYSTEMROOT = process.env.SYSTEMROOT; }
+    else if (process.env.HOME) childEnv.HOME = process.env.HOME;
+    const child = spawn(process.execPath, [path.join(__dirname, 'cli.js'), 'check', dir, '--watch'], { cwd: dir, env: childEnv });
+    let out = '';
+    child.stdout.on('data', (d) => { out += d; });
+    child.stderr.on('data', (d) => { out += d; });
+    const waitFor = async (pred, what, timeoutMs = 8000) => {
+      const start = Date.now();
+      while (!(typeof pred === 'function' ? pred() : pred.test(out))) {
+        if (Date.now() - start > timeoutMs) throw new Error(`timed out waiting for ${what}; output so far:\n${out}`);
+        await sleep(50);
+      }
+    };
+    const runCount = () => (out.match(/check finished, exit/g) || []).length;
+
+    // initial run happens and reports the clean state
+    await waitFor(/all clean/, 'initial result');
+    assert.ok(/watching/.test(out), 'watch banner printed');
+    assert.strictEqual(runCount(), 1);
+
+    // editing the source re-runs the check and reports the new MISSING key
+    fs.appendFileSync(path.join(dir, 'app.js'), 'console.log(process.env.NEW_KEY);\n');
+    await waitFor(() => /MISSING in \.env\.example: NEW_KEY/.test(out) && runCount() >= 2, 're-run after source edit');
+    assert.strictEqual(runCount(), 2);
+
+    // editing the real .env re-runs too (EXTRA finding)
+    fs.appendFileSync(path.join(dir, '.env'), 'LOCAL_ONLY=1\n');
+    await waitFor(() => /EXTRA in \.env: LOCAL_ONLY/.test(out) && runCount() >= 3, 're-run after .env edit');
+
+    // debounce: two rapid successive saves collapse into a single re-run
+    const before = runCount();
+    fs.appendFileSync(path.join(dir, 'app.js'), '// touch 1\n');
+    await sleep(25);
+    fs.appendFileSync(path.join(dir, 'app.js'), '// touch 2\n');
+    await sleep(900);
+    assert.strictEqual(runCount() - before, 1, `two rapid saves must collapse into one re-run (got ${runCount() - before})`);
+
+    // Ctrl-C exits cleanly with code 0
+    const exitCode = await new Promise((resolve) => { child.on('exit', resolve); child.kill('SIGINT'); });
+    assert.strictEqual(exitCode, 0, 'SIGINT in watch mode exits 0');
+    assert.ok(/stopped watching/.test(out), 'prints a stop message');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+  console.log('watch-mode tests passed');
+})().catch((err) => { console.error(err); process.exit(1); });

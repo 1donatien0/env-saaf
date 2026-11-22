@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Added: `--watch` flag for the CLI `check` and `scan` commands — runs once, then re-runs with a ~150 ms debounce whenever the scanned source tree, the env template file (`.env.example`/`--file`) or the `--schema` file changes; each re-run's result is printed with a timestamp and Ctrl-C exits cleanly with code 0. Without `--watch`, output and exit codes are unchanged (fixes #230).
+
 - Added: `scanCode` (and therefore `scanDir` and the CLI `scan`/`check`/`example` commands) detects Vite-style `import.meta.env` reads — dot access (`import.meta.env.VITE_API_KEY`), bracket access and destructuring — returned in the same sorted list as `process.env` reads, with the same rule that mentions inside comments and string literals do not count (fixes #225).
 
 - Added: the `duration` type accepts compound durations — a sequence of number+unit parts is summed into milliseconds, so `1h30m` and `1h 30m` are 5,400,000 ms and `2d12h` is 216,000,000 ms; every part needs an explicit unit (a trailing bare number like `1h30` is rejected), single values and bare numbers behave as before, and the error example now shows `1h30m` (fixes #224).

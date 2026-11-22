@@ -546,6 +546,7 @@ npx env-saaf check . --file .env.sample  # compare against a differently-named t
 npx env-saaf check . --json # machine-readable JSON output (ok/missing/extra/unused) for CI or tooling
 npx env-saaf check . --schema ./env.schema.js  # also validate the values in .env against a schema — exit 1 on a type error
 npx env-saaf scan ./src --json  # JSON list of used vars
+npx env-saaf check . --watch    # re-run check whenever the code, .env.example/.env or schema changes (Ctrl-C to stop)
 npx env-saaf example ./src  # draft a .env.example from a code scan
 npx env-saaf example ./src --write  # save the draft to .env.example (refuses, exit 1, when the scan finds no variables)
 npx env-saaf example . --schema ./env.schema.js  # generate .env.example from a schema instead — with type placeholders and alias/requiredIf annotations
