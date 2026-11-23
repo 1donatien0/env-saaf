@@ -1841,6 +1841,7 @@ function jsonSchemaForRule(key, rule, required) {
     const value = jsonSchemaDefault(key, rule, type);
     if (value !== undefined) property.default = value;
   }
+  if (rule.sensitive === true) property.writeOnly = true;
   if (rule.required) required.push(key);
   return property;
 }
