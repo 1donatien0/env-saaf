@@ -1666,6 +1666,7 @@ function generateExample(schema) {
     // Issue #223: name the item type on array rules, so the generated file
     // documents what each comma-separated item must look like.
     if (rule.type === 'array') comment += `, items: ${rule.of || 'string'}`;
+    if (rule.pattern instanceof RegExp) comment += `, pattern: ${rule.pattern}`;
     if (Array.isArray(rule.aliases) && rule.aliases.length) {
       comment += `; also accepts ${rule.aliases.join(', ')} (deprecated)`;
     }

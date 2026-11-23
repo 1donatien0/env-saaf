@@ -5326,3 +5326,23 @@ Promise.all([watchModeTest, watchModeErrorPathTest, loadEnvAsyncTest])
   assert.strictEqual(result.KEY, 'value');
   assert.strictEqual(warnings.length, 1);
 }
+
+// Issue #293: pattern annotations compose without changing example values.
+{
+  const schema = {
+    S: { type: 'string', pattern: /^[A-Z]+$/ },
+    MODE: { type: 'string', required: true, choices: ['YES', 'NO'], pattern: /^[A-Z]+$/i },
+    GROUP: { prefix: 'APP_', schema: {
+      CODE: { type: 'string', pattern: /^code_\d+$/ },
+    } },
+  };
+  const example = generateExample(schema);
+  assert.ok(example.includes('# type: string, pattern: /^[A-Z]+$/\nS=your_value_here\n'));
+  assert.ok(example.includes('# type: string, required, one of: YES|NO, pattern: /^[A-Z]+$/i\nMODE=YES\n'));
+  assert.ok(example.includes('# type: string, pattern: /^code_\\d+$/\nAPP_CODE=your_value_here\n'));
+  const plain = { S: { type: 'string' }, MODE: { type: 'string', required: true, choices: ['YES', 'NO'] },
+    GROUP: { prefix: 'APP_', schema: { CODE: { type: 'string' } } } };
+  const values = text => text.split('\n').filter(line => line && !line.startsWith('#'));
+  assert.deepStrictEqual(values(example), values(generateExample(plain)));
+  assert.ok(!generateExample(plain).includes('pattern:'));
+}
