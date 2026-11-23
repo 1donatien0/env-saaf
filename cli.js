@@ -2,11 +2,13 @@
 'use strict';
 /**
  * env-saaf CLI
- *   env-saaf check [dir] [--file name] [--schema file] [--json] [--watch] — scan code for process.env usage, compare with
+ *   env-saaf check [dir] [--file name] [--schema file] [--json] [--json-schema] [--watch] — scan code for process.env usage, compare with
  *                           .env.example (or the --file given); exit 1 if anything
  *                           used is not documented. --schema also validates the values
  *                           of the real .env file against the schema the file exports
- *                           (issue #90); --json emits machine-readable output. A scaffold
+ *                           (issue #90); --json emits machine-readable output. --json-schema
+ *                           prints the schema file as a draft 2020-12 JSON Schema
+ *                           document instead of running the check (issue #268). A scaffold
  *                           with no code usage yet passes with a single note instead of
  *                           one UNUSED line per key (issue #170).
  *   env-saaf scan  [dir] [--file name] [--json] [--watch] — just list the env vars your code uses; keys in
@@ -36,7 +38,7 @@
  */
 const fs = require('node:fs');
 const path = require('node:path');
-const { scanDir, parseEnvFile, diffEnv, validateEnv, EnvSaafError, generateExample } = require('./index');
+const { scanDir, parseEnvFile, diffEnv, validateEnv, EnvSaafError, generateExample, toJsonSchema } = require('./index');
 
 const argv = process.argv.slice(2);
 // --version / -v is global: report the installed version wherever it appears, before anything else runs
@@ -47,7 +49,7 @@ if (argv.includes('--version') || argv.includes('-v')) {
 // Output is already plain in every mode, including when NO_COLOR is set.
 while (argv[0] === '--no-color') argv.shift();
 const cmd = argv[0];
-const USAGE = 'Usage: env-saaf check [dir] [--file name] [--schema file] [--json] [--watch] | env-saaf scan [dir] [--file name] [--json] [--watch] | env-saaf example [dir] [--write[=file]] [--force] [--schema file] | env-saaf init [dir] [--schema file] [--force] [--from-example[=file]] [--groups]\n'
+const USAGE = 'Usage: env-saaf check [dir] [--file name] [--schema file] [--json] [--json-schema] [--watch] | env-saaf scan [dir] [--file name] [--json] [--watch] | env-saaf example [dir] [--write[=file]] [--force] [--schema file] | env-saaf init [dir] [--schema file] [--force] [--from-example[=file]]\n'
   + 'Global options: --no-color, --version / -v (before or after the command).';
 // --help / -h / help: print usage and exit 0 (asking for help is not an error — this used to exit 2)
 if (cmd === '--help' || cmd === '-h' || cmd === 'help') {
@@ -58,6 +60,9 @@ if (cmd === '--help' || cmd === '-h' || cmd === 'help') {
 // --schema <file> or --schema=<file> ('check' only): validate the env values against the
 // schema the file exports (issue #90). Opt-in: without it the check is presence-only.
 // --json: machine-readable output for check and scan
+// --json-schema ('check' only): print the --schema file as a draft 2020-12
+// JSON Schema document to stdout instead of running the check (issue #268).
+// Without --schema there is nothing to convert, so the flag errors out.
 // --write / --write=<file> ('example' only): save the draft to .env.example (or the file
 // named) instead of printing it; --force allows overwriting an existing file
 // --watch ('check' and 'scan' only): run once, then re-run (debounced) whenever the scanned
@@ -66,6 +71,7 @@ let fileOpt = '.env.example';
 let fileExplicit = false;
 let schemaOpt = null;
 let jsonMode = false;
+let jsonSchemaOpt = false;
 let writeOpt = null;
 let forceOpt = false;
 // Issue #230: --watch ('check' and 'scan' only) re-runs the command when watched inputs change.
@@ -97,6 +103,7 @@ for (let i = 1; i < argv.length; i++) {
   else if (a === '--schema' && argv[i + 1]) schemaOpt = argv[++i];
   else if (a.startsWith('--schema=')) schemaOpt = a.slice('--schema='.length);
   else if (a === '--json') jsonMode = true;
+  else if (a === '--json-schema') jsonSchemaOpt = true;
   else if (a === '--write') writeOpt = '.env.example';
   else if (a.startsWith('--write=')) writeOpt = a.slice('--write='.length) || '.env.example';
   else if (a === '--force') forceOpt = true;
@@ -341,7 +348,73 @@ function runScan() {
   return 0;
 }
 
+// Load the --schema file (relative to the checked directory, like --file)
+// and check it exports a schema object. Shared by the --schema validation
+// step in runCheck and by --json-schema (issue #268). A load failure or a
+// non-object export reports a plain message and exits 2.
+function loadSchemaFile() {
+  let schema;
+  try {
+    const schemaPath = path.resolve(dir, schemaOpt);
+    // Issue #230: require() caches modules, so in watch mode a schema edit
+    // would otherwise re-run against the stale cached schema — drop the
+    // cache entry before loading (the init command uses the same pattern).
+    if (watchActive) {
+      try { delete require.cache[require.resolve(schemaPath)]; } catch { /* not loaded yet */ }
+    }
+    schema = require(schemaPath);
+  } catch (e) {
+    // Issue #184: when the schema file is one Node treats as an ES module,
+    // say so plainly and name the fix instead of surfacing the raw
+    // `ReferenceError: module is not defined` text.
+    let detail = e.message;
+    if (/ES module|module is not defined/.test(e.message)) {
+      detail += ' — in a "type": "module" project the schema must be a .cjs file (e.g. env.schema.cjs)';
+    }
+    const message = `env-saaf: cannot load schema ${schemaOpt}: ${detail}`;
+    if (jsonMode) console.log(JSON.stringify({ ok: false, error: message }));
+    else console.error(message);
+    fatalExit(2);
+  }
+  if (schema === null || typeof schema !== 'object' || Array.isArray(schema)) {
+    const message = `env-saaf: schema ${schemaOpt} must export a schema object (module.exports = { KEY: { type: 'port', ... } })`;
+    if (jsonMode) console.log(JSON.stringify({ ok: false, error: message }));
+    else console.error(message);
+    fatalExit(2);
+  }
+  return schema;
+}
+
 function runCheck() {
+  // Issue #268: --json-schema prints the --schema file as a draft 2020-12
+  // JSON Schema document to stdout instead of running the check. The
+  // .env.example is never read here, so a schema can be converted even
+  // before any example file exists. Without --schema there is nothing to
+  // convert; an invalid schema reports its error and exits 2 like the
+  // --schema validation path below, never a raw stack trace.
+  if (jsonSchemaOpt) {
+    if (!schemaOpt) {
+      const message = 'env-saaf: --json-schema needs --schema <file>';
+      if (jsonMode) console.log(JSON.stringify({ ok: false, error: message }));
+      else console.error(message);
+      fatalExit(2);
+    }
+    const schema = loadSchemaFile();
+    let document;
+    try {
+      document = toJsonSchema(schema);
+    } catch (e) {
+      if (e instanceof EnvSaafError) {
+        const message = `env-saaf: invalid schema ${schemaOpt}: ${e.message}`;
+        if (jsonMode) console.log(JSON.stringify({ ok: false, error: message }));
+        else console.error(message);
+        fatalExit(2);
+      }
+      throw e;
+    }
+    console.log(JSON.stringify(document, null, 2));
+    return 0;
+  }
   const examplePath = path.join(dir, fileOpt);
   if (!fs.existsSync(examplePath)) {
     // Issue #89: point at the command that drafts the file instead of dead-ending
@@ -376,36 +449,7 @@ function runCheck() {
   // errors already name the key) and fail the check like a missing key.
   let invalid = [];
   if (schemaOpt) {
-    let schema;
-    try {
-      // Like --file, a relative schema path is relative to the checked directory.
-      const schemaPath = path.resolve(dir, schemaOpt);
-      // Issue #230: require() caches modules, so in watch mode a schema edit
-      // would otherwise re-run against the stale cached schema — drop the
-      // cache entry before loading (the init command uses the same pattern).
-      if (watchActive) {
-        try { delete require.cache[require.resolve(schemaPath)]; } catch { /* not loaded yet */ }
-      }
-      schema = require(schemaPath);
-    } catch (e) {
-      // Issue #184: when the schema file is one Node treats as an ES module,
-      // say so plainly and name the fix instead of surfacing the raw
-      // `ReferenceError: module is not defined` text.
-      let detail = e.message;
-      if (/ES module|module is not defined/.test(e.message)) {
-        detail += ' — in a "type": "module" project the schema must be a .cjs file (e.g. env.schema.cjs)';
-      }
-      const message = `env-saaf: cannot load schema ${schemaOpt}: ${detail}`;
-      if (jsonMode) console.log(JSON.stringify({ ok: false, error: message }));
-      else console.error(message);
-      fatalExit(2);
-    }
-    if (schema === null || typeof schema !== 'object' || Array.isArray(schema)) {
-      const message = `env-saaf: schema ${schemaOpt} must export a schema object (module.exports = { KEY: { type: 'port', ... } })`;
-      if (jsonMode) console.log(JSON.stringify({ ok: false, error: message }));
-      else console.error(message);
-      fatalExit(2);
-    }
+    const schema = loadSchemaFile();
     const targetName = fileExplicit ? fileOpt : (fs.existsSync(envPath) ? '.env' : null);
     if (targetName) {
       const values = readEnvFile(path.join(dir, targetName));

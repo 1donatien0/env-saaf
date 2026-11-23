@@ -108,6 +108,48 @@ try {
     assert.ok(Array.isArray(parsed.invalid) && parsed.invalid.length === 1 && /PORT/.test(parsed.invalid[0]));
   }
 
+  // --- check --json-schema: stdout is the draft 2020-12 JSON Schema for the --schema file (issue #268)
+  {
+    const { toJsonSchema } = require('./index');
+    const schemaText = "module.exports = {\n"
+      + "  PORT: { type: 'port', required: true },\n"
+      + "  MODE: { type: 'string', choices: ['dev', 'prod'], default: 'dev' },\n"
+      + "  DB: { prefix: 'DB_', schema: { HOST: { type: 'host', required: true }, PORT: { type: 'port', default: 5432 } } },\n"
+      + "};\n";
+    const dir = mkProject({
+      'src/app.js': SRC_WITH_USAGE,
+      '.env.example': EXAMPLE_BOTH,
+      'env.schema.js': schemaText,
+    });
+    const expected = toJsonSchema(require(path.join(dir, 'env.schema.js')));
+    const r = run(['check', dir, '--schema', 'env.schema.js', '--json-schema'], dir);
+    assert.strictEqual(r.status, 0, `check --json-schema should exit 0, got ${r.status}: ${r.stdout}${r.stderr}`);
+    assert.strictEqual(r.stderr, '', 'the schema document belongs on stdout, nothing on stderr');
+    const parsed = JSON.parse(r.stdout); // must not throw
+    assert.deepStrictEqual(parsed, expected);
+    assert.strictEqual(parsed.$schema, 'https://json-schema.org/draft/2020-12/schema');
+    // The grouped schema nests as an object schema (issue #262).
+    assert.strictEqual(parsed.properties.DB.type, 'object');
+    assert.deepStrictEqual(parsed.properties.DB.required, ['HOST']);
+    // --schema= form and flag order do not matter.
+    const r2 = run(['check', '--json-schema', '--schema=env.schema.js', dir], dir);
+    assert.strictEqual(r2.status, 0, `${r2.stdout}${r2.stderr}`);
+    assert.deepStrictEqual(JSON.parse(r2.stdout), expected);
+    // Without the flag the normal check still runs (and passes here).
+    const plain = run(['check', dir, '--schema', 'env.schema.js'], dir);
+    assert.strictEqual(plain.status, 0, `plain check should still pass, got ${plain.status}: ${plain.stdout}${plain.stderr}`);
+    assert.match(plain.stdout, /all clean/);
+    // --json-schema without --schema exits 2 with a plain message.
+    const noSchema = run(['check', dir, '--json-schema'], dir);
+    assert.strictEqual(noSchema.status, 2);
+    assert.match(noSchema.stderr, /--json-schema needs --schema/);
+    // A missing schema file exits 2, no stack trace.
+    const missing = run(['check', dir, '--schema', 'nope.js', '--json-schema'], dir);
+    assert.strictEqual(missing.status, 2);
+    assert.match(missing.stderr, /cannot load schema nope\.js/);
+    assert.ok(!/at Object\.|at Module\./.test(missing.stderr), 'no raw Node stack trace');
+  }
+
   // --- check: missing .env.example exits 2 with a hint ----------------------
   {
     const dir = mkProject({ 'src/app.js': SRC_WITH_USAGE });
