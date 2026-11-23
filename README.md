@@ -373,6 +373,21 @@ Quoted values may also span several lines (PEM keys, JSON blobs) — parsing con
 
 A bare line without `=`, or an assignment with an invalid key (such as `app.name`, `MY-KEY` or `MY KEY`), raises a syntax error with its line number, without echoing the value. Keys must match `[A-Za-z_][A-Za-z0-9_]*`. Use `KEY=` for an empty value.
 
+In async code, use `loadEnvAsync` to read files without blocking on filesystem I/O.
+
+```js
+const { loadEnvAsync } = require('env-saaf');
+
+async function readConfig() {
+  return await loadEnvAsync(
+    { PORT: { type: 'port', default: 3000 } },
+    { paths: ['.env', '.env.local'] }
+  );
+}
+```
+
+It accepts the same options as `loadEnv`, including file precedence, `override`, and `assign`. The promise resolves with the validated values and rejects on the same errors that `loadEnv` throws.
+
 The manual way still works too — parse the file and pass it in:
 
 ```js

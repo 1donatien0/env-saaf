@@ -853,6 +853,39 @@ function validateEnv(schema, env = process.env, options = {}) {
  * found and every schema key is optional (has a default or is not required).
  */
 function loadEnv(schema, options = {}) {
+  const loader = loadEnvSteps(schema, options);
+  let step = loader.next();
+  while (!step.done) {
+    let fileText;
+    try {
+      fileText = fs.readFileSync(step.value, 'utf8');
+    } catch (error) {
+      step = loader.throw(error);
+      continue;
+    }
+    step = loader.next(fileText);
+  }
+  return step.value;
+}
+
+async function loadEnvAsync(schema, options = {}) {
+  const loader = loadEnvSteps(schema, options);
+  let step = loader.next();
+  while (!step.done) {
+    let fileText;
+    try {
+      fileText = await fs.promises.readFile(step.value, 'utf8');
+    } catch (error) {
+      step = loader.throw(error);
+      continue;
+    }
+    step = loader.next(fileText);
+  }
+  return step.value;
+}
+
+// Yield each path in order so both loaders share parsing and error handling.
+function* loadEnvSteps(schema, options) {
   if (schema === null || typeof schema !== 'object'
     || (Object.getPrototypeOf(schema) !== Object.prototype && Object.getPrototypeOf(schema) !== null)) {
     throw new TypeError(
@@ -874,7 +907,7 @@ function loadEnv(schema, options = {}) {
   for (const filePath of fileList) {
     let fileText;
     try {
-      fileText = fs.readFileSync(filePath, 'utf8');
+      fileText = yield filePath;
     } catch (e) {
       // A missing file keeps its own behaviour (skipped in a list, reported
       // when a required variable is missing below). Any other read failure —
@@ -1472,4 +1505,4 @@ function toJsonSchema(schema) {
   return result;
 }
 
-module.exports = { validateEnv, loadEnv, EnvSaafError, parseEnvFile, scanCode, scanDir, diffEnv, maskValue, maskSecrets, generateExample, toJsonSchema };
+module.exports = { validateEnv, loadEnv, loadEnvAsync, EnvSaafError, parseEnvFile, scanCode, scanDir, diffEnv, maskValue, maskSecrets, generateExample, toJsonSchema };

@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Added: `loadEnvAsync(schema, options)` reads .env files asynchronously with the same options and behavior as `loadEnv` (fixes #233).
+
 - Added: `toJsonSchema(schema)` exports a draft 2020-12 JSON Schema for coerced configuration values (fixes #229).
 
 - Added: opt-in `formatError(errors, { keys })` option for `validateEnv` and `loadEnv`: the returned string becomes the thrown `EnvSaafError`'s `message` while `error.errors` keeps the raw per-key strings; the hook sees only a read-only copy of the errors and the schema keys, falls back to the default message if it throws or returns a non-string, and is not called with `throwOnError: false` (fixes #231).

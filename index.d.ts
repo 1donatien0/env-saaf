@@ -227,6 +227,7 @@ export interface LoadEnvOptions {
 }
 
 export function loadEnv<S extends EnvSchema>(schema: S, options?: LoadEnvOptions): EnvResult<S>;
+export function loadEnvAsync<S extends EnvSchema>(schema: S, options?: LoadEnvOptions): Promise<EnvResult<S>>;
 export function parseEnvFile(text: string): Record<string, string>;
 /**
  * Find every env read in JS/TS source text — `process.env.KEY`,
