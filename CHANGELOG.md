@@ -5,6 +5,7 @@
 - Added: toJsonSchema marks sensitive rules as writeOnly, including inside groups (fixes #288).
 
 - Fixed: generateExample uses the first allowed choice instead of a generic placeholder, preserving explicit defaults and empty secret placeholders (fixes #273).
+- Fixed: `validateSchema` now rejects `choices` entries that can never match the declared type (for example `['1', '2']` on an `int` rule, `['true']` on a `boolean` rule, or any `choices` on a `date` rule) instead of accepting the schema and failing every value at runtime; string-typed rules and non-finite numbers, which `toJsonSchema` drops from `enum`, are unaffected (fixes #305).
 
 - Fixed: `int` (and `port`, which builds on it) now only accepts plain integer literals — optional sign + digits — so decimal and scientific spellings such as `1.0`, `1e3` and `1.5e2` are rejected even when they happen to be whole numbers, instead of silently passing (fixes #277). `number` still accepts them.
 

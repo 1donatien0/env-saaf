@@ -260,6 +260,31 @@ function validateSchemaRules(schema, warn) {
     if (rule.choices !== undefined && Array.isArray(rule.choices) && rule.choices.length === 0) {
       errors.push(`${key}: "choices" must be a non-empty array`);
     }
+    // Issue #305: a choice is compared against the *coerced* value
+    // (`rule.choices.includes(val)`), so a choice written in the wrong shape
+    // can never match any real input: the string '1' for an `int`, 'true' for
+    // a `boolean`. Coerce each choice the way a value is coerced and reject
+    // the ones that fail or come back different from what was written.
+    // String-typed rules are fine. A `date` value is always a freshly parsed
+    // Date object, so no choice (Date or string) can ever be equal to it.
+    // Non-finite numbers (Infinity, NaN) are left alone: toJsonSchema() drops
+    // them from the generated `enum` on purpose, so they stay valid here.
+    if (Array.isArray(rule.choices) && rule.choices.length > 0) {
+      if (effectiveType === 'date') {
+        errors.push(`${key}: "choices" cannot be used with type 'date' (a parsed date is a new Date object, so no choice can ever match)`);
+      } else if (['number', 'int', 'port', 'boolean', 'duration'].includes(effectiveType)) {
+        for (const choice of rule.choices) {
+          if (typeof choice === 'number' && !Number.isFinite(choice)) continue;
+          let matches = false;
+          try { matches = coerce(key, choice, effectiveType) === choice; }
+          catch { /* not a value this type can produce */ }
+          if (!matches) {
+            const shownChoice = typeof choice === 'string' ? JSON.stringify(choice) : String(choice);
+            errors.push(`${key}: "choices" entry ${shownChoice} can never match type '${effectiveType}' (a choice must be a value this type can produce)`);
+          }
+        }
+      }
+    }
     // Issue #50: `protocols` is a non-empty array of schemes (e.g. ['https']);
     // a bare string, an empty array or a non-scheme entry is a schema bug.
     if (rule.protocols !== undefined) {
