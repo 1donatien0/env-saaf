@@ -1682,6 +1682,7 @@ function generateExample(schema) {
     const placeholder = rule.default !== undefined
       ? (rule.type === 'array' && Array.isArray(rule.default) ? rule.default.join(rule.separator || ',') : rule.default)
       : looksSecret ? ''
+      : Array.isArray(rule.choices) && rule.choices.length ? rule.choices[0]
       : rule.type === 'array'
         // Issue #223: build the array placeholder from the `of` item type's own
         // examples, so each suggested item validates (fallback: string items).
