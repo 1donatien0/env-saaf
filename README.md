@@ -702,6 +702,8 @@ API_KEY=
 
 Keys that look like secrets (`API_KEY`, `DB_PASSWORD`, …) get an empty placeholder — nothing safe to suggest for them. Other keys get a type-based placeholder, and an explicit `default` is used as-is. Keys with `aliases` note the deprecated fallback names (`# type: url, required; also accepts DATABASE_URL (deprecated)`), and keys with `requiredIf` note the condition (`# type: url; required when MODE is 'production'`, or `required when MODE is one of 'staging', 'production'` for the `in` form).
 
+Numeric placeholders (`number`, `int`, `port`, `duration`) are adjusted to fit `min` and `max` when the range allows a value of that type. Integer bounds are rounded inward, ports stay within 0–65535, and durations stay non-negative. A duration keeps the `15m` example when it fits; otherwise its example is written in milliseconds. Explicit defaults, choices and empty secret placeholders keep their existing precedence.
+
 ### Export JSON Schema from your schema
 
 `toJsonSchema(schema)` returns a [draft 2020-12 JSON Schema](https://json-schema.org/draft/2020-12)

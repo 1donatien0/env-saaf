@@ -96,6 +96,8 @@
 - Fixed: `generateExample` now suggests a placeholder that itself validates for every scalar type — `email` suggests `user@example.com`, `uuid` a canonical UUID, `number` `3.14`, `int` `42`, `boolean` `true`, `json` `{"key":"value"}`, `base64` `aGVsbG8=`, `hex` `deadbeef` — instead of the literal `your_value_here`, so a generated `.env.example` passes `check` out of the box; the already-correct placeholders (`port`, `url`, `date`, `duration`, `host`, `semver`, `ipv4`) are unchanged, and `file` stays the documented exception (`./config.json` is a path the user must create) (fixes #251)
 - Fixed: `validateEnv` and `loadEnv` (and `loadEnvAsync`) now reject unknown options up front with an `EnvSaafError` naming the offending option — a typo like `{ stric: true }` or `{ overide: true }` no longer runs silently as if the option was never passed (same class of bug as #218, one layer up); the check runs even when the variable is absent and even with `{ throwOnError: false }`, and all currently valid options keep working exactly as before (fixes #250)
 
+- Fixed: `generateExample` adjusts numeric placeholders to `min`/`max`, respecting integer, port and duration constraints, so generated values round-trip through their own schema (fixes #274).
+
 ## 1.5.0 — 2026-11-20
 
 - Added: `host` type — validates a hostname or an IPv4/IPv6 address (`db.internal`, `localhost`, `10.0.0.5`, `::1`) and rejects values with a scheme, path or port; `minLength`/`maxLength`/`pattern` work on it, and `generateExample` suggests `localhost` (fixes #44)
