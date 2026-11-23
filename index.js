@@ -422,6 +422,11 @@ function decimalNumber(value) {
   return typeof value === 'string' && /^\s*0[xob]/i.test(value) ? NaN : Number(value);
 }
 
+// Semantic version: MAJOR.MINOR.PATCH, no leading zeroes in numeric parts;
+// optional pre-release/build suffixes and one optional lowercase 'v' prefix.
+// Shared by coerce() and toJsonSchema() so runtime and schema checks match.
+const SEMVER_RE = /^v?(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-((?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*)(?:\.(?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*))*))?(?:\+([0-9a-zA-Z-]+(?:\.[0-9a-zA-Z-]+)*))?$/;
+
 function coerce(key, raw, type, trim = true, protocols, sensitive = false, of = 'string', separator = ',') {
   // trim: false (issue #84) keeps the raw value exactly as provided — for
   // values where the whitespace IS the value (a password with a significant
@@ -555,7 +560,7 @@ function coerce(key, raw, type, trim = true, protocols, sensitive = false, of = 
       // emit); an uppercase 'V' or a double 'vv' is rejected. The value
       // is returned unchanged, prefix included.
       const s = String(v);
-      if (!/^v?(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-((?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*)(?:\.(?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*))*))?(?:\+([0-9a-zA-Z-]+(?:\.[0-9a-zA-Z-]+)*))?$/.test(s)) {
+      if (!SEMVER_RE.test(s)) {
         throw new Error(`${key}: expected a valid semantic version (e.g. ${TYPE_EXAMPLES.semver}), got "${shown}"`);
       }
       return s;
@@ -1765,6 +1770,7 @@ function jsonSchemaForScalar(type, protocols) {
     case 'host': return { type: 'string', anyOf: [{ format: 'hostname' }, { format: 'ipv4' }, { format: 'ipv6' }] };
     case 'email': case 'uuid': case 'ipv4': return { type: 'string', format: type };
     case 'hex': return { type: 'string', pattern: '^[0-9a-fA-F]+$' };
+    case 'semver': return { type: 'string', pattern: SEMVER_RE.source };
     case 'url': {
       const property = { type: 'string', format: 'uri' };
       if (protocols) {
