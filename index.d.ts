@@ -107,6 +107,12 @@ export interface EnvRule {
   minItems?: number;
   maxItems?: number;
   /**
+   * Reject repeated items for `type: 'array'` (default `false`). Items are
+   * compared after coercion, so `'1,01'` for `of: 'int'` counts as a
+   * duplicate. Rejected up front on non-`array` rules.
+   */
+  unique?: boolean;
+  /**
    * Deprecated variable names accepted as fallbacks when this key is unset
    * (e.g. `['OLD_NAME']`). The first populated alias supplies the value and
    * emits a deprecation warning; if the canonical key is also set, the
@@ -300,6 +306,7 @@ export interface JsonSchemaProperty {
   items?: JsonSchemaProperty;
   minItems?: number;
   maxItems?: number;
+  uniqueItems?: boolean;
   anyOf?: JsonSchemaProperty[];
   allOf?: JsonSchemaProperty[];
 }

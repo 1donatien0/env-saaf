@@ -3471,6 +3471,61 @@ assert.deepStrictEqual(
     err => err instanceof EnvSaafError && err.errors[0].includes('"minItems" and "maxItems" only apply to type \'array\''),
   );
 
+  // 11b. `unique: true` rejects repeated items (issue #291).
+  assert.deepStrictEqual(
+    validateEnv({ TAGS: { type: 'array', unique: true } }, { TAGS: 'a,b,c' }).TAGS,
+    ['a', 'b', 'c'],
+  );
+  assert.deepStrictEqual(
+    validateEnv({ IDS: { type: 'array', of: 'int', unique: true } }, { IDS: '1,2,3' }).IDS,
+    [1, 2, 3],
+  );
+  // Off by default: the same values pass without the option.
+  assert.deepStrictEqual(
+    validateEnv({ TAGS: { type: 'array' } }, { TAGS: 'a,a,b' }).TAGS,
+    ['a', 'a', 'b'],
+  );
+  // Duplicates are compared after item coercion: '1,01' is a duplicate for of: 'int'.
+  assert.throws(
+    () => validateEnv({ TAGS: { type: 'array', unique: true } }, { TAGS: 'a,a,b' }),
+    err => err instanceof EnvSaafError && err.errors[0] === 'TAGS: duplicate value "a" (unique: true)',
+  );
+  assert.throws(
+    () => validateEnv({ IDS: { type: 'array', of: 'int', unique: true } }, { IDS: '1,01,2' }),
+    err => err instanceof EnvSaafError && err.errors[0] === 'IDS: duplicate value "1" (unique: true)',
+  );
+  // The duplicated value is masked when the rule is sensitive.
+  assert.throws(
+    () => validateEnv({ TAGS: { type: 'array', unique: true, sensitive: true } }, { TAGS: 'secret,secret' }),
+    err => err instanceof EnvSaafError && err.errors[0] === 'TAGS: duplicate value "se***et" (unique: true)',
+  );
+  // Applies to defaults too, and non-throwing mode collects the error.
+  assert.throws(
+    () => validateEnv({ TAGS: { type: 'array', unique: true, default: ['x', 'x'] } }, {}),
+    err => err instanceof EnvSaafError && err.errors[0] === 'TAGS: duplicate value "x" (unique: true)',
+  );
+  const collectedUnique = validateEnv({ TAGS: { type: 'array', unique: true } }, { TAGS: 'a,a' }, { throwOnError: false });
+  assert.deepStrictEqual(collectedUnique.env, {});
+  assert.deepStrictEqual(collectedUnique.errors, ['TAGS: duplicate value "a" (unique: true)']);
+  // Malformed option and use on a non-array rule are rejected up front.
+  assert.throws(
+    () => validateEnv({ TAGS: { type: 'array', unique: 'yes' } }, {}),
+    err => err instanceof EnvSaafError && err.errors[0].includes('"unique" must be a boolean'),
+  );
+  assert.throws(
+    () => validateEnv({ NAME: { type: 'string', unique: true } }, {}),
+    err => err instanceof EnvSaafError && err.errors[0].includes('"unique" only applies to type \'array\''),
+  );
+  // toJsonSchema renders the option as uniqueItems.
+  assert.deepStrictEqual(
+    toJsonSchema({ TAGS: { type: 'array', unique: true } }).properties.TAGS,
+    { type: 'array', items: { type: 'string', minLength: 1 }, uniqueItems: true },
+  );
+  assert.deepStrictEqual(
+    toJsonSchema({ TAGS: { type: 'array' } }).properties.TAGS,
+    { type: 'array', items: { type: 'string', minLength: 1 } },
+  );
+
   // 12. generateExample produces a delimited placeholder (respecting separator, array default, and sensitive).
   const exArr = generateExample({
     TAGS: { type: 'array', required: true },

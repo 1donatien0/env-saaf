@@ -70,6 +70,7 @@ const KNOWN_RULE_OPTIONS = new Set([
   'separator',
   'minItems',
   'maxItems',
+  'unique',
   'aliases',
 ]);
 
@@ -198,16 +199,16 @@ function validateSchemaRules(schema, warn) {
         }
       }
     }
-    // Issue #282: the mirror image of the check above — `of` / `separator`
-    // are only read for `array` rules, and `protocols` only for `url` rules
-    // (and for `array` rules, where it flows to `of: 'url'` items). Anywhere
-    // else they are dead config that looks like it does something, so reject
-    // them up front. `min` / `max` are deliberately NOT rejected off the
-    // numeric types: they apply to any numeric *value* (see the runtime
-    // check in validateEnvCore), whatever the declared type.
+    // Issue #282: the mirror image of the check above — `of` / `separator` /
+    // `unique` are only read for `array` rules, and `protocols` only for
+    // `url` rules (and for `array` rules, where it flows to `of: 'url'`
+    // items). Anywhere else they are dead config that looks like it does
+    // something, so reject them up front. `min` / `max` are deliberately NOT
+    // rejected off the numeric types: they apply to any numeric *value* (see
+    // the runtime check in validateEnvCore), whatever the declared type.
     if (KNOWN_TYPES.has(effectiveType)) {
       if (effectiveType !== 'array') {
-        for (const opt of ['of', 'separator']) {
+        for (const opt of ['of', 'separator', 'unique']) {
           if (rule[opt] !== undefined) {
             errors.push(`${key}: "${opt}" only applies to type 'array' (cannot be used with type '${effectiveType}')`);
           }
@@ -270,6 +271,10 @@ function validateSchemaRules(schema, warn) {
     }
     if (rule.sensitive !== undefined && typeof rule.sensitive !== 'boolean') {
       errors.push(`${key}: "sensitive" must be a boolean`);
+    }
+    // Issue #291: `unique` is a boolean flag for `array` rules.
+    if (rule.unique !== undefined && typeof rule.unique !== 'boolean') {
+      errors.push(`${key}: "unique" must be a boolean`);
     }
     if (rule.requiredIf !== undefined) {
       const cond = rule.requiredIf;
@@ -900,6 +905,27 @@ function validateEnvCore(schema, env, options) {
           const range = rule.minItems !== undefined && rule.maxItems !== undefined ? `${rule.minItems}–${rule.maxItems} items`
             : rule.minItems !== undefined ? `at least ${rule.minItems} items` : `at most ${rule.maxItems} items`;
           errors.push(`${key}: expected ${range}, got ${val.length}`);
+          continue;
+        }
+      }
+      // Issue #291: `unique: true` rejects repeated items, compared after
+      // item coercion — so '1,01' for `of: 'int'` counts as a duplicate.
+      // Runs right after coercion, next to minItems/maxItems; the error
+      // names the key and the duplicated item. Defaults go through the
+      // same check because they are coerced here too.
+      if (Array.isArray(val) && rule.unique === true) {
+        const seen = new Set();
+        let duplicate;
+        let found = false;
+        for (const item of val) {
+          // Objects (dates, parsed JSON items) compare by their JSON form.
+          const itemKey = item !== null && typeof item === 'object' ? JSON.stringify(item) : item;
+          if (seen.has(itemKey)) { duplicate = item; found = true; break; }
+          seen.add(itemKey);
+        }
+        if (found) {
+          const shownDup = sensitive ? maskValue(safeString(duplicate)) : safeString(duplicate);
+          errors.push(`${key}: duplicate value "${shownDup}" (unique: true)`);
           continue;
         }
       }
@@ -1787,6 +1813,7 @@ function jsonSchemaForRule(key, rule, required) {
     property = { type: 'array', items };
     if (rule.minItems !== undefined) property.minItems = rule.minItems;
     if (rule.maxItems !== undefined) property.maxItems = rule.maxItems;
+    if (rule.unique === true) property.uniqueItems = true;
   } else {
     property = jsonSchemaForScalar(type, rule.protocols);
   }
