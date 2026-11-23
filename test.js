@@ -1726,7 +1726,7 @@ assert.deepStrictEqual(
   assert.strictEqual(validateEnv(schema, { TIMEOUT: '1h30m' }).TIMEOUT, 5400000);
   assert.strictEqual(validateEnv(schema, { TIMEOUT: '1h 30m' }).TIMEOUT, 5400000);
   assert.strictEqual(validateEnv(schema, { TIMEOUT: '2d12h' }).TIMEOUT, 216000000);
-  assert.strictEqual(validateEnv(schema, { TIMEOUT: '500ms250ms' }).TIMEOUT, 750);
+  assert.strictEqual(validateEnv(schema, { TIMEOUT: '500ms0.25s' }).TIMEOUT, 750);
   assert.strictEqual(validateEnv(schema, { TIMEOUT: '1.5h30m' }).TIMEOUT, 7200000);
   assert.strictEqual(validateEnv(schema, { TIMEOUT: '1H30M' }).TIMEOUT, 5400000);
   assert.strictEqual(validateEnv(schema, { TIMEOUT: '1w1d' }).TIMEOUT, 691200000);
@@ -1737,6 +1737,26 @@ assert.deepStrictEqual(
   for (const bad of ['1h30', 'h30m', '1h30x', '1h 30', '1h30min']) {
     assert.throws(() => validateEnv(schema, { TIMEOUT: bad }), /expected a duration/);
   }
+  // Issue #280: each unit may appear only once, regardless of case or spacing.
+  const repeated = ['1h1h', '30m30m', '1s500ms250ms', '1h30m1h'];
+  for (const unit of ['ms', 's', 'm', 'h', 'd', 'w']) {
+    repeated.push(`1${unit} 0${unit.toUpperCase()}`);
+  }
+  for (const bad of repeated) {
+    assert.throws(() => validateEnv(schema, { TIMEOUT: bad }), /TIMEOUT: expected a duration/);
+    const collected = validateEnv(schema, { TIMEOUT: bad }, { throwOnError: false });
+    assert.strictEqual(collected.env.TIMEOUT, undefined);
+    assert.ok(collected.errors.some(error => error.startsWith('TIMEOUT: expected a duration')));
+  }
+  assert.strictEqual(validateEnv(schema, { TIMEOUT: '1w2d' }).TIMEOUT, 777600000);
+  assert.throws(
+    () => validateEnv({ TIMEOUT: { type: 'duration', default: '1h1h' } }, {}),
+    /TIMEOUT: expected a duration/,
+  );
+  assert.throws(
+    () => validateEnv({ TIMEOUTS: { type: 'array', of: 'duration' } }, { TIMEOUTS: '1h30m,1s1s' }),
+    /TIMEOUTS.*expected a duration/,
+  );
   // Array items share the coercion path.
   assert.deepStrictEqual(
     validateEnv({ TIMEOUTS: { type: 'array', of: 'duration' } }, { TIMEOUTS: '1h30m,45s' }).TIMEOUTS,
