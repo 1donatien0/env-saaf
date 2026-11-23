@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Fixed: `toJsonSchema(schema)` renders grouped schemas as nested object schemas (with their own `properties` and `required`) instead of `{"type": "string"}` (fixes #262).
+
 - Added: `loadEnvAsync(schema, options)` reads .env files asynchronously with the same options and behavior as `loadEnv` (fixes #233).
 
 - Added: `toJsonSchema(schema)` exports a draft 2020-12 JSON Schema for coerced configuration values (fixes #229).
