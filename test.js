@@ -5326,3 +5326,33 @@ Promise.all([watchModeTest, watchModeErrorPathTest, loadEnvAsyncTest])
   assert.strictEqual(result.KEY, 'value');
   assert.strictEqual(warnings.length, 1);
 }
+
+// Issue #288: sensitive rules retain their annotation in exported JSON Schema.
+{
+  const schema = {
+    SESSION: { type: 'string', sensitive: true, required: true },
+    COUNT: { type: 'int', sensitive: true },
+    TAGS: { type: 'array', sensitive: true },
+    PLAIN: { type: 'string' },
+    FALSE: { type: 'string', sensitive: false },
+    DB: { prefix: 'DB_', schema: {
+      PASSWORD: { type: 'string', sensitive: true },
+      HOST: { type: 'host' },
+    } },
+  };
+  const exported = toJsonSchema(schema);
+  assert.deepStrictEqual(exported.properties.SESSION, { type: 'string', writeOnly: true });
+  assert.strictEqual(exported.properties.COUNT.writeOnly, true);
+  assert.strictEqual(exported.properties.TAGS.writeOnly, true);
+  assert.deepStrictEqual(exported.properties.DB.properties.PASSWORD, { type: 'string', writeOnly: true });
+  assert.deepStrictEqual(exported.properties.PLAIN, { type: 'string' });
+  assert.deepStrictEqual(exported.properties.FALSE, { type: 'string' });
+  assert.ok(!Object.prototype.hasOwnProperty.call(exported.properties.DB, 'writeOnly'));
+  assert.ok(!Object.prototype.hasOwnProperty.call(exported.properties.DB.properties.HOST, 'writeOnly'));
+  assert.deepStrictEqual(exported.required, ['SESSION']);
+  const ordinary = { S: { type: 'string' }, N: { type: 'int' } };
+  assert.strictEqual(JSON.stringify(toJsonSchema(ordinary)), JSON.stringify({
+    $schema: 'https://json-schema.org/draft/2020-12/schema', type: 'object',
+    properties: { S: { type: 'string' }, N: { type: 'integer' } },
+  }));
+}
