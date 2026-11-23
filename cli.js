@@ -23,14 +23,16 @@
  *                           string entries and listed on stdout (issue #171). In a
  *                           "type": "module" project the starter is env.schema.cjs
  *                           instead, so it still loads with require() (issue #184)
- *   env-saaf init  [dir] --from-example[=file] [--schema file] [--force] — like the
+ *   env-saaf init  [dir] --from-example[=file] [--schema file] [--force] [--groups] — like the
  *                           above, but the starter schema is inferred from an
  *                           existing example file (default .env.example): each key's
  *                           sample value picks the rule type (port-looking number ->
  *                           port, true/false -> boolean, http(s) URL -> url, email ->
  *                           email, integer -> int, decimal -> number, else string),
  *                           every inferred rule is commented as inferred, and the
- *                           example file itself is left untouched (issue #232)
+ *                           example file itself is left untouched (issue #232).
+ *                           With --groups, keys sharing a common prefix (e.g. DB_HOST,
+ *                           DB_PORT) are folded into a grouped schema (issue #263)
  */
 const fs = require('node:fs');
 const path = require('node:path');
@@ -45,7 +47,7 @@ if (argv.includes('--version') || argv.includes('-v')) {
 // Output is already plain in every mode, including when NO_COLOR is set.
 while (argv[0] === '--no-color') argv.shift();
 const cmd = argv[0];
-const USAGE = 'Usage: env-saaf check [dir] [--file name] [--schema file] [--json] [--watch] | env-saaf scan [dir] [--file name] [--json] [--watch] | env-saaf example [dir] [--write[=file]] [--force] [--schema file] | env-saaf init [dir] [--schema file] [--force] [--from-example[=file]]\n'
+const USAGE = 'Usage: env-saaf check [dir] [--file name] [--schema file] [--json] [--watch] | env-saaf scan [dir] [--file name] [--json] [--watch] | env-saaf example [dir] [--write[=file]] [--force] [--schema file] | env-saaf init [dir] [--schema file] [--force] [--from-example[=file]] [--groups]\n'
   + 'Global options: --no-color, --version / -v (before or after the command).';
 // --help / -h / help: print usage and exit 0 (asking for help is not an error — this used to exit 2)
 if (cmd === '--help' || cmd === '-h' || cmd === 'help') {
@@ -81,6 +83,7 @@ function fatalExit(code) {
   process.exit(code);
 }
 let fromExampleOpt = null; // null = off; true = bare flag; string = --from-example=file
+let groupsOpt = false;
 const positional = [];
 for (let i = 1; i < argv.length; i++) {
   const a = argv[i];
@@ -100,6 +103,7 @@ for (let i = 1; i < argv.length; i++) {
   else if (a === '--watch') watchOpt = true;
   else if (a === '--from-example') fromExampleOpt = true;
   else if (a.startsWith('--from-example=')) fromExampleOpt = a.slice('--from-example='.length) || '.env.example';
+  else if (a === '--groups') groupsOpt = true;
   else if (a !== '--no-color') positional.push(a);
 }
 const dir = positional[0] || process.cwd();
@@ -195,13 +199,52 @@ function inferTypeFromSample(sample) {
 // the committed schema. Keys the code scan already found are folded in as
 // string rules (same as the fixed scaffold does) unless the example already
 // lists them, so nothing is duplicated.
-function schemaFromExample(hint, exampleName, entries, scannedKeys = []) {
+// Issue #263: with --groups, keys sharing a common prefix (at least two
+// characters before the first '_', shared by at least two keys) fold into
+// a grouped schema (prefix: 'PREFIX_') keeping the same per-key type inference.
+function schemaFromExample(hint, exampleName, entries, scannedKeys = [], groups = false) {
   const jsKey = k => (/^[A-Za-z_$][A-Za-z0-9_$]*$/.test(k) ? k : JSON.stringify(k));
   const seen = new Set(entries.map(([k]) => k));
-  const inferred = entries.map(([k, sample]) => {
-    const type = inferTypeFromSample(sample);
-    return `  // inferred as '${type}' from the sample value in ${exampleName} — review this rule\n  ${jsKey(k)}: { type: '${type}' },`;
-  });
+  let inferred;
+  if (!groups) {
+    inferred = entries.map(([k, sample]) => {
+      const type = inferTypeFromSample(sample);
+      return `  // inferred as '${type}' from the sample value in ${exampleName} — review this rule\n  ${jsKey(k)}: { type: '${type}' },`;
+    });
+  } else {
+    const groupCounts = new Map();
+    for (const [k] of entries) {
+      const idx = k.indexOf('_');
+      if (idx >= 2) {
+        const group = k.slice(0, idx);
+        const innerKey = k.slice(idx + 1);
+        if (innerKey.length > 0 && !seen.has(group)) {
+          groupCounts.set(group, (groupCounts.get(group) || 0) + 1);
+        }
+      }
+    }
+    inferred = [];
+    const emittedGroups = new Set();
+    for (const [k, sample] of entries) {
+      const idx = k.indexOf('_');
+      const group = idx >= 2 ? k.slice(0, idx) : null;
+      const isGrouped = group !== null && (groupCounts.get(group) || 0) >= 2;
+      if (!isGrouped) {
+        const type = inferTypeFromSample(sample);
+        inferred.push(`  // inferred as '${type}' from the sample value in ${exampleName} — review this rule\n  ${jsKey(k)}: { type: '${type}' },`);
+      } else if (!emittedGroups.has(group)) {
+        emittedGroups.add(group);
+        const prefix = group + '_';
+        const groupEntries = entries.filter(([key]) => key.startsWith(prefix) && key.length > prefix.length);
+        const innerRules = groupEntries.map(([key, s]) => {
+          const innerKey = key.slice(prefix.length);
+          const type = inferTypeFromSample(s);
+          return `      // inferred as '${type}' from the sample value in ${exampleName} — review this rule\n      ${jsKey(innerKey)}: { type: '${type}' },`;
+        });
+        inferred.push(`  ${jsKey(group)}: {\n    prefix: '${prefix}',\n    schema: {\n${innerRules.join('\n')}\n    },\n  },`);
+      }
+    }
+  }
   const extra = scannedKeys.filter(k => !seen.has(k));
   const scanned = extra.length
     ? `\n  // Found by scanning this project's code (process.env reads) — not in ${exampleName};\n  // typed as string for now; tighten the type, or delete, as needed.\n`
@@ -618,7 +661,7 @@ if (cmd === 'scan' || cmd === 'check') {
     ? scanDir(dir) // schemaFromExample drops the ones the example already lists
     : scanDir(dir).filter(k => !starterKeys.includes(k));
   if (exampleOpt) {
-    fs.writeFileSync(schemaPath, schemaFromExample(hint, exampleOpt, entries, discovered));
+    fs.writeFileSync(schemaPath, schemaFromExample(hint, exampleOpt, entries, discovered, groupsOpt));
   } else {
     fs.writeFileSync(schemaPath, starterSchema(hint, discovered));
   }

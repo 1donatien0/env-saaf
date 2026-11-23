@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Added: `env-saaf init --from-example --groups` folds keys sharing a common prefix into a grouped schema when the prefix is at least two characters and at least two keys share it (fixes #263).
+
 - Fixed: `toJsonSchema(schema)` renders grouped schemas as nested object schemas (with their own `properties` and `required`) instead of `{"type": "string"}` (fixes #262).
 
 - Added: `loadEnvAsync(schema, options)` reads .env files asynchronously with the same options and behavior as `loadEnv` (fixes #233).

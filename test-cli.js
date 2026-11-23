@@ -387,6 +387,92 @@ try {
     }
     assert.match(schemaText, /DATABASE_URL: \{ type: 'string' \}/);
   }
+
+  // --- issue #263: init --from-example --groups folds keys sharing a prefix into a grouped schema
+  {
+    const example = [
+      'DB_HOST=localhost',
+      'DB_PORT=5432',
+      'DB_USER=app',
+      'API_KEY=secret_token',
+      '',
+    ].join('\n');
+    const dir = mkProject({ '.env.example': example });
+    const r = run(['init', dir, '--from-example', '--groups'], dir);
+    assert.strictEqual(r.status, 0, `init --from-example --groups should exit 0, got ${r.status}: ${r.stdout}${r.stderr}`);
+    assert.match(r.stdout, /\.env\.example left untouched/);
+
+    const schemaText = fs.readFileSync(path.join(dir, 'env.schema.js'), 'utf8');
+    // Group DB with prefix 'DB_' and inner rules HOST, PORT, USER
+    assert.match(schemaText, /DB: \{\s+prefix: 'DB_',\s+schema: \{/);
+    assert.match(schemaText, /HOST: \{ type: 'string' \}/);
+    assert.match(schemaText, /PORT: \{ type: 'port' \}/);
+    assert.match(schemaText, /USER: \{ type: 'string' \}/);
+    // API_KEY stays flat
+    assert.match(schemaText, /API_KEY: \{ type: 'string' \}/);
+    assert.doesNotMatch(schemaText, /API: \{\s+prefix:/);
+    // Comments on inferred rules
+    assert.ok(schemaText.includes("inferred as 'port' from the sample value in .env.example — review this rule"));
+    assert.ok(schemaText.includes("inferred as 'string' from the sample value in .env.example — review this rule"));
+    // The example file is byte-for-byte untouched
+    assert.strictEqual(fs.readFileSync(path.join(dir, '.env.example'), 'utf8'), example);
+
+    // Acceptance: the generated schema's check passes against that same example file
+    const c = run(['check', dir, '--file', '.env.example', '--schema', 'env.schema.js'], dir);
+    assert.strictEqual(c.status, 0, `check against the example should pass, got ${c.status}: ${c.stdout}${c.stderr}`);
+  }
+
+  // --- issue #263: without --groups, behavior is unchanged (flat rules)
+  {
+    const example = [
+      'DB_HOST=localhost',
+      'DB_PORT=5432',
+      'DB_USER=app',
+      'API_KEY=secret_token',
+      '',
+    ].join('\n');
+    const dir = mkProject({ '.env.example': example });
+    const r = run(['init', dir, '--from-example'], dir);
+    assert.strictEqual(r.status, 0, `${r.stdout}${r.stderr}`);
+    const schemaText = fs.readFileSync(path.join(dir, 'env.schema.js'), 'utf8');
+    assert.doesNotMatch(schemaText, /prefix: 'DB_'/);
+    assert.match(schemaText, /DB_HOST: \{ type: 'string' \}/);
+    assert.match(schemaText, /DB_PORT: \{ type: 'port' \}/);
+    assert.match(schemaText, /DB_USER: \{ type: 'string' \}/);
+    assert.match(schemaText, /API_KEY: \{ type: 'string' \}/);
+  }
+
+  // --- issue #263: a single key with a prefix stays flat even with --groups
+  {
+    const example = [
+      'DB_HOST=localhost',
+      'API_KEY=secret_token',
+      '',
+    ].join('\n');
+    const dir = mkProject({ '.env.example': example });
+    const r = run(['init', dir, '--from-example', '--groups'], dir);
+    assert.strictEqual(r.status, 0, `${r.stdout}${r.stderr}`);
+    const schemaText = fs.readFileSync(path.join(dir, 'env.schema.js'), 'utf8');
+    assert.doesNotMatch(schemaText, /prefix:/);
+    assert.match(schemaText, /DB_HOST: \{ type: 'string' \}/);
+    assert.match(schemaText, /API_KEY: \{ type: 'string' \}/);
+  }
+
+  // --- issue #263: one-character prefix (A_X, A_Y) does not become a group even with --groups
+  {
+    const example = [
+      'A_X=1024',
+      'A_Y=2048',
+      '',
+    ].join('\n');
+    const dir = mkProject({ '.env.example': example });
+    const r = run(['init', dir, '--from-example', '--groups'], dir);
+    assert.strictEqual(r.status, 0, `${r.stdout}${r.stderr}`);
+    const schemaText = fs.readFileSync(path.join(dir, 'env.schema.js'), 'utf8');
+    assert.doesNotMatch(schemaText, /prefix:/);
+    assert.match(schemaText, /A_X: \{ type: 'port' \}/);
+    assert.match(schemaText, /A_Y: \{ type: 'port' \}/);
+  }
 } finally {
   cleanup();
 }
