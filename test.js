@@ -5044,6 +5044,8 @@ assert.deepStrictEqual(
   assert.strictEqual(value.length, 25);
   const exact = { VALUE: { type: 'url', minLength: 19, maxLength: 19, protocols: ['http', 'https'] } };
   assert.strictEqual(parseEnvFile(generateExample(exact)).VALUE, 'https://example.com');
+  const shortest = { VALUE: { type: 'url', maxLength: 2, protocols: ['X:'] } };
+  assert.strictEqual(validateEnv(shortest, parseEnvFile(generateExample(shortest))).VALUE, 'x:');
 }
 
 // Issue #275: length adjustment applies only to synthesized placeholders.
