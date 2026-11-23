@@ -575,14 +575,18 @@ function coerce(key, raw, type, trim = true, protocols, sensitive = false, of = 
         // Compound durations (issue #224): a sequence of number+unit parts
         // is summed — '1h30m', '1h 30m', '2d12h'. Every part needs an
         // explicit unit, so a trailing bare number ('1h30') is rejected,
-        // as are unknown units and negatives (they never match a part).
+        // as are unknown units, negatives and repeated units.
         const part = /(\d+(?:\.\d+)?)\s*(ms|s|m|h|d|w)/iy;
+        const seenUnits = new Set();
         let pos = 0, total = 0, parts = 0;
         while (pos < s.length) {
           part.lastIndex = pos;
           const pm = part.exec(s);
           if (!pm) break;
-          total += Number(pm[1]) * mult[pm[2].toLowerCase()];
+          const unit = pm[2].toLowerCase();
+          if (seenUnits.has(unit)) break;
+          seenUnits.add(unit);
+          total += Number(pm[1]) * mult[unit];
           parts++;
           pos = part.lastIndex;
           while (pos < s.length && s[pos] === ' ') pos++;

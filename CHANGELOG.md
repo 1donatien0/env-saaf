@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Fixed: reject repeated units in compound durations, including case variants such as `1h1H`, instead of silently adding them together (fixes #280).
+
 - Fixed: the CLI now rejects unknown flags, flags a command does not support, and `--file` / `--schema` without a value — exit 2 with a clear message — instead of silently ignoring them (fixes #278).
 
 - Fixed: validateEnv no longer stringifies non-string env values — `null` counts as "not set" and objects/arrays on scalar rules fail with an error naming the key, instead of becoming `"null"`, `"[object Object]"` or `""` (fixes #276).
