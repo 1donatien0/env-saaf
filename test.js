@@ -243,9 +243,11 @@ assert.throws(() => validateEnv({ A: { required: true } }, {}), EnvSaafError);
   const schema = { PORT: { type: 'port', required: true } };
   assert.strictEqual(validateEnv(schema, { PORT: '0' }).PORT, 0);
   assert.strictEqual(validateEnv(schema, { PORT: '65535' }).PORT, 65535);
-  for (const raw of ['-1', '65536', '3.5', 'abc', ' \t ', null, false]) {
+  for (const raw of ['-1', '65536', '3.5', 'abc', ' \t ', false]) {
     assert.throws(() => validateEnv(schema, { PORT: raw }), /expected a port \(0-65535, e\.g\. 3000\)/);
   }
+  // Issue #276: `null` counts as "not set", not as the string "null".
+  assert.throws(() => validateEnv(schema, { PORT: null }), /missing required variable/);
   const untrimmed = { PORT: { ...schema.PORT, trim: false } };
   assert.throws(() => validateEnv(untrimmed, { PORT: ' \t ' }), /expected a port \(0-65535, e\.g\. 3000\)/);
   assert.throws(() => validateEnv(schema, { PORT: '' }), /missing required variable/);
@@ -5062,6 +5064,29 @@ const loadEnvAsyncTest = (async () => {
     require('node:fs').rmSync(tmp, { recursive: true, force: true });
   }
   console.log('formatError tests passed');
+}
+
+// Issue #276: non-string values in a hand-built env object. `null` counts
+// as "not set" (like `undefined`) instead of becoming the string "null";
+// objects and arrays on non-array rules fail with an error naming the key
+// instead of coercing to "[object Object]" or "".
+{
+  assert.throws(() => validateEnv({ S: { type: 'string', required: true } }, { S: null }), /S: missing required variable/);
+  assert.deepStrictEqual(validateEnv({ S: { type: 'string' } }, { S: null }), {});
+  assert.strictEqual(validateEnv({ S: { type: 'string', default: 'dflt' } }, { S: null }).S, 'dflt');
+  assert.strictEqual(validateEnv({ S: { type: 'string', default: 'dflt', aliases: ['OLD_S'] } }, { OLD_S: null }, { onWarn: () => {} }).S, 'dflt');
+  assert.throws(() => validateEnv({ S: { type: 'string' } }, { S: {} }), /S: expected a string value, got an object/);
+  assert.throws(() => validateEnv({ S: { type: 'string' } }, { S: [] }), /S: expected a string value, got an array/);
+  assert.throws(() => validateEnv({ N: { type: 'int' } }, { N: {} }), /N: expected a string value, got an object/);
+  // `json` rules keep passing already-parsed values through, by design.
+  assert.deepStrictEqual(validateEnv({ J: { type: 'json' } }, { J: { a: 1 } }).J, { a: 1 });
+  const partial = validateEnv({ S: { type: 'string' }, N: { type: 'int' } }, { S: {}, N: '5' }, { throwOnError: false });
+  assert.deepStrictEqual(partial.errors, ['S: expected a string value, got an object']);
+  assert.strictEqual(partial.env.N, 5);
+  // A real array still works for an array rule; numbers/booleans are untouched.
+  assert.deepStrictEqual(validateEnv({ A: { type: 'array', of: 'int' } }, { A: [1, 2] }).A, [1, 2]);
+  assert.strictEqual(validateEnv({ S: { type: 'string' } }, { S: 42 }).S, '42');
+  assert.strictEqual(validateEnv({ B: { type: 'boolean' } }, { B: true }).B, true);
 }
 
 // Issue #282: `of` / `separator` only apply to `array` rules and

@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Fixed: validateEnv no longer stringifies non-string env values — `null` counts as "not set" and objects/arrays on scalar rules fail with an error naming the key, instead of becoming `"null"`, `"[object Object]"` or `""` (fixes #276).
+
 - Fixed: validateSchema now rejects `of` / `separator` on non-`array` rules and `protocols` on rules that are neither `url` nor `array`, instead of silently ignoring dead config (fixes #282).
 
 - Added: `env-saaf init --from-example --groups` folds keys sharing a common prefix into a grouped schema when the prefix is at least two characters and at least two keys share it (fixes #263).

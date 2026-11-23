@@ -786,6 +786,10 @@ function validateEnvCore(schema, env, options) {
   const pendingRequiredIf = [];
   for (const [key, rule] of Object.entries(flat)) {
     let raw = env[key];
+    // Issue #276: in a hand-built env object, `null` counts as "not set"
+    // (exactly like `undefined`) — it must not reach coercion and become
+    // the literal string "null".
+    if (raw === null) raw = undefined;
     // Issue #53: aliases let a renamed variable migrate without a flag day.
     // If the canonical key is set it wins and any populated alias is noted
     // as ignored; if unset, the first populated alias supplies the value
@@ -796,7 +800,7 @@ function validateEnvCore(schema, env, options) {
       for (const alias of rule.aliases) {
         if (seenAliases.has(alias)) continue;
         seenAliases.add(alias);
-        if (env[alias] !== undefined && env[alias] !== '') {
+        if (env[alias] !== undefined && env[alias] !== null && env[alias] !== '') {
           populatedAliases.push(alias);
         }
       }
@@ -811,6 +815,19 @@ function validateEnvCore(schema, env, options) {
         for (const alias of ignored) {
           warn(`env-saaf: ${alias} is ignored because ${winner} is set; use ${key} instead`);
         }
+      }
+    }
+    // Issue #276: an object (or an array on a scalar rule) in a hand-built
+    // env object can never be an env value — fail with an error naming the
+    // key instead of coercing it to "[object Object]" or "". Two types are
+    // exempt by design: `array` rules validate already-parsed arrays item
+    // by item, and `json` rules pass already-parsed values through.
+    if (raw !== undefined && typeof raw === 'object') {
+      const ruleType = rule.type || 'string';
+      const parsedOk = ruleType === 'json' || (ruleType === 'array' && Array.isArray(raw));
+      if (!parsedOk) {
+        errors.push(`${key}: expected a string value, got ${Array.isArray(raw) ? 'an array' : 'an object'}`);
+        continue;
       }
     }
     // A default goes through the same coercion and checks as a real value,
