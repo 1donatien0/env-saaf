@@ -4507,6 +4507,10 @@ assert.deepStrictEqual(
   };
   const out = validateEnv(schema, { DB_HOST: 'db.internal' });
   assert.deepStrictEqual(out, { DB: { HOST: 'db.internal', PORT: 5432 } });
+  assert.ok(Object.isFrozen(out));
+  assert.ok(Object.isFrozen(out.DB));
+  assert.throws(() => { out.DB.HOST = 'changed.internal'; }, TypeError);
+  assert.strictEqual(out.DB.HOST, 'db.internal');
   assert.deepStrictEqual(validateEnv(schema, { DB_HOST: 'db.internal', DB_PORT: '6543' }), { DB: { HOST: 'db.internal', PORT: 6543 } });
   assert.throws(
     () => validateEnv(schema, {}),
@@ -4525,6 +4529,10 @@ assert.deepStrictEqual(
   const soft = validateEnv(schema, {}, { throwOnError: false });
   assert.deepStrictEqual(soft.env, { DB: { PORT: 5432 } }); // defaults still apply in soft mode
   assert.deepStrictEqual(soft.errors, ['DB_HOST: missing required variable']);
+  assert.ok(Object.isFrozen(soft.env));
+  assert.ok(Object.isFrozen(soft.env.DB));
+  assert.throws(() => { soft.env.DB.PORT = 1; }, TypeError);
+  assert.strictEqual(soft.env.DB.PORT, 5432);
 
   // strict mode knows the flattened names: DB_HOST is fine, DB_OTHER is not.
   validateEnv(schema, { DB_HOST: 'db.internal', DB_PORT: '1' }, { strict: true, onWarn: () => {} });
@@ -4565,6 +4573,43 @@ assert.deepStrictEqual(
   const withTransform = { S: { prefix: 'S_', schema: { NAME: { type: 'string', transform: v => v.toUpperCase() } } } };
   assert.deepStrictEqual(validateEnv(withTransform, { S_NAME: 'abc' }), { S: { NAME: 'ABC' } });
 
+  // Issue #284: freeze the result containers, without freezing rule values
+  // or taking ownership of objects supplied by defaults and transforms.
+  const defaultValue = { nested: { count: 1 } };
+  const transformedValue = { nested: { count: 1 } };
+  const values = validateEnv({
+    PLAIN: { type: 'json' },
+    DB: { prefix: 'DB_', schema: {
+      JSON: { type: 'json' },
+      ITEMS: { type: 'array' },
+      DEFAULT: { type: 'json', default: defaultValue },
+      TRANSFORMED: { type: 'json', transform: () => transformedValue },
+    } },
+    CACHE: { prefix: 'CACHE_', schema: { PORT: { type: 'port', default: 6379 } } },
+    OPTIONAL: { prefix: 'OPTIONAL_', schema: { VALUE: { type: 'string' } } },
+  }, {
+    PLAIN: '{"nested":{"count":1}}',
+    DB_JSON: '{"nested":{"count":1}}',
+    DB_ITEMS: 'one,two',
+    DB_TRANSFORMED: '{}',
+  });
+  assert.ok(Object.isFrozen(values));
+  assert.ok(Object.isFrozen(values.DB));
+  assert.ok(Object.isFrozen(values.CACHE));
+  assert.ok(!('OPTIONAL' in values));
+  assert.strictEqual(values.DB.DEFAULT, defaultValue);
+  assert.strictEqual(values.DB.TRANSFORMED, transformedValue);
+  for (const value of [values.PLAIN, values.DB.JSON, values.DB.DEFAULT, values.DB.TRANSFORMED]) {
+    assert.ok(!Object.isFrozen(value));
+    assert.ok(!Object.isFrozen(value.nested));
+    value.extra = true;
+    value.nested.count = 2;
+    assert.strictEqual(value.extra, true);
+    assert.strictEqual(value.nested.count, 2);
+  }
+  values.DB.ITEMS.push('three');
+  assert.deepStrictEqual(values.DB.ITEMS, ['one', 'two', 'three']);
+
   // generateExample emits FLAT env names for a group, with a group comment.
   const example = generateExample({
     APP_NAME: { type: 'string', required: true },
@@ -4583,6 +4628,10 @@ assert.deepStrictEqual(
     fs.writeFileSync(file, 'DB_HOST=db.internal\nDB_PORT=6543\n');
     const loaded = loadEnv(schema, { path: file, env: {} });
     assert.deepStrictEqual(loaded, { DB: { HOST: 'db.internal', PORT: 6543 } });
+    assert.ok(Object.isFrozen(loaded));
+    assert.ok(Object.isFrozen(loaded.DB));
+    assert.throws(() => { loaded.DB.PORT = 1; }, TypeError);
+    assert.strictEqual(loaded.DB.PORT, 6543);
     const target = {};
     loadEnv(schema, { path: file, env: target, assign: true });
     assert.strictEqual(target.DB_HOST, 'db.internal');
@@ -5217,6 +5266,19 @@ const loadEnvAsyncTest = (async () => {
     assert.deepStrictEqual(await loadEnvAsync(schema, { paths: [missing, first, last], env: {} }),
       { PORT: 4000, DATA: { demo: true } });
     assert.deepStrictEqual(await loadEnvAsync({}, { paths: [missing], env: {} }), {});
+    const groupedFile = path.join(dir, 'grouped.env');
+    fs.writeFileSync(groupedFile, 'DB_HOST=db.internal\nDB_PORT=5432\n');
+    const grouped = await loadEnvAsync({
+      DB: { prefix: 'DB_', schema: {
+        HOST: { type: 'host', required: true },
+        PORT: { type: 'port', required: true },
+      } },
+    }, { path: groupedFile, env: {} });
+    assert.deepStrictEqual(grouped, { DB: { HOST: 'db.internal', PORT: 5432 } });
+    assert.ok(Object.isFrozen(grouped));
+    assert.ok(Object.isFrozen(grouped.DB));
+    assert.throws(() => { grouped.DB.HOST = 'changed.internal'; }, TypeError);
+    assert.strictEqual(grouped.DB.HOST, 'db.internal');
     const defaultRead = fs.promises.readFile;
     try {
       fs.promises.readFile = async (file, encoding) => {

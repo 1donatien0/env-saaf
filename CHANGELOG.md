@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Fixed: grouped result objects are frozen along with the top-level result in `validateEnv`, `loadEnv`, and `loadEnvAsync`, while rule values keep their existing mutability (fixes #284).
+
 - Added: `toJsonSchema` emits the `semver` validation `pattern` on scalar `semver` rules and `array` rules with `of: 'semver'` (fixes #303).
 
 - Added: toJsonSchema marks sensitive rules as writeOnly, including inside groups (fixes #288).

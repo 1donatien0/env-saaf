@@ -118,15 +118,21 @@ function flattenSchema(schema) {
 // validated absent simply do not appear, same as flat optional keys.
 function nestGroups(out, groupOf) {
   const nested = {};
+  const groups = [];
   for (const [k, v] of Object.entries(out)) {
     const g = groupOf.get(k);
     if (g) {
-      if (nested[g.group] === undefined) nested[g.group] = {};
+      if (nested[g.group] === undefined) {
+        nested[g.group] = {};
+        groups.push(nested[g.group]);
+      }
       nested[g.group][g.innerKey] = v;
     } else {
       nested[k] = v;
     }
   }
+  // Freeze only the containers we created, leaving rule values untouched.
+  for (const group of groups) Object.freeze(group);
   return nested;
 }
 
