@@ -194,6 +194,25 @@ function validateSchema(schema) {
         }
       }
     }
+    // Issue #282: the mirror image of the check above — `of` / `separator`
+    // are only read for `array` rules, and `protocols` only for `url` rules
+    // (and for `array` rules, where it flows to `of: 'url'` items). Anywhere
+    // else they are dead config that looks like it does something, so reject
+    // them up front. `min` / `max` are deliberately NOT rejected off the
+    // numeric types: they apply to any numeric *value* (see the runtime
+    // check in validateEnvCore), whatever the declared type.
+    if (KNOWN_TYPES.has(effectiveType)) {
+      if (effectiveType !== 'array') {
+        for (const opt of ['of', 'separator']) {
+          if (rule[opt] !== undefined) {
+            errors.push(`${key}: "${opt}" only applies to type 'array' (cannot be used with type '${effectiveType}')`);
+          }
+        }
+      }
+      if (effectiveType !== 'url' && effectiveType !== 'array' && rule.protocols !== undefined) {
+        errors.push(`${key}: "protocols" only applies to type 'url' (cannot be used with type '${effectiveType}')`);
+      }
+    }
     if (rule.pattern !== undefined && !(rule.pattern instanceof RegExp)) {
       errors.push(`${key}: "pattern" must be a RegExp`);
     }

@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Fixed: validateSchema now rejects `of` / `separator` on non-`array` rules and `protocols` on rules that are neither `url` nor `array`, instead of silently ignoring dead config (fixes #282).
+
 - Added: `env-saaf init --from-example --groups` folds keys sharing a common prefix into a grouped schema when the prefix is at least two characters and at least two keys share it (fixes #263).
 - Added: `check --json-schema` prints the `--schema` file as a draft 2020-12 JSON Schema document instead of running the check (fixes #268).
 

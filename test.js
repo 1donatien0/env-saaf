@@ -5064,6 +5064,23 @@ const loadEnvAsyncTest = (async () => {
   console.log('formatError tests passed');
 }
 
+// Issue #282: `of` / `separator` only apply to `array` rules and
+// `protocols` only to `url` rules (plus `array`, where it flows to
+// `of: 'url'` items) — anywhere else they are dead config and are rejected
+// up front, mirroring the string-only checks of #211. min/max stay allowed
+// on every type: they apply to any numeric value.
+{
+  assert.throws(() => validateEnv({ S: { type: 'string', of: 'int' } }, {}), /S: "of" only applies to type 'array'/);
+  assert.throws(() => validateEnv({ N: { type: 'int', separator: ';' } }, {}), /N: "separator" only applies to type 'array'/);
+  assert.throws(() => validateEnv({ S: { type: 'string', protocols: ['https'] } }, {}), /S: "protocols" only applies to type 'url'/);
+  assert.throws(() => validateEnv({ B: { type: 'boolean', protocols: ['https'] } }, {}), /B: "protocols" only applies to type 'url'/);
+  // The combinations that do apply keep working:
+  assert.deepStrictEqual(validateEnv({ A: { type: 'array', of: 'url', protocols: ['https'] } }, { A: 'https://a.com,https://b.com' }).A, ['https://a.com', 'https://b.com']);
+  assert.throws(() => validateEnv({ A: { type: 'array', of: 'url', protocols: ['https'] } }, { A: 'http://a.com' }), /expected a URL with one of these protocols/);
+  assert.strictEqual(validateEnv({ U: { type: 'url', protocols: ['https'] } }, { U: 'https://a.com' }).U, 'https://a.com');
+  assert.strictEqual(validateEnv({ S: { type: 'string', min: 1 } }, { S: 'x' }).S, 'x');
+}
+
 Promise.all([watchModeTest, watchModeErrorPathTest, loadEnvAsyncTest])
   .then(() => console.log('env-saaf v1.5.0: all tests passed'))
   .catch((err) => { console.error(err); process.exit(1); });
