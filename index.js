@@ -73,6 +73,15 @@ const KNOWN_RULE_OPTIONS = new Set([
   'aliases',
 ]);
 
+// Issue #250: option names `validateEnv` accepts — a typo'd option must fail
+// fast instead of running silently as if it was never passed (same class of
+// bug as #218, one layer up: there the rule options, here the options object).
+const KNOWN_VALIDATE_OPTIONS = new Set(['throwOnError', 'strict', 'onWarn', 'formatError']);
+// `loadEnv` forwards its validateEnv options, plus its own file options.
+const KNOWN_LOAD_ENV_OPTIONS = new Set([
+  ...KNOWN_VALIDATE_OPTIONS, 'path', 'paths', 'env', 'override', 'assign',
+]);
+
 // Issue #228: a group rule nests a sub-schema under one prefix, so
 // { DB: { prefix: 'DB_', schema: { HOST: {...} } } } reads the env var
 // DB_HOST and returns { DB: { HOST: ... } }. A rule carrying a `schema`
@@ -718,6 +727,14 @@ function maskSensitiveMessage(msg, raw, val, sensitive) {
 // result plus the group map so callers can re-nest. Never throws EnvSaafError.
 function validateEnvCore(schema, env, options) {
   const out = {}; const errors = [];
+  // Issue #250: reject a typo'd option up front, before looking at any values
+  // — the check runs even when the variable is absent and even with
+  // { throwOnError: false }, like schema errors.
+  for (const opt of Object.keys(options)) {
+    if (!KNOWN_VALIDATE_OPTIONS.has(opt)) {
+      throw new EnvSaafError([`unknown option "${opt}" (validateEnv accepts: throwOnError, strict, onWarn, formatError)`]);
+    }
+  }
   // Reject a malformed schema before looking at any values, so a typo on an
   // absent optional key fails immediately instead of passing silently.
   validateSchema(schema);
@@ -1035,6 +1052,15 @@ function* loadEnvSteps(schema, options) {
     );
   }
   const { path: pathOpt, paths: pathsOpt, env = process.env, override = false, assign = false, ...rest } = options;
+  // Issue #250: reject a typo'd loadEnv option up front (e.g. `overide`),
+  // before reading any file — the typo would otherwise flow through to
+  // validateEnv as an unknown option, but the loadEnv names make the fix
+  // obvious at the call site.
+  for (const opt of Object.keys(options)) {
+    if (!KNOWN_LOAD_ENV_OPTIONS.has(opt)) {
+      throw new EnvSaafError([`unknown option "${opt}" (loadEnv accepts: path, paths, env, override, assign, throwOnError, strict, onWarn, formatError)`]);
+    }
+  }
   // One file or several: `path` may be a string or an array of strings, or
   // pass `paths: [...]`. Files are read in order and LATER files win over
   // earlier ones (e.g. ['.env', '.env.local']). Missing files in a list are
