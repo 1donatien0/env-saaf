@@ -5129,3 +5129,56 @@ const loadEnvAsyncTest = (async () => {
 Promise.all([watchModeTest, watchModeErrorPathTest, loadEnvAsyncTest])
   .then(() => console.log('env-saaf v1.5.0: all tests passed'))
   .catch((err) => { console.error(err); process.exit(1); });
+
+// Issue #295: unknown requiredIf keys warn without disabling external flags.
+{
+  const { validateSchema } = require('./index');
+  const schema = { MODE: { type: 'string' }, KEY: { type: 'string', requiredIf: { key: 'MOD', equals: 'prod' } } };
+  const expected = 'env-saaf: KEY: requiredIf references undeclared key "MOD"; check for a typo or declare the key (external env flags still work)';
+  const messages = [];
+  const originalWarn = console.warn;
+  try {
+    console.warn = msg => messages.push(msg);
+    validateSchema(schema);
+  } finally { console.warn = originalWarn; }
+  assert.deepStrictEqual(messages, [expected]);
+
+  const warnings = [];
+  const result = validateEnv(schema, {}, { onWarn: msg => warnings.push(msg), throwOnError: false });
+  assert.deepStrictEqual(result, { env: {}, errors: [] });
+  assert.deepStrictEqual(warnings, [expected]);
+
+  // A legitimate undeclared NODE_ENV still makes the dependent key required.
+  const external = { KEY: { type: 'string', requiredIf: { key: 'NODE_ENV', in: ['production'] } } };
+  const externalWarnings = [];
+  const missing = validateEnv(external, { NODE_ENV: 'production' }, { throwOnError: false, onWarn: msg => externalWarnings.push(msg) });
+  assert.deepStrictEqual(missing.errors, ['KEY: missing required variable']);
+  assert.strictEqual(externalWarnings.length, 1);
+  assert.deepStrictEqual(validateEnv(external, { NODE_ENV: 'production', KEY: 'value' }, { onWarn: () => {} }), { KEY: 'value' });
+
+  // Full env names can refer across groups and to a flat key without warnings.
+  const grouped = {
+    MODE: { type: 'string' },
+    DB: { prefix: 'DB_', schema: { KEY: { type: 'string', requiredIf: { key: 'MODE', equals: 'prod' } } } },
+    APP: { prefix: 'APP_', schema: { TOKEN: { type: 'string', requiredIf: { key: 'DB_KEY', equals: 'value' } } } },
+  };
+  const groupWarnings = [];
+  validateEnv(grouped, {}, { onWarn: msg => groupWarnings.push(msg) });
+  assert.deepStrictEqual(groupWarnings, []);
+  grouped.DB.schema.KEY.requiredIf.key = 'MDOE';
+  validateEnv(grouped, {}, { onWarn: msg => groupWarnings.push(msg) });
+  assert.strictEqual(groupWarnings.length, 1);
+  assert.ok(groupWarnings[0].includes('DB_KEY: requiredIf references undeclared key "MDOE"'));
+
+  assert.throws(() => validateEnv(schema, {}, { onWarn: 1 }), TypeError);
+}
+
+// Issue #295: loadEnv forwards its existing warning hook to schema validation.
+{
+  const warnings = [];
+  const result = loadEnv({ KEY: { type: 'string', requiredIf: { key: 'EXTERNAL_FLAG', equals: 'prod' } } }, {
+    path: [], env: { EXTERNAL_FLAG: 'prod', KEY: 'value' }, onWarn: msg => warnings.push(msg),
+  });
+  assert.strictEqual(result.KEY, 'value');
+  assert.strictEqual(warnings.length, 1);
+}

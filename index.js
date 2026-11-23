@@ -134,6 +134,10 @@ function nestGroups(out, groupOf) {
 // invalid rule on an absent optional key was never reached and slipped through
 // silently (issue #134). Errors name the key and the offending option.
 function validateSchema(schema) {
+  validateSchemaRules(schema, msg => console.warn(msg));
+}
+
+function validateSchemaRules(schema, warn) {
   const errors = [];
   const keys = new Set(Object.keys(schema));
   const aliasOwners = new Map();
@@ -169,7 +173,7 @@ function validateSchema(schema) {
           const sub = {};
           for (const ik of innerKeys) sub[rule.prefix + ik] = inner[ik];
           try {
-            validateSchema(sub);
+            validateSchemaRules(sub, () => {});
           } catch (e) {
             if (e instanceof EnvSaafError) errors.push(...e.errors);
             else throw e;
@@ -373,6 +377,13 @@ function validateSchema(schema) {
     }
   }
   if (errors.length) throw new EnvSaafError([...new Set(errors)]);
+  // Check only the complete flattened schema: a group may reference a key
+  // in another group or at the top level. External flags remain supported.
+  for (const [key, rule] of Object.entries(flattenSchema(schema).flat)) {
+    if (rule && rule.requiredIf && !flatKeys.has(rule.requiredIf.key)) {
+      warn(`env-saaf: ${key}: requiredIf references undeclared key "${rule.requiredIf.key}"; check for a typo or declare the key (external env flags still work)`);
+    }
+  }
 }
 
 // Numeric configuration strings are decimal; Number() alone also accepts
@@ -760,14 +771,14 @@ function validateEnvCore(schema, env, options) {
   }
   // Reject a malformed schema before looking at any values, so a typo on an
   // absent optional key fails immediately instead of passing silently.
-  validateSchema(schema);
+  if (options.onWarn !== undefined && typeof options.onWarn !== 'function') {
+    throw new TypeError('env-saaf: "onWarn" option must be a function');
+  }
+  validateSchemaRules(schema, options.onWarn || (msg => console.warn(msg)));
   // Issue #228: groups are validated as groups above, then flattened, so the
   // whole existing pipeline (aliases, defaults, requiredIf, strict) works on
   // full env names unchanged and errors name DB_HOST, not DB.HOST.
   const { flat, groupOf } = flattenSchema(schema);
-  if (options.onWarn !== undefined && typeof options.onWarn !== 'function') {
-    throw new TypeError('env-saaf: "onWarn" option must be a function');
-  }
   if (options.formatError !== undefined && typeof options.formatError !== 'function') {
     throw new TypeError('env-saaf: "formatError" option must be a function');
   }

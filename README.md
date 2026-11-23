@@ -88,6 +88,14 @@ const env = validateEnv({
 2. **Pass 2** evaluates every `requiredIf` rule for keys that were absent and had no `default`, comparing against the validated values from Pass 1 (falling back to the raw `env` object if the referenced key is not declared in the schema).
 
 Because Pass 2 runs after Pass 1 finishes, key declaration order in the schema does not matter (`SENTRY_DSN` can be declared before `MODE`), and conditions match coerced values (such as `boolean` `true` or `int` `3`) as well as `default` values. When the condition holds and the key is missing, `validateEnv` reports the usual `<KEY>: missing required variable` error (or collects it in `errors` with `{ throwOnError: false }`). When the condition is false — or when the referenced key is absent or failed Pass 1 validation — the key stays optional. If the key is provided anyway, it is still coerced and validated as usual. Two combinations are rejected up front as schema errors: `required: true` together with `requiredIf` on the same key, and a `requiredIf` that names its own key — both are contradictory, so the schema fails instead of silently ignoring the condition.
+
+A `requiredIf.key` that is not declared in the flattened schema emits a warning,
+including inside groups. Check the name for a typo. External flags such as
+`NODE_ENV` remain supported and still read from the raw environment. Warnings do
+not fail validation. `validateEnv` and `loadEnv` use their existing `onWarn` hook;
+standalone `validateSchema(schema)` writes these warnings to `console.warn`.
+Without a hook, runtime validation also uses `console.warn`.
+
 ### Non-throwing mode — collect errors instead of throwing
 
 A health check, a CLI, or a server that wants to boot in a degraded mode cannot use an API that throws on the first bad value. Pass `{ throwOnError: false }` and `validateEnv` returns `{ env, errors }` instead: `env` holds every value that validated, and `errors` is the same list `EnvSaafError` would have carried.
