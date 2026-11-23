@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Added: warn when requiredIf references an undeclared full env name, including inside groups, while preserving external env flag behavior. validateEnv and loadEnv use the existing onWarn hook (fixes #295).
+
 - Fixed: reject repeated units in compound durations, including case variants such as `1h1H`, instead of silently adding them together (fixes #280).
 
 - Fixed: the CLI now rejects unknown flags, flags a command does not support, and `--file` / `--schema` without a value — exit 2 with a clear message — instead of silently ignoring them (fixes #278).
