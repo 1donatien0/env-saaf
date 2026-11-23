@@ -115,7 +115,22 @@ export interface EnvRule {
   aliases?: string[];
 }
 
-export type EnvSchema = Record<string, EnvRule>;
+/**
+ * A group rule (issue #228): nests a sub-schema under one env prefix.
+ * `{ DB: { prefix: 'DB_', schema: { HOST: { type: 'host' } } } }` reads the
+ * env var `DB_HOST` and the result nests it as `{ DB: { HOST: '...' } }`.
+ * Groups cannot be nested, and a group may not also set `type`.
+ * Inside a group, `aliases` and `requiredIf.key` use FULL env var names
+ * (e.g. `'OLD_DB_HOST'`, `'NODE_ENV'`, or another group's `'DB_HOST'`).
+ */
+export interface EnvGroupRule<S extends EnvSchema = EnvSchema> {
+  /** Env prefix applied to every inner key: inner `HOST` is read from `DB_HOST`. */
+  prefix: string;
+  /** Inner rules keyed by their unprefixed names. The result nests under the group key. */
+  schema: S;
+}
+
+export type EnvSchema = Record<string, EnvRule | EnvGroupRule>;
 
 type EnvScalarValue<T> =
   T extends 'number' | 'int' | 'port' | 'duration' ? number :
@@ -159,9 +174,13 @@ export type EnvValue<R extends EnvRule> =
 export type EnvResult<S extends EnvSchema> = string extends keyof S
   ? Record<string, string | number | boolean>
   : {
-      [K in keyof S as S[K] extends { required: true } ? K : S[K] extends { default: unknown } ? K : never]: EnvValue<S[K]>;
+      [K in keyof S as S[K] extends EnvGroupRule<infer _I>
+        ? never
+        : S[K] extends { required: true } ? K : S[K] extends { default: unknown } ? K : never]: EnvValue<S[K]>;
     } & {
-      [K in keyof S as S[K] extends { required: true } ? never : S[K] extends { default: unknown } ? never : K]?: EnvValue<S[K]> | undefined;
+      [K in keyof S as S[K] extends EnvGroupRule<infer I>
+        ? K
+        : S[K] extends { required: true } ? never : S[K] extends { default: unknown } ? never : K]?: S[K] extends EnvGroupRule<infer I> ? EnvResult<I> | undefined : EnvValue<S[K]> | undefined;
     };
 
 export class EnvSaafError extends Error {
@@ -207,6 +226,14 @@ export interface ValidateResult<S extends EnvSchema> {
   errors: string[];
 }
 
+/**
+ * Validate the shape of the schema itself (types, option shapes, alias
+ * conflicts, and — since #228 — group rules: `prefix`/`schema` shape,
+ * nesting, and prefix collisions). Throws an `EnvSaafError` listing every
+ * problem, naming the key (grouped rules use their full env name, e.g.
+ * `DB_HOST`). Independent of any env values, so it can run at startup.
+ */
+export function validateSchema(schema: EnvSchema): void;
 export function validateEnv<S extends EnvSchema>(schema: S, env: Record<string, string | undefined> | undefined, options: ValidateOptions & { throwOnError: false }): ValidateResult<S>;
 export function validateEnv<S extends EnvSchema>(schema: S, env?: Record<string, string | undefined>, options?: ValidateOptions): EnvResult<S>;
 

@@ -16,6 +16,7 @@
 
 - Fixed: `number`, `int` and `port` reject hexadecimal, binary and octal strings (including array items), while decimal strings and numeric defaults keep working (fixes #219).
 
+- Added: grouped (nested) schemas — a rule with a `schema` object and a `prefix` (and no `type`) reads inner rules from prefixed env vars (`DB_` + `HOST` -> `DB_HOST`) and nests the result (`{ DB: { HOST, ... } }`); errors name the full env var; `strict`/`aliases`/`requiredIf`/`default`/`transform` work inside groups (aliases and requiredIf keys use full env names there); `generateExample` emits the flat prefixed keys with a group comment; `loadEnv` assign writes flat names; `validateSchema` is now exported and rejects malformed groups up front (bad prefix/schema shape, `type` on a group, nested groups, prefix collisions) (fixes #228).
 - Added: the `semver` type accepts one optional lowercase `v` prefix (`v1.2.3`, `v1.2.3-rc.1`, `v1.2.3+build`), returned unchanged — the form `git describe` and release pipelines emit; `v1.2`, `vv1.2.3` and uppercase `V1.2.3` are still rejected (fixes #227).
 - Fixed: `validateSchema` now rejects contradictory bounds up front — `min` above `max`, `minLength` above `maxLength`, and an empty `choices` array — with a schema error naming the key, even when the variable is absent (fixes #220).
 - Fixed: `validateSchema` now rejects unknown schema rule options, such as misspelled `required` or `default`, with an `EnvSaafError` identifying the schema key and offending option, even when the corresponding environment variable is absent (fixes #218).

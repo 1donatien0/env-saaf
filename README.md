@@ -168,6 +168,34 @@ const env = validateEnv(
 - Warnings never fail validation. By default they are logged with `console.warn`; pass `onWarn: fn` to `validateEnv` or `loadEnv` to route them to your own logger (or `() => {}` to silence them).
 - In `{ strict: true }` mode, declared aliases are recognised and are not flagged as unknown variables.
 - An alias cannot equal a declared schema key (including its own key) or be shared by different rules. These schema mistakes throw `EnvSaafError` before reading values, even with `{ throwOnError: false }`. Repeating an alias within one rule is allowed.
+
+### Grouped (nested) schemas with a key prefix
+
+Schemas that repeat a prefix can group the rules under it instead:
+
+```js
+const env = validateEnv(
+  {
+    DB: {
+      prefix: 'DB_',
+      schema: {
+        HOST: { type: 'host', required: true },
+        PORT: { type: 'port', default: 5432 },
+      },
+    },
+  },
+  process.env,
+);
+// reads DB_HOST / DB_PORT, returns { DB: { HOST: '...', PORT: 5432 } }
+```
+
+- A group is a rule with a `schema` object and no `type`, plus a non-empty `prefix`. Every inner rule is read from `prefix + INNER_NAME`, so errors always name the full env var (`DB_HOST: missing required variable`).
+- The result nests under the group key: `{ DB: { HOST, PORT } }`. If no inner key is present, the group key is omitted, just like an absent optional flat key.
+- `strict`, `aliases`, `requiredIf` and `default` all work inside groups; inside a group, `aliases` and `requiredIf.key` use **full env var names** (e.g. `aliases: ['DATABASE_HOST']`, `requiredIf: { key: 'NODE_ENV', equals: 'production' }`, or another group's `'DB_HOST'`).
+- `generateExample` still emits flat env names (`DB_HOST=...`) with a `# group DB` comment above the group's keys.
+- `loadEnv(..., { assign: true })` writes the flat names back (`DB_HOST=...`), never a nested object.
+- Malformed groups are rejected up front by `validateSchema` (now exported): a missing/empty `prefix`, a non-object or empty `schema`, a `type` on the group, nested groups, extra options on the group, or a prefix that collides with another key (e.g. a declared `DB_HOST` plus a `DB_` group) all throw `EnvSaafError` naming the problem.
+- In TypeScript, `EnvResult` nests groups too: `env.DB` is `{ HOST: string; PORT: number; ... } | undefined` (the group key is optional; inner keys keep their own required/default optionality). `EnvGroupRule` is exported for typing a standalone group rule.
 ### Per-key `validate` — custom validation rules
 
 Some rules are app-specific — a path must be an existing directory, or two keys must differ. Pass a `validate(value, env)` function on the key instead of forking the library:

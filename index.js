@@ -73,6 +73,53 @@ const KNOWN_RULE_OPTIONS = new Set([
   'aliases',
 ]);
 
+// Issue #228: a group rule nests a sub-schema under one prefix, so
+// { DB: { prefix: 'DB_', schema: { HOST: {...} } } } reads the env var
+// DB_HOST and returns { DB: { HOST: ... } }. A rule carrying a `schema`
+// property is always treated as a group attempt — malformed ones are
+// rejected up front in validateSchema rather than silently ignored.
+function groupShape(rule) {
+  if (rule === null || typeof rule !== 'object' || Array.isArray(rule)) return false;
+  if (rule.schema === undefined) return false;
+  return rule.type === undefined
+    && rule.schema !== null && typeof rule.schema === 'object' && !Array.isArray(rule.schema);
+}
+
+// Flatten a (valid) schema into plain rules keyed by full env name, plus a
+// map from flat key back to its group for re-nesting the result.
+function flattenSchema(schema) {
+  const flat = {};
+  const groupOf = new Map();
+  for (const [key, rule] of Object.entries(schema)) {
+    if (groupShape(rule)) {
+      for (const [innerKey, innerRule] of Object.entries(rule.schema)) {
+        const flatKey = rule.prefix + innerKey;
+        flat[flatKey] = innerRule;
+        groupOf.set(flatKey, { group: key, innerKey });
+      }
+    } else {
+      flat[key] = rule;
+    }
+  }
+  return { flat, groupOf };
+}
+
+// Re-nest flat results: DB_HOST -> out.DB.HOST. Groups whose keys all
+// validated absent simply do not appear, same as flat optional keys.
+function nestGroups(out, groupOf) {
+  const nested = {};
+  for (const [k, v] of Object.entries(out)) {
+    const g = groupOf.get(k);
+    if (g) {
+      if (nested[g.group] === undefined) nested[g.group] = {};
+      nested[g.group][g.innerKey] = v;
+    } else {
+      nested[k] = v;
+    }
+  }
+  return nested;
+}
+
 // Validate the shape of the schema itself, independent of any env values.
 // These checks used to live only inside the per-key coercion loop, so an
 // invalid rule on an absent optional key was never reached and slipped through
@@ -83,6 +130,45 @@ function validateSchema(schema) {
   const aliasOwners = new Map();
   for (const [key, rule] of Object.entries(schema)) {
     if (rule === null || typeof rule !== 'object' || Array.isArray(rule)) continue;
+    // Issue #228: group rule — validate its shape, then its inner rules under
+    // their full (prefixed) names so errors read `DB_HOST: ...`, not `HOST`.
+    if (rule.schema !== undefined) {
+      if (rule.type !== undefined) {
+        errors.push(`${key}: a group rule cannot also set "type" — put types on the inner rules`);
+      }
+      for (const opt of Object.keys(rule)) {
+        if (opt !== 'schema' && opt !== 'prefix') {
+          errors.push(`${key}: group rules only support "prefix" and "schema" (unexpected "${opt}")`);
+        }
+      }
+      if (typeof rule.prefix !== 'string' || rule.prefix.trim() === '') {
+        errors.push(`${key}: group rule needs a non-empty string "prefix" (e.g. "DB_")`);
+      }
+      const inner = rule.schema;
+      if (inner === null || typeof inner !== 'object' || Array.isArray(inner)) {
+        errors.push(`${key}: group "schema" must be an object mapping inner names to rules`);
+      } else {
+        const innerKeys = Object.keys(inner);
+        if (innerKeys.length === 0) errors.push(`${key}: group "schema" must not be empty`);
+        for (const ik of innerKeys) {
+          const ir = inner[ik];
+          if (ir !== null && typeof ir === 'object' && !Array.isArray(ir) && ir.schema !== undefined) {
+            errors.push(`${key}: groups cannot be nested (inner "${ik}" is itself a group)`);
+          }
+        }
+        if (typeof rule.prefix === 'string' && rule.prefix !== '') {
+          const sub = {};
+          for (const ik of innerKeys) sub[rule.prefix + ik] = inner[ik];
+          try {
+            validateSchema(sub);
+          } catch (e) {
+            if (e instanceof EnvSaafError) errors.push(...e.errors);
+            else throw e;
+          }
+        }
+      }
+      continue;
+    }
     for (const opt of Object.keys(rule)) {
       if (!KNOWN_RULE_OPTIONS.has(opt)) {
         errors.push(`${key}: unknown option "${opt}"`);
@@ -219,7 +305,46 @@ function validateSchema(schema) {
       }
     }
   }
-  if (errors.length) throw new EnvSaafError(errors);
+  // Issue #228: after flattening, no two schema entries may produce the same
+  // env name (a group prefix colliding with a declared key, or two groups
+  // overlapping) — that would silently read one env var for two rules.
+  const flatOwners = new Map();
+  for (const key of keys) flatOwners.set(key, `"${key}"`);
+  for (const [key, rule] of Object.entries(schema)) {
+    if (!groupShape(rule)) continue;
+    if (typeof rule.prefix !== 'string' || rule.prefix === '') continue; // already reported above
+    for (const ik of Object.keys(rule.schema)) {
+      const fk = rule.prefix + ik;
+      if (flatOwners.has(fk)) {
+        errors.push(`${key}: prefix "${rule.prefix}" makes "${fk}" collide with ${flatOwners.get(fk)}`);
+      } else {
+        flatOwners.set(fk, `the "${key}" group`);
+      }
+    }
+  }
+  // Issue #228: aliases inside a group are FULL env names, and each group used
+  // to be validated with its own fresh alias map — so an alias in one group
+  // could name another group's key (or a flat key) and one env var would then
+  // silently feed two rules. Run the alias collision check over the FLATTENED
+  // schema as well; the per-group recursion above already reports the
+  // within-group cases, and the dedupe below keeps every message single.
+  const flatKeys = new Set(Object.keys(flattenSchema(schema).flat));
+  const flatAliasOwners = new Map();
+  for (const [fkey, frule] of Object.entries(flattenSchema(schema).flat)) {
+    if (frule === null || typeof frule !== 'object' || Array.isArray(frule)
+      || !Array.isArray(frule.aliases)
+      || frule.aliases.some(a => typeof a !== 'string' || a.trim() === '')) continue; // already reported above
+    for (const alias of frule.aliases) {
+      if (flatKeys.has(alias)) {
+        errors.push(`${fkey}: alias "${alias}" conflicts with a declared schema key`);
+      } else if (flatAliasOwners.has(alias) && flatAliasOwners.get(alias) !== fkey) {
+        errors.push(`${fkey}: alias "${alias}" is already used by "${flatAliasOwners.get(alias)}"`);
+      } else {
+        flatAliasOwners.set(alias, fkey);
+      }
+    }
+  }
+  if (errors.length) throw new EnvSaafError([...new Set(errors)]);
 }
 
 // Numeric configuration strings are decimal; Number() alone also accepts
@@ -588,11 +713,18 @@ function maskSensitiveMessage(msg, raw, val, sensitive) {
   return msg;
 }
 
-function validateEnv(schema, env = process.env, options = {}) {
+// Core of validateEnv: validates the schema (issue #228 groups included),
+// coerces every env value against the FLATTENED rules, and returns the flat
+// result plus the group map so callers can re-nest. Never throws EnvSaafError.
+function validateEnvCore(schema, env, options) {
   const out = {}; const errors = [];
   // Reject a malformed schema before looking at any values, so a typo on an
   // absent optional key fails immediately instead of passing silently.
   validateSchema(schema);
+  // Issue #228: groups are validated as groups above, then flattened, so the
+  // whole existing pipeline (aliases, defaults, requiredIf, strict) works on
+  // full env names unchanged and errors name DB_HOST, not DB.HOST.
+  const { flat, groupOf } = flattenSchema(schema);
   if (options.onWarn !== undefined && typeof options.onWarn !== 'function') {
     throw new TypeError('env-saaf: "onWarn" option must be a function');
   }
@@ -602,13 +734,13 @@ function validateEnv(schema, env = process.env, options = {}) {
   const warn = options.onWarn || ((msg) => console.warn(msg));
   if (options.strict) {
     const knownAliases = new Set();
-    for (const rule of Object.values(schema)) {
+    for (const rule of Object.values(flat)) {
       if (rule && Array.isArray(rule.aliases)) {
         for (const alias of rule.aliases) knownAliases.add(alias);
       }
     }
     for (const key of Object.keys(env)) {
-      if (!Object.prototype.hasOwnProperty.call(schema, key)
+      if (!Object.prototype.hasOwnProperty.call(flat, key)
         && !knownAliases.has(key)
         && env[key] !== undefined && env[key] !== '') {
         errors.push(`${key}: set but not in schema (strict mode)`);
@@ -616,7 +748,7 @@ function validateEnv(schema, env = process.env, options = {}) {
     }
   }
   const pendingRequiredIf = [];
-  for (const [key, rule] of Object.entries(schema)) {
+  for (const [key, rule] of Object.entries(flat)) {
     let raw = env[key];
     // Issue #53: aliases let a renamed variable migrate without a flag day.
     // If the canonical key is set it wins and any populated alias is noted
@@ -798,7 +930,7 @@ function validateEnv(schema, env = process.env, options = {}) {
     if (Object.prototype.hasOwnProperty.call(out, cond.key)) {
       hasRef = true;
       refVal = out[cond.key];
-    } else if (!Object.prototype.hasOwnProperty.call(schema, cond.key)
+    } else if (!Object.prototype.hasOwnProperty.call(flat, cond.key)
       && Object.prototype.hasOwnProperty.call(env, cond.key)
       && env[cond.key] !== undefined && env[cond.key] !== '') {
       hasRef = true;
@@ -810,30 +942,40 @@ function validateEnv(schema, env = process.env, options = {}) {
       : refVal === cond.equals;
     if (matched) errors.push(`${key}: missing required variable`);
   }
-  // Non-throwing mode (issue #55): a health check, CLI or server that wants to
-  // log every config problem and keep booting asks for the values that did
-  // validate plus the list the exception would have carried — empty when the
-  // environment is clean. Only an explicit false opts in; anything else
-  // (undefined, true) keeps the fail-fast default.
-  if (options.throwOnError === false) return { env: Object.freeze(out), errors };
-  if (errors.length) {
-    // Issue #231: an opt-in hook may replace the message. It only ever sees an
-    // isolated copy of the error strings and the schema keys, never env values
-    // or the schema rules, and `error.errors` keeps the raw strings. A hook
-    // that throws or returns a non-string falls back to the default message.
-    let message;
-    if (options.formatError) {
-      try {
-        const formatted = options.formatError(
-          Object.freeze(errors.slice()),
-          Object.freeze({ keys: Object.freeze(Object.keys(schema)) })
-        );
-        if (typeof formatted === 'string') message = formatted;
-      } catch (_) { /* fall back to the default message */ }
-    }
-    throw new EnvSaafError(errors, message);
+  // Non-throwing mode lives in the public wrapper below; the core always
+  // returns both the values and the errors (issue #55).
+  return { out, errors, groupOf };
+}
+
+// Issue #231: an opt-in hook may replace the message. It only ever sees an
+// isolated copy of the error strings and the schema keys, never env values
+// or the schema rules, and `error.errors` keeps the raw strings. A hook
+// that throws or returns a non-string falls back to the default message.
+// Shared by validateEnv and loadEnvSteps (which uses the core directly so
+// `assign` writes the FLAT env names) so both honour the hook.
+function formatErrorMessage(errors, schema, options) {
+  let message;
+  if (options.formatError) {
+    try {
+      const formatted = options.formatError(
+        Object.freeze(errors.slice()),
+        Object.freeze({ keys: Object.freeze(Object.keys(schema)) })
+      );
+      if (typeof formatted === 'string') message = formatted;
+    } catch (_) { /* fall back to the default message */ }
   }
-  return Object.freeze(out);
+  return message;
+}
+
+function validateEnv(schema, env = process.env, options = {}) {
+  const { out, errors, groupOf } = validateEnvCore(schema, env, options);
+  // Issue #228: re-nest grouped keys (DB_HOST -> { DB: { HOST } }).
+  const result = groupOf.size ? nestGroups(out, groupOf) : out;
+  if (options.throwOnError === false) return { env: Object.freeze(result), errors };
+  if (errors.length) {
+    throw new EnvSaafError(errors, formatErrorMessage(errors, schema, options));
+  }
+  return Object.freeze(result);
 }
 
 /**
@@ -925,8 +1067,11 @@ function* loadEnvSteps(schema, options) {
     Object.assign(fileEnv, parseEnvFile(fileText));
   }
   if (!foundAny) {
-    const needed = Object.entries(schema)
-      .filter(([, rule]) => rule.required && rule.default === undefined)
+    // Issue #228: count required rules across groups too, under their full
+    // env names, so a required DB_HOST is not missed when no file was found.
+    const { flat } = flattenSchema(schema);
+    const needed = Object.entries(flat)
+      .filter(([, rule]) => rule && rule.required && rule.default === undefined)
       .map(([key]) => key);
     if (needed.length) {
       throw new Error(`env-saaf: .env file not found: ${fileList.join(', ')} (required variables missing: ${needed.join(', ')})`);
@@ -937,16 +1082,19 @@ function* loadEnvSteps(schema, options) {
   // `assign: true`, and a half-applied write is not a degraded mode anyone
   // asked for, so `throwOnError: false` is accepted but ignored here — call
   // validateEnv directly when you want to collect the errors (issue #55).
-  const validated = validateEnv(schema, merged, { ...rest, throwOnError: true });
+  // The core is used directly so `assign` writes the FLAT env names (a group
+  // result nested under DB must not be written back as "DB=[object Object]").
+  const { out, errors, groupOf } = validateEnvCore(schema, merged, { ...rest, throwOnError: true });
+  if (errors.length) throw new EnvSaafError(errors, formatErrorMessage(errors, schema, rest));
   if (assign) {
-    for (const [key, value] of Object.entries(validated)) {
+    for (const [key, value] of Object.entries(out)) {
       // A json value (or a transform returning an object/array) must be written
       // back as JSON text so it round-trips through JSON.parse; String() on an
       // object would produce the useless "[object Object]".
       env[key] = (value !== null && typeof value === 'object') ? JSON.stringify(value) : String(value);
     }
   }
-  return validated;
+  return Object.freeze(groupOf.size ? nestGroups(out, groupOf) : out);
 }
 
 /** Parse .env text -> { KEY: value }. Handles quotes, `export `, comments,
@@ -1385,7 +1533,9 @@ function generateExample(schema) {
   // "KEY"). An explicit default still wins — the schema author chose it.
   const SECRET_WORDS = new Set(['SECRET', 'KEY', 'TOKEN', 'PASSWORD', 'PASSWD', 'PRIVATE', 'CREDENTIAL']);
   const lines = ['# Generated by env-saaf — put real values in .env (never commit .env)'];
-  for (const [key, rule] of Object.entries(schema)) {
+  // One entry's comment + KEY=value lines. `key` is always the FULL env name.
+  const entry = (key, rule) => {
+    if (rule === null || typeof rule !== 'object' || Array.isArray(rule)) rule = {};
     // Issue #206: note aliases and requiredIf in the comment, so the
     // generated file documents the fallbacks and conditions a reader needs.
     let comment = `# type: ${rule.type || 'string'}${rule.required ? ', required' : ''}${rule.choices ? ', one of: ' + rule.choices.join('|') : ''}`;
@@ -1404,7 +1554,6 @@ function generateExample(schema) {
         comment += `; required when ${cond.key} is one of ${cond.in.map(fmt).join(', ')}`;
       }
     }
-    lines.push(comment);
     const looksSecret = rule.sensitive === true || key.split('_').some(part => SECRET_WORDS.has(part.toUpperCase()));
     const placeholder = rule.default !== undefined
       ? (rule.type === 'array' && Array.isArray(rule.default) ? rule.default.join(rule.separator || ',') : rule.default)
@@ -1416,7 +1565,20 @@ function generateExample(schema) {
         // those bounds too — examples cycle when more than three are needed.
         ? arrayPlaceholder(rule)
         : scalarPlaceholder(rule.type);
-    lines.push(`${key}=${placeholder}`);
+      return [comment, `${key}=${placeholder}`];
+  };
+  for (const [key, rule] of Object.entries(schema)) {
+    // Issue #228: a group emits its inner keys under their full prefixed env
+    // names, with a group comment above the run — the .env file stays flat.
+    if (groupShape(rule)) {
+      lines.push(`# group ${key} — the keys below are read from env vars prefixed with '${rule.prefix}'`);
+      for (const [innerKey, innerRule] of Object.entries(rule.schema)) {
+        lines.push(...entry(rule.prefix + innerKey, innerRule));
+      }
+      continue;
+    }
+    lines.push(...entry(key, rule));
+    continue;
   }
   return lines.join('\n') + '\n';
 }
@@ -1553,4 +1715,4 @@ function toJsonSchema(schema) {
   return result;
 }
 
-module.exports = { validateEnv, loadEnv, loadEnvAsync, EnvSaafError, parseEnvFile, scanCode, scanDir, diffEnv, maskValue, maskSecrets, generateExample, toJsonSchema };
+module.exports = { validateEnv, validateSchema, loadEnv, loadEnvAsync, EnvSaafError, parseEnvFile, scanCode, scanDir, diffEnv, maskValue, maskSecrets, generateExample, toJsonSchema };
