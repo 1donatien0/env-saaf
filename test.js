@@ -4206,6 +4206,51 @@ assert.deepStrictEqual(
   );
 }
 
+// Issue #236: the README "Migrating to env-saaf" after-snippets must run against
+// the current API — these tests execute exactly those snippets.
+{
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const path = require('node:path');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'env-saaf-migrating-'));
+  fs.writeFileSync(path.join(dir, '.env'), 'PORT=8080\nDATABASE_URL=https://db.example.com/x\nAPI_URL=https://api.example.com\nDEBUG=yes\n');
+  const prevCwd = process.cwd();
+  process.chdir(dir);
+  try {
+    // "From dotenv" snippet.
+    const { loadEnv } = require('./index');
+    const env = loadEnv({
+      PORT: { type: 'port', default: 3000 },
+      DATABASE_URL: { type: 'url', required: true },
+      DEBUG: { type: 'boolean', default: false },
+    });
+    assert.strictEqual(env.PORT, 8080);
+    assert.strictEqual(typeof env.PORT, 'number');
+    assert.strictEqual(env.DATABASE_URL, 'https://db.example.com/x');
+    assert.strictEqual(env.DEBUG, true);
+    // "From envalid" snippet: same shape, plus error aggregation and choices.
+    const env2 = loadEnv({
+      API_URL: { type: 'url', required: true },
+      PORT: { type: 'port', default: 3000 },
+      DEBUG: { type: 'boolean', default: false },
+    });
+    assert.strictEqual(env2.PORT, 8080);
+    assert.throws(
+      () => validateEnv({ PORT: { type: 'port', required: true }, DATABASE_URL: { type: 'url', required: true } }, { PORT: 'abc' }),
+      (err) => err instanceof EnvSaafError && err.errors.length === 2
+        && err.errors.some((e) => e.includes('expected a port'))
+        && err.errors.some((e) => e.includes('missing required variable'))
+    );
+    const collected = validateEnv({ PORT: { type: 'port' } }, { PORT: 'abc' }, { throwOnError: false });
+    assert.ok(Array.isArray(collected.errors) && collected.errors[0].includes('expected a port'));
+    assert.strictEqual(validateEnv({ MODE: { type: 'string', choices: ['dev', 'prod'] } }, { MODE: 'prod' }).MODE, 'prod');
+    assert.deepStrictEqual(validateEnv({ CFG: { type: 'json' } }, { CFG: '{"a":1}' }).CFG, { a: 1 });
+  } finally {
+    process.chdir(prevCwd);
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+}
+
 // Issue #223: generateExample — array placeholder items come from the `of` item type
 {
   // The reported case: `of: 'int'` must not suggest 'a,b,c' (which would not validate).
