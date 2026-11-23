@@ -704,6 +704,8 @@ Keys that look like secrets (`API_KEY`, `DB_PASSWORD`, …) get an empty placeho
 
 Numeric placeholders (`number`, `int`, `port`, `duration`) are adjusted to fit `min` and `max` when the range allows a value of that type. Integer bounds are rounded inward, ports stay within 0–65535, and durations stay non-negative. A duration keeps the `15m` example when it fits; otherwise its example is written in milliseconds. Explicit defaults, choices and empty secret placeholders keep their existing precedence.
 
+Built-in string placeholders are adjusted to fit `minLength` and `maxLength` without changing their type's format. To keep the template small, each adjusted placeholder can be up to 4,096 characters, with up to 16,384 characters of growth from string adjustments per call. If the bounds cannot fit within those limits, the ordinary type placeholder is used instead. These limits do not truncate supplied defaults or choices.
+
 ### Export JSON Schema from your schema
 
 `toJsonSchema(schema)` returns a [draft 2020-12 JSON Schema](https://json-schema.org/draft/2020-12)

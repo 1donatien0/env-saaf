@@ -4896,6 +4896,203 @@ assert.deepStrictEqual(
   console.log(`numeric example bounds: ${cases.length} round trips passed`);
 }
 
+// Issue #275: string placeholders round-trip through their own length bounds.
+{
+  const cases = [
+    ['string', { minLength: 20 }, 20],
+    ['string', { maxLength: 3 }, 3],
+    ['string', { minLength: 5, maxLength: 5 }, 5],
+    ['string', { maxLength: 0 }, 0],
+    [undefined, { minLength: 18, maxLength: 20 }, 18],
+  ];
+  for (const [type, bounds, length] of cases) {
+    const schema = { VALUE: { type, required: true, ...bounds } };
+    const example = generateExample(schema);
+    assert.strictEqual(validateEnv(schema, parseEnvFile(example)).VALUE.length, length, example);
+  }
+}
+
+// Issue #275: bounded email examples still have a local part and a domain.
+{
+  const cases = [
+    [{ minLength: 30 }, 30],
+    [{ maxLength: 13 }, 13],
+    [{ maxLength: 5 }, 5],
+    [{ minLength: 8, maxLength: 8 }, 8],
+    [{ minLength: 16, maxLength: 16 }, 16],
+  ];
+  for (const [bounds, length] of cases) {
+    const schema = { VALUE: { type: 'email', required: true, ...bounds } };
+    const example = generateExample(schema);
+    assert.strictEqual(validateEnv(schema, parseEnvFile(example)).VALUE.length, length, example);
+  }
+}
+
+// Issue #275: other bounded string-like values retain their type's format.
+{
+  const cases = [
+    ['url', { minLength: 24 }, 24],
+    ['url', { maxLength: 8, protocols: ['HTTPS:'] }, 8],
+    ['url', { minLength: 2, maxLength: 2 }, 2],
+    ['url', { maxLength: 5, protocols: ['https', 'X:'] }, 5],
+    ['url', { minLength: 19, maxLength: 19, protocols: ['HTTP:'] }, 19],
+    ['hex', { maxLength: 3 }, 3],
+    ['hex', { minLength: 3, maxLength: 12, length: 10 }, 10],
+    ['ipv4', { maxLength: 7 }, 7],
+    ['ipv4', { minLength: 15, maxLength: 15 }, 15],
+    ['semver', { minLength: 6, maxLength: 6 }, 6],
+    ['semver', { minLength: 11 }, 11],
+    ['base64', { minLength: 9 }, 10],
+    ['base64', { maxLength: 5 }, 4],
+    ['base64', { maxLength: 2 }, 2],
+    ['uuid', { minLength: 36, maxLength: 36 }, 36],
+    ['host', { maxLength: 1 }, 1],
+    ['host', { minLength: 64 }, 64],
+    ['host', { minLength: 254 }, 254],
+  ];
+  for (const [type, bounds, length] of cases) {
+    const schema = { VALUE: { type, required: true, ...bounds } };
+    const example = generateExample(schema);
+    assert.strictEqual(validateEnv(schema, parseEnvFile(example)).VALUE.length, length, example);
+  }
+
+  // File values require a real file. Generation only supplies a path.
+  const files = parseEnvFile(generateExample({
+    SHORT: { type: 'file', maxLength: 1 }, LONG: { type: 'file', minLength: 20 },
+  }));
+  assert.match(files.SHORT, /^[a-z]$/);
+  assert.match(files.LONG, /^\.\/[^/]+\.json$/);
+  assert.strictEqual(files.LONG.length, 20);
+}
+
+// Issue #275: unachievable bounds do not mangle the type or throw on generation.
+{
+  const impossible = [
+    ['string', { maxLength: 0, trim: false }],
+    ['string', { minLength: Number.MAX_SAFE_INTEGER }],
+    ['email', { maxLength: 4 }],
+    ['uuid', { maxLength: 35 }],
+    ['ipv4', { minLength: 16 }],
+    ['semver', { maxLength: 4 }],
+    ['base64', { minLength: 9, maxLength: 9 }],
+    ['url', { maxLength: 6, protocols: ['https'] }],
+    ['hex', { length: 5, minLength: 6 }],
+  ];
+  for (const [type, bounds] of impossible) {
+    const schema = { VALUE: { type, ...bounds } };
+    const example = generateExample(schema);
+    assert.strictEqual(example, generateExample({ VALUE: { type } }));
+    assert.throws(() => validateEnv(schema, parseEnvFile(example)), /expected a string/);
+  }
+  const reversed = { VALUE: { minLength: 4, maxLength: 3 } };
+  assert.throws(() => validateEnv(reversed, {}), /must not exceed/);
+  for (const bounds of [{ minLength: 2.5 }, { maxLength: null }, { minLength: 4, maxLength: 3 }, { minLength: -1, maxLength: 3 }]) {
+    assert.strictEqual(generateExample({ VALUE: bounds }), generateExample({ VALUE: {} }));
+  }
+}
+
+// Issue #275: oversized synthesized values keep the ordinary type example.
+{
+  const cases = [
+    ['string', { minLength: 4097 }],
+    ['url', { minLength: 4097 }],
+    ['base64', { minLength: 4097 }],
+    ['hex', { minLength: 0, length: 4097 }],
+  ];
+  for (const [type, bounds] of cases) {
+    const unbounded = parseEnvFile(generateExample({ VALUE: { type } })).VALUE;
+    const value = parseEnvFile(generateExample({ VALUE: { type, ...bounds } })).VALUE;
+    assert.strictEqual(value === unbounded, true, `${type}: expected the ordinary example, got ${value.length} characters`);
+  }
+  const exact = { VALUE: { type: 'hex', minLength: 0, length: 4096 } };
+  const env = parseEnvFile(generateExample(exact));
+  assert.strictEqual(validateEnv(exact, env).VALUE.length, 4096);
+}
+
+// Issue #275: growing examples shares a budget across groups and scalar types.
+{
+  const schema = {
+    FIRST: { minLength: 4096 },
+    SECOND: { type: 'base64', minLength: 4096 },
+    APP: { prefix: 'APP_', schema: {
+      SECOND: { type: 'hex', minLength: 0, length: 4096 },
+      THIRD: { type: 'email', minLength: 4096 },
+    } },
+    // The four large examples add 16,337 characters in total. Exactly 47 remain.
+    LAST: { minLength: 62 },
+    SPILL: { minLength: 16 },
+    SHORT: { maxLength: 3 },
+  };
+  const env = parseEnvFile(generateExample(schema));
+  for (const key of ['FIRST', 'SECOND', 'APP_SECOND', 'APP_THIRD']) assert.strictEqual(env[key].length, 4096);
+  assert.strictEqual(env.LAST.length, 62);
+  assert.strictEqual(env.SPILL, 'your_value_here');
+  assert.strictEqual(env.SHORT.length, 3);
+  assert.strictEqual(parseEnvFile(generateExample({ SPILL: schema.SPILL })).SPILL.length, 16);
+}
+
+// Issue #275: only usable protocol names can shape a generated URL.
+{
+  for (const protocols of [true, [], [true], ['bad!']]) {
+    const schema = { VALUE: { type: 'url', minLength: 25, protocols } };
+    assert.strictEqual(parseEnvFile(generateExample(schema)).VALUE, 'https://example.com');
+    assert.throws(() => validateEnv(schema, {}), /"protocols" must be a non-empty array of schemes/);
+  }
+  const mixed = { VALUE: { type: 'url', minLength: 25, protocols: ['bad!', true, 'HTTP:'] } };
+  const value = parseEnvFile(generateExample(mixed)).VALUE;
+  assert.strictEqual(new URL(value).protocol, 'http:');
+  assert.strictEqual(value.length, 25);
+  const exact = { VALUE: { type: 'url', minLength: 19, maxLength: 19, protocols: ['http', 'https'] } };
+  assert.strictEqual(parseEnvFile(generateExample(exact)).VALUE, 'https://example.com');
+  const shortest = { VALUE: { type: 'url', maxLength: 2, protocols: ['X:'] } };
+  assert.strictEqual(validateEnv(shortest, parseEnvFile(generateExample(shortest))).VALUE, 'x:');
+}
+
+// Issue #275: length adjustment applies only to synthesized placeholders.
+{
+  const schema = {
+    APP: { prefix: 'APP_', schema: { NAME: { maxLength: 3, required: true } } },
+    DEFAULTED: { default: 'é🙂', minLength: 3, maxLength: 3 },
+    CHOSEN: { choices: ['🙂', 'ok'], minLength: 2, maxLength: 2 },
+    API_KEY: { minLength: 20, choices: ['not printed'] },
+    SESSION: { minLength: 20, sensitive: true },
+    TOKEN: { minLength: 3, default: 'abc' },
+  };
+  const generated = parseEnvFile(generateExample(schema));
+  assert.strictEqual(generated.API_KEY, '');
+  assert.strictEqual(generated.SESSION, '');
+  const result = validateEnv(schema, generated);
+  assert.strictEqual(result.APP.NAME.length, 3);
+  assert.strictEqual(result.DEFAULTED, 'é🙂');
+  assert.strictEqual(result.CHOSEN, '🙂');
+  assert.strictEqual(result.TOKEN, 'abc');
+
+  const tooLong = { FIRST: { maxLength: 1, choices: ['🙂', 'x'] }, DEFAULTED: { maxLength: 1, default: '🙂' } };
+  const authored = parseEnvFile(generateExample(tooLong));
+  assert.deepStrictEqual(authored, { FIRST: '🙂', DEFAULTED: '🙂' });
+  assert.deepStrictEqual(validateEnv(tooLong, authored, { throwOnError: false }).errors.map(e => e.split(':')[0]),
+    ['FIRST', 'DEFAULTED']);
+
+  let calls = 0;
+  const custom = { VALUE: {
+    minLength: 20, pattern: /^Z+$/,
+    validate() { calls++; }, transform(value) { calls++; return value; },
+  } };
+  assert.strictEqual(parseEnvFile(generateExample(custom)).VALUE.length, 20);
+  assert.strictEqual(calls, 0);
+  assert.strictEqual(parseEnvFile(generateExample({ VALUE: { minLength: 1, maxLength: 20 } })).VALUE, 'your_value_here');
+
+  const supplied = 'a'.repeat(4097);
+  const authoredOverBudget = parseEnvFile(generateExample({
+    DEFAULTED: { minLength: 4097, default: supplied },
+    CHOSEN: { minLength: 4097, choices: [supplied, 'x'] },
+    GENERATED: { minLength: 20 },
+  }));
+  assert.strictEqual(authoredOverBudget.DEFAULTED, supplied);
+  assert.strictEqual(authoredOverBudget.CHOSEN, supplied);
+  assert.strictEqual(authoredOverBudget.GENERATED.length, 20);
+}
+
 // Issue #234: maskSecrets recurses into plain objects/arrays; cycles get a placeholder
 {
   // The issue's example: the masked structure mirrors the input shape and

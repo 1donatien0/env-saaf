@@ -1664,12 +1664,103 @@ function arrayPlaceholder(rule) {
   return items.join(rule.separator || ',');
 }
 
+// A template should not materialize arbitrarily large padding from schema bounds.
+const MAX_STRING_EXAMPLE_LENGTH = 4 * 1024;
+const STRING_EXAMPLE_GROWTH_BUDGET = 16 * 1024;
+
+function resizeExample(example, length, pad = 'x') {
+  return example.slice(0, length).padEnd(length, pad);
+}
+
+function boundedUrlPlaceholder(example, min, max, protocols) {
+  const schemes = protocols === undefined ? ['https', 'x']
+    : Array.isArray(protocols) ? protocols.filter(p => typeof p === 'string' && /^[a-z][a-z0-9+.-]*:?$/i.test(p))
+      .filter(p => p.length <= max).map(p => p.replace(/:$/, '').toLowerCase()) : [];
+  if (schemes.includes('https') && example.length >= min && example.length <= max) return example;
+  for (const scheme of schemes) {
+    const prefix = `${scheme}:`;
+    const origin = `${prefix}//example.com`;
+    const length = Math.min(max, Math.max(min, origin.length));
+    if (length === origin.length) return origin;
+    if (length > origin.length) return `${origin}/`.padEnd(length, 'x');
+    const hostLength = length - prefix.length - 2;
+    if (hostLength > 0) return `${prefix}//${resizeExample('example', hostLength)}`;
+    if (length < prefix.length) continue;
+    // WHATWG URLs accept short forms such as https:x and opaque URLs such as x:.
+    const short = prefix.padEnd(length, 'x');
+    try { new URL(short); return short; }
+    catch { /* This scheme needs more room. Try the next one. */ }
+  }
+  return example;
+}
+
+function boundedHostPlaceholder(example, length) {
+  // Host also accepts scoped IPv6 addresses, which do not share the hostname limit.
+  if (length > 253) return 'fe80::1%example'.padEnd(length, 'x');
+  let host = '';
+  while (length > 63) {
+    const labelLength = Math.min(63, length - 2);
+    host += resizeExample(example, labelLength) + '.';
+    length -= labelLength + 1;
+  }
+  return host + resizeExample(example, length);
+}
+
+function boundedStringPlaceholder(type, example, rule, limit) {
+  const { minLength, maxLength } = rule;
+  for (const bound of [minLength, maxLength]) {
+    if (bound !== undefined && (!Number.isInteger(bound) || bound < 0)) return example;
+  }
+  let min = minLength ?? 0;
+  let max = Math.min(maxLength ?? Infinity, limit);
+  if (type === 'hex' && rule.length !== undefined) {
+    if (!Number.isInteger(rule.length) || rule.length < min || rule.length > max) return example;
+    min = max = rule.length;
+  }
+  // The effective range must fit the budget before any type-specific padding.
+  if (min > max) return example;
+  if (type === 'url') return boundedUrlPlaceholder(example, min, max, rule.protocols);
+  if (example.length >= min && example.length <= max) return example;
+  if (type === 'base64') {
+    // Padded or not, a base64 value can never be 1 modulo 4 characters long.
+    if (min % 4 === 1) min++;
+    if (max % 4 === 1) max--;
+    if (min > max) return example;
+  }
+  const length = Math.min(max, Math.max(min, example.length));
+  if (length === 0) {
+    // An empty assignment is missing, but a quoted space survives parsing and trims to ''.
+    return type === 'string' && rule.trim !== false ? "' '" : example;
+  }
+  // Only built-in ASCII examples are resized. Author-supplied values are left alone.
+  switch (type) {
+    case 'string': return resizeExample(example, length);
+    case 'hex': return resizeExample(example, length, '0');
+    case 'base64': return 'A'.repeat(length);
+    case 'host': return boundedHostPlaceholder(example, length);
+    case 'email': {
+      const at = example.indexOf('@');
+      const suffix = length > example.length - at ? example.slice(at) : '@x.y';
+      return length > suffix.length ? resizeExample(example.slice(0, at), length - suffix.length) + suffix : example;
+    }
+    case 'ipv4':
+      return ['0.0.0.0', '10.0.0.1', '10.0.0.10', '10.0.0.100', example,
+        '192.168.0.10', '192.168.0.100', '192.168.10.100', '192.168.100.100'][length - 7] ?? example;
+    case 'semver':
+      return length < 6 ? example : length === 6 ? `v${example}` : `${example}+`.padEnd(length, 'x');
+    case 'file':
+      if (length > example.length) return resizeExample('./config', length - 5) + '.json';
+      return length > 2 ? `./${resizeExample('config', length - 2)}` : 'config'.slice(0, length);
+    default: return example; // UUIDs have a fixed length.
+  }
+}
+
 /** Placeholder for a scalar (non-array) rule, per its declared type. Every
  * value is a literal that itself validates against the type (issue #251),
  * so a generated .env.example passes `check` out of the box — except `file`,
  * whose './config.json' path the user must create. */
-function scalarPlaceholder(rule) {
-  const type = rule.type;
+function scalarPlaceholder(rule, stringGrowth) {
+  const type = rule.type === undefined ? 'string' : rule.type;
   const placeholder = type === 'port' ? '3000' : type === 'url' ? 'https://example.com'
     : type === 'ipv4' ? '192.168.0.1' : type === 'semver' ? '1.0.0'
     : type === 'date' ? '2026-01-31' : type === 'duration' ? '15m' : type === 'host' ? 'localhost'
@@ -1678,6 +1769,12 @@ function scalarPlaceholder(rule) {
     : type === 'number' ? '3.14' : type === 'int' ? '42' : type === 'boolean' ? 'true'
     : type === 'json' ? '{"key":"value"}' : type === 'base64' ? 'aGVsbG8=' : type === 'hex' ? 'deadbeef'
     : 'your_value_here';
+  if (STRING_TYPES.has(type) && (rule.minLength !== undefined || rule.maxLength !== undefined)) {
+    const limit = Math.min(MAX_STRING_EXAMPLE_LENGTH, placeholder.length + stringGrowth.remaining);
+    const bounded = boundedStringPlaceholder(type, placeholder, rule, limit);
+    stringGrowth.remaining -= Math.max(0, bounded.length - placeholder.length);
+    return bounded;
+  }
   if (!['number', 'int', 'port', 'duration'].includes(type)) return placeholder;
 
   let min = Number.isFinite(rule.min) ? rule.min : -Infinity;
@@ -1707,6 +1804,8 @@ function generateExample(schema) {
   // "KEY"). An explicit default still wins — the schema author chose it.
   const SECRET_WORDS = new Set(['SECRET', 'KEY', 'TOKEN', 'PASSWORD', 'PASSWD', 'PRIVATE', 'CREDENTIAL']);
   const lines = ['# Generated by env-saaf — put real values in .env (never commit .env)'];
+  // Budget only growth from synthesized string bounds, not supplied values or normal examples.
+  const stringGrowth = { remaining: STRING_EXAMPLE_GROWTH_BUDGET };
   // One entry's comment + KEY=value lines. `key` is always the FULL env name.
   const entry = (key, rule) => {
     if (rule === null || typeof rule !== 'object' || Array.isArray(rule)) rule = {};
@@ -1739,7 +1838,7 @@ function generateExample(schema) {
         // The item count respects minItems/maxItems so the placeholder passes
         // those bounds too — examples cycle when more than three are needed.
         ? arrayPlaceholder(rule)
-        : scalarPlaceholder(rule);
+        : scalarPlaceholder(rule, stringGrowth);
       return [comment, `${key}=${placeholder}`];
   };
   for (const [key, rule] of Object.entries(schema)) {

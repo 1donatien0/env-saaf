@@ -99,6 +99,7 @@
 - Fixed: `validateEnv` and `loadEnv` (and `loadEnvAsync`) now reject unknown options up front with an `EnvSaafError` naming the offending option — a typo like `{ stric: true }` or `{ overide: true }` no longer runs silently as if the option was never passed (same class of bug as #218, one layer up); the check runs even when the variable is absent and even with `{ throwOnError: false }`, and all currently valid options keep working exactly as before (fixes #250)
 
 - Fixed: `generateExample` adjusts numeric placeholders to `min`/`max`, respecting integer, port and duration constraints, so generated values round-trip through their own schema (fixes #274).
+- Fixed: `generateExample` adjusts built-in string placeholders to feasible `minLength`/`maxLength` bounds without losing their type's format (fixes #275).
 
 ## 1.5.0 — 2026-11-20
 
