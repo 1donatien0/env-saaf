@@ -4,6 +4,8 @@
 
 - Added: `toJsonSchema(schema)` exports a draft 2020-12 JSON Schema for coerced configuration values (fixes #229).
 
+- Added: opt-in `formatError(errors, { keys })` option for `validateEnv` and `loadEnv`: the returned string becomes the thrown `EnvSaafError`'s `message` while `error.errors` keeps the raw per-key strings; the hook sees only a read-only copy of the errors and the schema keys, falls back to the default message if it throws or returns a non-string, and is not called with `throwOnError: false` (fixes #231).
+
 - Changed: The `base64` type accepts standard and URL-safe strings with or without padding and preserves the input encoding (fixes #226).
 
 - Added: `scanCode` detects static property reads through simple local environment aliases (fixes #252).
