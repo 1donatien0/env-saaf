@@ -1701,48 +1701,62 @@ function jsonSchemaDefault(key, rule, type) {
 }
 
 /** Describe coerced values as JSON Schema, without reading the environment. */
+// Convert one rule to its JSON Schema property, pushing `key` onto `required`
+// when the rule demands it. A group rule nests its inner rules as one object
+// schema instead of falling through to a plain string (issue #262).
+function jsonSchemaForRule(key, rule, required) {
+  if (groupShape(rule)) {
+    const nestedRequired = [];
+    const properties = Object.fromEntries(Object.entries(rule.schema).map(([innerKey, innerRule]) =>
+      [innerKey, jsonSchemaForRule(innerKey, innerRule, nestedRequired)]));
+    const property = { type: 'object', properties };
+    if (nestedRequired.length) property.required = nestedRequired;
+    return property;
+  }
+  const type = rule.type ?? 'string';
+  let property;
+  if (type === 'array') {
+    const itemType = rule.of ?? 'string';
+    const items = jsonSchemaForScalar(itemType, rule.protocols);
+    if (itemType === 'string') items.minLength = 1;
+    property = { type: 'array', items };
+    if (rule.minItems !== undefined) property.minItems = rule.minItems;
+    if (rule.maxItems !== undefined) property.maxItems = rule.maxItems;
+  } else {
+    property = jsonSchemaForScalar(type, rule.protocols);
+  }
+  // JSON Schema numerical bounds also apply to numbers in an otherwise unconstrained `json` rule.
+  if (type === 'json' || property.type === 'number' || property.type === 'integer') {
+    if (rule.min !== undefined) property.minimum = Math.max(rule.min, property.minimum ?? -Infinity);
+    if (rule.max !== undefined) property.maximum = Math.min(rule.max, property.maximum ?? Infinity);
+  }
+  if (rule.minLength !== undefined) property.minLength = rule.minLength;
+  if (rule.maxLength !== undefined) property.maxLength = rule.maxLength;
+  if (type === 'hex' && rule.length !== undefined) {
+    property.minLength = Math.max(rule.length, property.minLength ?? 0);
+    property.maxLength = Math.min(rule.length, property.maxLength ?? Infinity);
+  }
+  if (rule.pattern && !rule.pattern.flags) {
+    if (property.pattern) property.allOf = [{ pattern: property.pattern }];
+    property.pattern = rule.pattern.source;
+  }
+  if (Array.isArray(rule.choices)) {
+    const choices = [...new Set(rule.choices.filter(isJsonPrimitive))];
+    if (choices.length) property.enum = choices;
+  }
+  if (rule.default !== undefined) {
+    const value = jsonSchemaDefault(key, rule, type);
+    if (value !== undefined) property.default = value;
+  }
+  if (rule.required) required.push(key);
+  return property;
+}
+
 function toJsonSchema(schema) {
   validateSchema(schema);
   const required = [];
-  const properties = Object.fromEntries(Object.entries(schema).map(([key, rule]) => {
-    const type = rule.type ?? 'string';
-    let property;
-    if (type === 'array') {
-      const itemType = rule.of ?? 'string';
-      const items = jsonSchemaForScalar(itemType, rule.protocols);
-      if (itemType === 'string') items.minLength = 1;
-      property = { type: 'array', items };
-      if (rule.minItems !== undefined) property.minItems = rule.minItems;
-      if (rule.maxItems !== undefined) property.maxItems = rule.maxItems;
-    } else {
-      property = jsonSchemaForScalar(type, rule.protocols);
-    }
-    // JSON Schema numerical bounds also apply to numbers in an otherwise unconstrained `json` rule.
-    if (type === 'json' || property.type === 'number' || property.type === 'integer') {
-      if (rule.min !== undefined) property.minimum = Math.max(rule.min, property.minimum ?? -Infinity);
-      if (rule.max !== undefined) property.maximum = Math.min(rule.max, property.maximum ?? Infinity);
-    }
-    if (rule.minLength !== undefined) property.minLength = rule.minLength;
-    if (rule.maxLength !== undefined) property.maxLength = rule.maxLength;
-    if (type === 'hex' && rule.length !== undefined) {
-      property.minLength = Math.max(rule.length, property.minLength ?? 0);
-      property.maxLength = Math.min(rule.length, property.maxLength ?? Infinity);
-    }
-    if (rule.pattern && !rule.pattern.flags) {
-      if (property.pattern) property.allOf = [{ pattern: property.pattern }];
-      property.pattern = rule.pattern.source;
-    }
-    if (Array.isArray(rule.choices)) {
-      const choices = [...new Set(rule.choices.filter(isJsonPrimitive))];
-      if (choices.length) property.enum = choices;
-    }
-    if (rule.default !== undefined) {
-      const value = jsonSchemaDefault(key, rule, type);
-      if (value !== undefined) property.default = value;
-    }
-    if (rule.required) required.push(key);
-    return [key, property];
-  }));
+  const properties = Object.fromEntries(Object.entries(schema).map(([key, rule]) =>
+    [key, jsonSchemaForRule(key, rule, required)]));
   const result = { $schema: 'https://json-schema.org/draft/2020-12/schema', type: 'object', properties };
   if (required.length) result.required = required;
   return result;
