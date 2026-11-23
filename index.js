@@ -1663,8 +1663,9 @@ function arrayPlaceholder(rule) {
  * value is a literal that itself validates against the type (issue #251),
  * so a generated .env.example passes `check` out of the box — except `file`,
  * whose './config.json' path the user must create. */
-function scalarPlaceholder(type) {
-  return type === 'port' ? '3000' : type === 'url' ? 'https://example.com'
+function scalarPlaceholder(rule) {
+  const type = rule.type;
+  const placeholder = type === 'port' ? '3000' : type === 'url' ? 'https://example.com'
     : type === 'ipv4' ? '192.168.0.1' : type === 'semver' ? '1.0.0'
     : type === 'date' ? '2026-01-31' : type === 'duration' ? '15m' : type === 'host' ? 'localhost'
     : type === 'file' ? './config.json'
@@ -1672,6 +1673,25 @@ function scalarPlaceholder(type) {
     : type === 'number' ? '3.14' : type === 'int' ? '42' : type === 'boolean' ? 'true'
     : type === 'json' ? '{"key":"value"}' : type === 'base64' ? 'aGVsbG8=' : type === 'hex' ? 'deadbeef'
     : 'your_value_here';
+  if (!['number', 'int', 'port', 'duration'].includes(type)) return placeholder;
+
+  let min = Number.isFinite(rule.min) ? rule.min : -Infinity;
+  let max = Number.isFinite(rule.max) ? rule.max : Infinity;
+  if (type === 'port' || type === 'duration') min = Math.max(0, min);
+  if (type === 'port') max = Math.min(65535, max);
+  if (type === 'int' || type === 'port') {
+    min = Math.ceil(min);
+    max = Math.floor(max);
+  }
+  // Some bounds leave no value allowed by the type; no placeholder can fix them.
+  if (min > max) return placeholder;
+
+  const sample = type === 'duration' ? 15 * 60000 : Number(placeholder);
+  const value = Math.min(max, Math.max(min, sample));
+  if (value === sample) return placeholder;
+  if (value === 0) return '0';
+  // int/port and duration reject exponent notation, even for a valid value.
+  return value.toLocaleString('en-US', { useGrouping: false, maximumSignificantDigits: 21 });
 }
 
 /** Generate .env.example text from a schema. Values are placeholders/defaults only — never real secrets. */
@@ -1714,7 +1734,7 @@ function generateExample(schema) {
         // The item count respects minItems/maxItems so the placeholder passes
         // those bounds too — examples cycle when more than three are needed.
         ? arrayPlaceholder(rule)
-        : scalarPlaceholder(rule.type);
+        : scalarPlaceholder(rule);
       return [comment, `${key}=${placeholder}`];
   };
   for (const [key, rule] of Object.entries(schema)) {

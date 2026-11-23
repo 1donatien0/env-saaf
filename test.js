@@ -4811,6 +4811,88 @@ assert.deepStrictEqual(
   }
 }
 
+// Issue #274: generated numeric placeholders satisfy their own schema bounds.
+{
+  const cases = [
+    ['number', {}, 3.14],
+    ['number', { min: 100 }, 100],
+    ['number', { max: 2 }, 2],
+    ['number', { min: 100, max: 200 }, 100],
+    ['number', { min: -10, max: -1 }, -1],
+    ['number', { min: 0, max: 0 }, 0],
+    ['number', { min: 2, max: 4 }, 3.14],
+    ['number', { min: -2.5, max: -2 }, -2],
+    ['int', {}, 42],
+    ['int', { min: 1000 }, 1000],
+    ['int', { max: 20 }, 20],
+    ['int', { min: 1000, max: 2000 }, 1000],
+    ['int', { min: -10, max: -1 }, -1],
+    ['int', { min: 0, max: 0 }, 0],
+    ['int', { min: 40, max: 50 }, 42],
+    ['int', { min: 100.2 }, 101],
+    ['int', { max: 20.8 }, 20],
+    ['int', { min: -5.8, max: -3.2 }, -4],
+    ['int', { min: 1e21, max: 1e21 }, 1e21],
+    ['int', { min: -1e22, max: -1e21 }, -1e21],
+    ['port', {}, 3000],
+    ['port', { min: 4000 }, 4000],
+    ['port', { max: 1024 }, 1024],
+    ['port', { min: 8000, max: 9000 }, 8000],
+    ['port', { min: 0, max: 0 }, 0],
+    ['port', { min: 2999, max: 3001 }, 3000],
+    ['port', { min: 4000.2 }, 4001],
+    ['port', { max: 80.8 }, 80],
+    ['port', { min: -10, max: 10 }, 10],
+    ['port', { min: 65535, max: 70000 }, 65535],
+    ['duration', {}, 900000],
+    ['duration', { min: 3600000 }, 3600000],
+    ['duration', { max: 500 }, 500],
+    ['duration', { min: 10, max: 20 }, 20],
+    ['duration', { min: 0, max: 0 }, 0],
+    ['duration', { max: -0 }, 0],
+    ['duration', { min: 600000, max: 1000000 }, 900000],
+    ['duration', { max: 0.5 }, 0.5],
+    ['duration', { max: 1e-7 }, 1e-7],
+    ['duration', { min: 1e21, max: 1e21 }, 1e21],
+    ['duration', { min: -100, max: 100 }, 100],
+    ['duration', { min: 1.2345678901234567e-8, max: 1.2345678901234567e-8 }, 1.2345678901234567e-8],
+  ];
+  for (const [type, bounds, expected] of cases) {
+    const schema = Object.freeze({ VALUE: Object.freeze({ type, ...bounds }) });
+    const example = generateExample(schema);
+    const result = validateEnv(schema, parseEnvFile(example));
+    assert.strictEqual(result.VALUE, expected, `${type} ${JSON.stringify(bounds)}: ${example}`);
+  }
+
+  const grouped = { WORKER: { prefix: 'WORKER_', schema: {
+    COUNT: { type: 'int', min: 2, max: 8 },
+    TIMEOUT: { type: 'duration', max: 500 },
+  } } };
+  assert.deepStrictEqual(validateEnv(grouped, parseEnvFile(generateExample(grouped))), {
+    WORKER: { COUNT: 8, TIMEOUT: 500 },
+  });
+
+  const priority = parseEnvFile(generateExample({
+    DEFAULT: { type: 'number', min: 100, default: 150 },
+    CHOICE: { type: 'int', min: 100, choices: [200, 300] },
+    API_TOKEN: { type: 'int', min: 100 },
+    SESSION: { type: 'duration', min: 100, sensitive: true },
+  }));
+  assert.deepStrictEqual(priority, { DEFAULT: '150', CHOICE: '200', API_TOKEN: '', SESSION: '' });
+
+  for (const type of ['number', 'int', 'port', 'duration']) {
+    for (const bound of ['min', 'max']) {
+      for (const value of [NaN, Infinity, -Infinity]) {
+        const schema = { VALUE: { type, [bound]: value } };
+        const example = generateExample(schema);
+        assert.strictEqual(example, generateExample({ VALUE: { type } }));
+        assert.throws(() => validateEnv(schema, parseEnvFile(example)), /must be a number/);
+      }
+    }
+  }
+  console.log(`numeric example bounds: ${cases.length} round trips passed`);
+}
+
 // Issue #234: maskSecrets recurses into plain objects/arrays; cycles get a placeholder
 {
   // The issue's example: the masked structure mirrors the input shape and
