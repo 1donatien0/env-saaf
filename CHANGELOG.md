@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Added: `check --json-schema` prints the `--schema` file as a draft 2020-12 JSON Schema document instead of running the check (fixes #268).
+
 - Fixed: `toJsonSchema(schema)` renders grouped schemas as nested object schemas (with their own `properties` and `required`) instead of `{"type": "string"}` (fixes #262).
 
 - Added: `loadEnvAsync(schema, options)` reads .env files asynchronously with the same options and behavior as `loadEnv` (fixes #233).
