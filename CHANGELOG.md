@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Added: `toJsonSchema` emits the `semver` validation `pattern` on scalar `semver` rules and `array` rules with `of: 'semver'` (fixes #303).
+
 - Added: toJsonSchema marks sensitive rules as writeOnly, including inside groups (fixes #288).
 
 - Fixed: generateExample uses the first allowed choice instead of a generic placeholder, preserving explicit defaults and empty secret placeholders (fixes #273).

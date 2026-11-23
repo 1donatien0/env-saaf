@@ -736,7 +736,7 @@ defaults or choices that will be shared.
 **Not represented:** `transform`, `validate`, `requiredIf`, `aliases`, `sensitive`,
 input trimming and splitting, regular-expression flags (flagged patterns are omitted),
 and defaults that cannot be converted to JSON without loss or depend on local time.
-File existence and the detailed `base64` and `semver` checks remain runtime-only.
+File existence and the detailed `base64` check remain runtime-only.
 Standard formats are annotations by default, and their rules can differ from
 env-saaf's checks. JSON Schema counts Unicode characters for string lengths;
 env-saaf counts JavaScript UTF-16 code units. Use `validateEnv` or `loadEnv`

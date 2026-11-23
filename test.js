@@ -25,7 +25,10 @@ const { loadEnv, validateEnv, EnvSaafError, parseEnvFile, scanCode, diffEnv, mas
     uuid: { type: 'string', format: 'uuid' },
     hex: { type: 'string', pattern: '^[0-9a-fA-F]+$' },
     ipv4: { type: 'string', format: 'ipv4' },
-    semver: { type: 'string' },
+    semver: {
+      type: 'string',
+      pattern: '^v?(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)(?:-((?:0|[1-9]\\d*|\\d*[a-zA-Z-][0-9a-zA-Z-]*)(?:\\.(?:0|[1-9]\\d*|\\d*[a-zA-Z-][0-9a-zA-Z-]*))*))?(?:\\+([0-9a-zA-Z-]+(?:\\.[0-9a-zA-Z-]+)*))?$',
+    },
     base64: { type: 'string' },
     date: { type: 'string', anyOf: [{ format: 'date' }, { format: 'date-time' }] },
     file: { type: 'string' },
@@ -5406,10 +5409,6 @@ const loadEnvAsyncTest = (async () => {
   assert.strictEqual(validateEnv({ S: { type: 'string', min: 1 } }, { S: 'x' }).S, 'x');
 }
 
-Promise.all([watchModeTest, watchModeErrorPathTest, loadEnvAsyncTest])
-  .then(() => console.log('env-saaf v1.5.0: all tests passed'))
-  .catch((err) => { console.error(err); process.exit(1); });
-
 // Issue #295: unknown requiredIf keys warn without disabling external flags.
 {
   const { validateSchema } = require('./index');
@@ -5492,3 +5491,97 @@ Promise.all([watchModeTest, watchModeErrorPathTest, loadEnvAsyncTest])
     properties: { S: { type: 'string' }, N: { type: 'integer' } },
   }));
 }
+
+// Issue #303: toJsonSchema expresses `semver` as a pattern on scalar rules and array items.
+{
+  const scalar = toJsonSchema({ V: { type: 'semver' } });
+  const arr = toJsonSchema({ VERSIONS: { type: 'array', of: 'semver' } });
+  assert.deepStrictEqual(JSON.parse(JSON.stringify(scalar)), scalar);
+  assert.strictEqual(scalar.properties.V.type, 'string');
+  assert.strictEqual(typeof scalar.properties.V.pattern, 'string');
+  assert.deepStrictEqual(arr.properties.VERSIONS, {
+    type: 'array',
+    items: { type: 'string', pattern: scalar.properties.V.pattern },
+  });
+
+  const schemaPattern = new RegExp(scalar.properties.V.pattern);
+  const schemaPatternUnicode = new RegExp(scalar.properties.V.pattern, 'u');
+  const itemPattern = new RegExp(arr.properties.VERSIONS.items.pattern, 'u');
+  const validSemvers = [
+    '1.2.3', 'v1.2.3', '1.2.3-beta.1+build.5',
+    '0.0.0', '0.0.1+build.5', 'v1.2.3-rc.1', 'v1.2.3+build',
+    '1.2.3-0', '1.2.3-01a', '1.2.3-alpha.0.1',
+    '1.2.3+001.sha-5114f85', '10.20.30-alpha-1.2+exp.sha.5114f85',
+  ];
+  const invalidSemvers = [
+    '1.2', 'banana', '01.2.3',
+    '1.02.3', '1.2.03', 'v1.2', 'vv1.2.3', 'V1.2.3', 'v',
+    '1.2.3.4', '1.2.x', '1.2.3-', '1.2.3+', '1.2.3-01',
+    '1.2.3-alpha..1', '1.2.3+build..1', ' 1.2.3', '1.2.3 ', '1.2.3\n',
+  ];
+  for (const sample of validSemvers) {
+    assert.strictEqual(schemaPattern.test(sample), true, `expected pattern to accept ${JSON.stringify(sample)}`);
+    assert.strictEqual(schemaPatternUnicode.test(sample), true, `expected unicode pattern to accept ${JSON.stringify(sample)}`);
+    assert.strictEqual(itemPattern.test(sample), true, `expected array item pattern to accept ${JSON.stringify(sample)}`);
+    assert.deepStrictEqual(
+      validateEnv({ V: { type: 'semver', trim: false } }, { V: sample }, { throwOnError: false }),
+      { env: { V: sample }, errors: [] }
+    );
+    assert.deepStrictEqual(
+      validateEnv({ VERSIONS: { type: 'array', of: 'semver', trim: false } }, { VERSIONS: [sample] }, { throwOnError: false }),
+      { env: { VERSIONS: [sample] }, errors: [] }
+    );
+  }
+  for (const sample of invalidSemvers) {
+    assert.strictEqual(schemaPattern.test(sample), false, `expected pattern to reject ${JSON.stringify(sample)}`);
+    assert.strictEqual(schemaPatternUnicode.test(sample), false, `expected unicode pattern to reject ${JSON.stringify(sample)}`);
+    assert.strictEqual(itemPattern.test(sample), false, `expected array item pattern to reject ${JSON.stringify(sample)}`);
+    assert.strictEqual(
+      validateEnv({ V: { type: 'semver', trim: false } }, { V: sample }, { throwOnError: false }).errors.length,
+      1,
+      `expected runtime validateEnv to reject ${JSON.stringify(sample)}`
+    );
+    assert.strictEqual(
+      validateEnv({ VERSIONS: { type: 'array', of: 'semver', trim: false } }, { VERSIONS: [sample] }, { throwOnError: false }).errors.length,
+      1,
+      `expected runtime array validateEnv to reject ${JSON.stringify(sample)}`
+    );
+  }
+
+  // User-supplied pattern composes via allOf (same as hex/url), flagged pattern leaves semver pattern intact,
+  // defaults and grouped schemas keep the semver pattern, and unrelated string types stay unconstrained.
+  const composed = toJsonSchema({
+    MAJOR1: { type: 'semver', pattern: /^v?1\./, default: 'v1.2.3' },
+    FLAGGED: { type: 'semver', pattern: /^v?1\./i },
+    LIST: { type: 'array', of: 'semver', default: '1.0.0,v2.0.0' },
+    APP: { prefix: 'APP_', schema: { VERSION: { type: 'semver', required: true } } },
+    PLAIN: { type: 'string' },
+    B64: { type: 'base64' },
+  });
+  assert.deepStrictEqual(composed.properties.MAJOR1, {
+    type: 'string',
+    pattern: '^v?1\\.',
+    allOf: [{ pattern: scalar.properties.V.pattern }],
+    default: 'v1.2.3',
+  });
+  assert.deepStrictEqual(composed.properties.FLAGGED, {
+    type: 'string',
+    pattern: scalar.properties.V.pattern,
+  });
+  assert.deepStrictEqual(composed.properties.LIST, {
+    type: 'array',
+    items: { type: 'string', pattern: scalar.properties.V.pattern },
+    default: ['1.0.0', 'v2.0.0'],
+  });
+  assert.deepStrictEqual(composed.properties.APP, {
+    type: 'object',
+    properties: { VERSION: { type: 'string', pattern: scalar.properties.V.pattern } },
+    required: ['VERSION'],
+  });
+  assert.deepStrictEqual(composed.properties.PLAIN, { type: 'string' });
+  assert.deepStrictEqual(composed.properties.B64, { type: 'string' });
+}
+
+Promise.all([watchModeTest, watchModeErrorPathTest, loadEnvAsyncTest])
+  .then(() => console.log('env-saaf v1.5.0: all tests passed'))
+  .catch((err) => { console.error(err); process.exit(1); });
