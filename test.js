@@ -4730,6 +4730,31 @@ assert.deepStrictEqual(
   assert.ok(generateExample({ F: { type: 'file' } }).includes('F=./config.json'));
 }
 
+// Issue #281: only strings are masked; other values keep their type/identity.
+{
+  const when = new Date(0);
+  const pattern = /secret/;
+  class Config { constructor() { this.token = 'abcdef'; } }
+  const instance = new Config();
+  const fn = () => 'abcdef';
+  const symbol = Symbol('secret');
+  const plain = { token: 'abcdef' };
+  const array = ['abcdef'];
+  for (const value of [undefined, null, 42, 0, false, true, 123n, symbol, when, pattern, instance, fn, plain, array]) {
+    assert.strictEqual(maskValue(value), value);
+  }
+  const input = { TEXT: 'abcdef', EMPTY: '', N: 42, B: false, U: undefined, Z: null,
+    BIG: 123n, SYMBOL: symbol, AT: when, AGAIN: when, RX: pattern, C: instance, FN: fn,
+    NESTED: { VALUES: ['abcdef', 42, false, undefined, null, 123n, when] } };
+  const output = maskSecrets(input);
+  assert.deepStrictEqual(output, { ...input, TEXT: 'ab***ef',
+    NESTED: { VALUES: ['ab***ef', 42, false, undefined, null, 123n, when] } });
+  for (const key of ['AT', 'AGAIN', 'RX', 'C', 'FN']) assert.strictEqual(output[key], input[key]);
+  assert.notStrictEqual(output, input);
+  assert.notStrictEqual(output.NESTED, input.NESTED);
+  assert.strictEqual(input.TEXT, 'abcdef');
+}
+
 // Issue #234: maskSecrets recurses into plain objects/arrays; cycles get a placeholder
 {
   // The issue's example: the masked structure mirrors the input shape and
@@ -4745,9 +4770,9 @@ assert.deepStrictEqual(
   // Deep nesting and arrays of objects keep their shape.
   assert.deepStrictEqual(
     maskSecrets({ a: { b: { c: { d: 'secret-value' } } }, list: [{ X: 'abcdef' }, 'xy', 42] }),
-    { a: { b: { c: { d: 'se***ue' } } }, list: [{ X: 'ab***ef' }, '****', '****'] }
+    { a: { b: { c: { d: 'se***ue' } } }, list: [{ X: 'ab***ef' }, '****', 42] }
   );
-  // Non-plain values (Date, class instances) are leaves via maskValue, as today.
+  // Non-plain values (Date, class instances) stay unchanged.
   const when = new Date('2026-01-01T00:00:00.000Z');
   assert.deepStrictEqual(maskSecrets({ AT: when }), { AT: maskValue(when) });
   class Cfg { constructor() { this.token = 'abcdef'; } }
