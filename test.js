@@ -3354,7 +3354,8 @@ assert.deepStrictEqual(
     SECRET_LIST: { type: 'array', sensitive: true },
   });
   assert.match(exArr, /^TAGS=a,b,c$/m);
-  assert.match(exArr, /^PORTS=a;b;c$/m);
+  // Issue #223: port items get port examples (previously the invalid 'a;b;c').
+  assert.match(exArr, /^PORTS=3000;8080;5432$/m);
   assert.match(exArr, /^DEFAULTS=80;443$/m);
   assert.match(exArr, /^SECRET_LIST=$/m);
 }
@@ -4203,6 +4204,52 @@ assert.deepStrictEqual(
     ).PORT,
     3000,
   );
+}
+
+// Issue #223: generateExample — array placeholder items come from the `of` item type
+{
+  // The reported case: `of: 'int'` must not suggest 'a,b,c' (which would not validate).
+  assert.throws(() => validateEnv({ NS: { type: 'array', of: 'int' } }, { NS: 'a,b,c' }), /NS\[0\]/);
+  const exInt = generateExample({ NS: { type: 'array', of: 'int' } });
+  assert.ok(exInt.includes('NS=1,2,3'), exInt);
+  // port items get port examples; string (the default) stays 'a,b,c'.
+  assert.ok(generateExample({ PORTS: { type: 'array', of: 'port' } }).includes('PORTS=3000,8080,5432'));
+  assert.ok(generateExample({ TAGS: { type: 'array' } }).includes('TAGS=a,b,c'));
+  assert.ok(generateExample({ TAGS: { type: 'array', of: 'string' } }).includes('TAGS=a,b,c'));
+  // A custom separator joins the typed items too.
+  assert.ok(generateExample({ NS: { type: 'array', of: 'int', separator: ';' } }).includes('NS=1;2;3'));
+  // An explicit default still wins over the generated placeholder.
+  assert.ok(generateExample({ NS: { type: 'array', of: 'int', default: [7, 8] } }).includes('NS=7,8'));
+  // A secret-looking key still gets an empty placeholder, array or not.
+  assert.ok(generateExample({ API_KEY_LIST: { type: 'array', of: 'string' } }).includes('API_KEY_LIST=\n'));
+  // The array comment names the item type so the generated file documents it.
+  assert.ok(exInt.includes('# type: array, items: int'), exInt);
+
+  // Round-trip: for every scalar `of` type, the generated placeholder is itself
+  // valid against the rule — the init -> check loop stays clean. ('file' is
+  // excluded: that type checks the path exists on disk, which a placeholder
+  // in a fresh repo cannot guarantee.)
+  const scalarTypes = ['string', 'email', 'number', 'int', 'boolean', 'url', 'uuid', 'hex', 'ipv4', 'semver', 'base64', 'port', 'date', 'duration', 'host', 'json'];
+  for (const of of scalarTypes) {
+    const ex = generateExample({ K: { type: 'array', of } });
+    const line = ex.split('\n').find((l) => l.startsWith('K='));
+    const value = line.slice(2);
+    const parsed = validateEnv({ K: { type: 'array', of } }, { K: value });
+    assert.ok(Array.isArray(parsed.K) && parsed.K.length === 3, `${of}: generated "${value}" must validate`);
+  }
+  // JSON items must not contain the separator — a single-key object per item.
+  const exJson = generateExample({ DOCS: { type: 'array', of: 'json' } });
+  assert.ok(exJson.includes('DOCS={"a":1},{"b":2},{"c":3}'), exJson);
+
+  // minItems/maxItems are respected so the placeholder passes those bounds too.
+  const exMin = generateExample({ NS: { type: 'array', of: 'int', minItems: 5 } });
+  assert.ok(exMin.includes('NS=1,2,3,1,2'), exMin);
+  assert.deepStrictEqual(validateEnv({ NS: { type: 'array', of: 'int', minItems: 5 } }, { NS: '1,2,3,1,2' }).NS, [1, 2, 3, 1, 2]);
+  const exMax = generateExample({ NS: { type: 'array', of: 'int', maxItems: 2 } });
+  assert.ok(exMax.includes('NS=1,2\n'), exMax);
+  assert.deepStrictEqual(validateEnv({ NS: { type: 'array', of: 'int', maxItems: 2 } }, { NS: '1,2' }).NS, [1, 2]);
+  // minItems and maxItems together: capped by maxItems.
+  assert.ok(generateExample({ NS: { type: 'array', of: 'int', minItems: 5, maxItems: 4 } }).includes('NS=1,2,3,1\n'));
 }
 
 // Issue #234: maskSecrets recurses into plain objects/arrays; cycles get a placeholder

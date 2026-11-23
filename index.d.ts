@@ -248,6 +248,13 @@ export type Masked<T> = T extends readonly unknown[]
       ? { [K in keyof T]: Masked<T[K]> }
       : string;
 export function maskSecrets<T extends Record<string, unknown>>(obj: T): { [K in keyof T]: Masked<T[K]> };
+/**
+ * Generate `.env.example` text from a schema. Values are placeholders/defaults
+ * only — never real secrets. Array rules get example items of their `of` type
+ * (`1,2,3` for `int`, `3000,8080,5432` for `port`, ...), sized to fit
+ * `minItems`/`maxItems` and joined by `separator`, so the output validates
+ * against the schema it was generated from.
+ */
 export function generateExample(schema: EnvSchema): string;
 
 type JsonPrimitive = string | number | boolean | null;
