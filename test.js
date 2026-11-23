@@ -4433,6 +4433,60 @@ assert.deepStrictEqual(
   );
 }
 
+// Issue #305: a `choices` entry that can never match the declared type is a
+// schema bug, rejected up front instead of failing for every real value.
+{
+  const { validateEnv, validateSchema, EnvSaafError } = require('./index');
+  const never = (key, entry, type) =>
+    `${key}: "choices" entry ${entry} can never match type '${type}' (a choice must be a value this type can produce)`;
+
+  // The three shapes from the issue: int, boolean and date.
+  assert.throws(
+    () => validateEnv({ N: { type: 'int', choices: ['1', '2'] } }, { N: '1' }),
+    err => err instanceof EnvSaafError
+      && err.errors.length === 2
+      && err.errors.includes(never('N', '"1"', 'int'))
+      && err.errors.includes(never('N', '"2"', 'int')),
+  );
+  assert.throws(
+    () => validateEnv({ B: { type: 'boolean', choices: ['true'] } }, { B: 'true' }),
+    err => err instanceof EnvSaafError && err.errors.includes(never('B', '"true"', 'boolean')),
+  );
+  assert.throws(
+    () => validateEnv({ D: { type: 'date', choices: [new Date('2026-01-31T00:00:00.000Z')] } }, { D: '2026-01-31' }),
+    err => err instanceof EnvSaafError
+      && err.errors.includes(`D: "choices" cannot be used with type 'date' (a parsed date is a new Date object, so no choice can ever match)`),
+  );
+  // Other numeric-like types are covered too.
+  assert.throws(
+    () => validateSchema({ P: { type: 'port', choices: ['3000'] } }),
+    err => err instanceof EnvSaafError && err.errors.includes(never('P', '"3000"', 'port')),
+  );
+  assert.throws(
+    () => validateSchema({ T: { type: 'duration', choices: ['5s'] } }),
+    err => err instanceof EnvSaafError && err.errors.includes(never('T', '"5s"', 'duration')),
+  );
+  // Schema errors throw even when the key is absent and even with { throwOnError: false }.
+  assert.throws(
+    () => validateEnv({ N: { type: 'int', choices: ['1'] } }, {}, { throwOnError: false }),
+    err => err instanceof EnvSaafError && err.errors.includes(never('N', '"1"', 'int')),
+  );
+
+  // Matching choices still pass, and the runtime check is unchanged.
+  assert.strictEqual(validateEnv({ N: { type: 'int', choices: [1, 2] } }, { N: '2' }).N, 2);
+  assert.throws(() => validateEnv({ N: { type: 'int', choices: [1, 2] } }, { N: '3' }), /N: expected one of \[1, 2\], got "3"/);
+  assert.strictEqual(validateEnv({ B: { type: 'boolean', choices: [true] } }, { B: 'yes' }).B, true);
+  assert.strictEqual(validateEnv({ S: { type: 'string', choices: ['a', 'b'] } }, { S: 'b' }).S, 'b');
+  assert.strictEqual(validateEnv({ S: { choices: ['x', 'y'] } }, { S: 'x' }).S, 'x');
+  assert.doesNotThrow(() => validateSchema({
+    A: { type: 'number', choices: [1.5, 2] },
+    B: { type: 'port', choices: [8080, 3000] },
+    C: { type: 'duration', choices: [5000] },
+  }));
+  // Non-finite numbers stay valid: toJsonSchema() drops them from the generated `enum`.
+  assert.doesNotThrow(() => validateSchema({ COUNT: { type: 'int', choices: [2, Infinity, 0, NaN] } }));
+}
+
 // feat: grouped (nested) schemas with a key prefix (fixes #228)
 {
   const fs = require('node:fs');
