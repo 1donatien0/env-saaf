@@ -168,6 +168,11 @@ export class EnvSaafError extends Error {
   errors: string[];
 }
 
+/** Context passed to `formatError`: only the schema keys, never values. */
+export interface FormatErrorContext {
+  readonly keys: readonly string[];
+}
+
 export interface ValidateOptions {
   /** Report variables that are set but not in the schema (default false). */
   strict?: boolean;
@@ -183,6 +188,15 @@ export interface ValidateOptions {
    * Pass a custom logger (or `() => {}` to silence warnings).
    */
   onWarn?: (message: string) => void;
+  /**
+   * Opt-in formatter for the thrown `EnvSaafError`'s `message` (issue #231).
+   * Receives a read-only copy of the raw per-key error strings and
+   * `{ keys }` (the schema keys). A returned string becomes `error.message`;
+   * `error.errors` is unchanged. A hook that throws or returns a non-string
+   * falls back to the default message. Not called with `throwOnError: false`
+   * (no error is thrown, and `errors` stays raw) or for malformed schemas.
+   */
+  formatError?: (errors: readonly string[], context: FormatErrorContext) => string;
 }
 
 /** The result of `validateEnv(..., { throwOnError: false })`. */
@@ -208,6 +222,8 @@ export interface LoadEnvOptions {
   strict?: boolean;
   /** Passed through to validateEnv (e.g. custom logger for alias warnings). */
   onWarn?: (message: string) => void;
+  /** Passed through to validateEnv (custom `EnvSaafError` message). */
+  formatError?: (errors: readonly string[], context: FormatErrorContext) => string;
 }
 
 export function loadEnv<S extends EnvSchema>(schema: S, options?: LoadEnvOptions): EnvResult<S>;

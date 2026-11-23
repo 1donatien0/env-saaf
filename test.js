@@ -1,6 +1,6 @@
 'use strict';
 const assert = require('node:assert');
-const { validateEnv, EnvSaafError, parseEnvFile, scanCode, diffEnv, maskSecrets, maskValue, generateExample, toJsonSchema } = require('./index');
+const { loadEnv, validateEnv, EnvSaafError, parseEnvFile, scanCode, diffEnv, maskSecrets, maskValue, generateExample, toJsonSchema } = require('./index');
 
 // Issue #229: JSON Schema export
 {
@@ -4506,6 +4506,78 @@ const watchModeErrorPathTest = (async () => {
   }
   console.log('watch-mode error-path tests passed');
 })();
+
+// Issue #231: opt-in `formatError` hook customises the thrown message only.
+{
+  const schema = { PORT: { type: 'port', required: true }, TOKEN: { type: 'int', sensitive: true } };
+  const bad = { PORT: 'abc', TOKEN: 'secret-synthetic-value' };
+  let plain;
+  assert.throws(() => validateEnv(schema, bad), (e) => { plain = e; return e instanceof EnvSaafError; });
+
+  // Hook output becomes the message; raw errors are unchanged.
+  let seen;
+  assert.throws(() => validateEnv(schema, bad, {
+    formatError: (errors, context) => { seen = { errors, context }; return `ALERT ${errors.length}: ${context.keys.join(',')}`; },
+  }), (e) => {
+    assert.ok(e instanceof EnvSaafError);
+    assert.strictEqual(e.name, 'EnvSaafError');
+    assert.strictEqual(e.message, 'ALERT 2: PORT,TOKEN');
+    assert.deepStrictEqual(e.errors, plain.errors);
+    return true;
+  });
+  assert.deepStrictEqual(seen.errors, plain.errors);
+  assert.deepStrictEqual(Object.keys(seen.context), ['keys']);
+  assert.deepStrictEqual(seen.context.keys, ['PORT', 'TOKEN']);
+  assert.ok(!JSON.stringify(seen).includes('secret-synthetic-value'));
+
+  // The hook gets an isolated copy: mutating it cannot change error.errors.
+  assert.throws(() => validateEnv(schema, bad, {
+    formatError: (errors) => { try { errors.push('x'); } catch (_) { /* frozen */ } return 'm'; },
+  }), (e) => { assert.deepStrictEqual(e.errors, plain.errors); return true; });
+
+  // Without the hook (or with an empty-string result), the default stays byte-for-byte.
+  assert.strictEqual(plain.message, 'Invalid environment variables:\n' + plain.errors.map(x => `  - ${x}`).join('\n'));
+  assert.throws(() => validateEnv(schema, bad, { formatError: () => '' }), (e) => e.message === '');
+
+  // Throwing or non-string hooks fall back to the default message.
+  for (const hook of [() => { throw new Error('boom'); }, () => 42, () => undefined, () => null, () => ({})]) {
+    assert.throws(() => validateEnv(schema, bad, { formatError: hook }), (e) => { assert.strictEqual(e.message, plain.message); assert.deepStrictEqual(e.errors, plain.errors); return true; });
+  }
+
+  // Never called when validation passes.
+  let calls = 0;
+  validateEnv(schema, { PORT: '3000' }, { formatError: () => { calls++; return 'x'; } });
+  assert.strictEqual(calls, 0);
+
+  // throwOnError:false: nothing is thrown, so the hook is skipped and errors stay raw.
+  const collected = validateEnv(schema, bad, { throwOnError: false, formatError: () => { calls++; return 'x'; } });
+  assert.strictEqual(calls, 0);
+  assert.deepStrictEqual(collected.errors, plain.errors);
+
+  // A non-function hook is a programming error, rejected even when env is valid.
+  for (const bad2 of [null, 'x', 1, {}]) {
+    assert.throws(() => validateEnv(schema, { PORT: '3000' }, { formatError: bad2 }), /formatError/);
+  }
+
+  // Schema errors are bugs in code, not env problems: default message, hook unused.
+  assert.throws(() => validateEnv({ A: { type: 'nope' } }, {}, { formatError: () => { calls++; return 'x'; } }),
+    (e) => { assert.ok(e instanceof EnvSaafError); assert.ok(e.message.startsWith('Invalid environment variables:')); return true; });
+  assert.strictEqual(calls, 0);
+
+  // loadEnv threads the option through (it always throws, so throwOnError:false is ignored).
+  const tmp = require('node:fs').mkdtempSync(require('node:path').join(require('node:os').tmpdir(), 'env-saaf-231-'));
+  const envFile = require('node:path').join(tmp, 'empty.env');
+  try {
+    require('node:fs').writeFileSync(envFile, '');
+    assert.throws(() => loadEnv(schema, { path: envFile, env: bad, formatError: (errs, ctx) => `L ${errs.length} ${ctx.keys.length}` }),
+      (e) => e instanceof EnvSaafError && e.message === 'L 2 2' && e.errors.length === 2);
+    assert.throws(() => loadEnv(schema, { path: envFile, env: bad, throwOnError: false, formatError: () => 'y' }), (e) => e.message === 'y');
+    assert.throws(() => loadEnv(schema, { path: envFile, env: bad }), (e) => e.message === plain.message);
+  } finally {
+    require('node:fs').rmSync(tmp, { recursive: true, force: true });
+  }
+  console.log('formatError tests passed');
+}
 
 Promise.all([watchModeTest, watchModeErrorPathTest])
   .then(() => console.log('env-saaf v1.5.0: all tests passed'))

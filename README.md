@@ -110,7 +110,30 @@ if (errors.length) {
 
 The default is unchanged: without the option, or with `{ throwOnError: true }`, an invalid value still throws one `EnvSaafError` listing every problem. A malformed schema still throws as well — that is a bug in the code, not in the environment. `loadEnv` keeps throwing too, because with `{ assign: true }` it writes into `process.env` and a half-applied write is worse than a failed start; call `validateEnv` when you want the error list.
 
-In TypeScript the option narrows the return type to `ValidateResult<S>` (`{ env: EnvResult<S>; errors: string[] }`), so `env.PORT` keeps the type inferred from the schema.
+### Custom error messages: `formatError`
+
+`EnvSaafError.message` is a fixed bullet list. To feed failures into structured logs, a Slack alert or a startup banner, pass an optional `formatError(errors, context)` to `validateEnv` (or `loadEnv`, which passes it through):
+
+```js
+const { validateEnv } = require('env-saaf');
+
+try {
+  validateEnv(schema, process.env, {
+    formatError: (errors, { keys }) =>
+      `config check failed (${errors.length} of ${keys.length} keys): ${errors.join(' | ')}`,
+  });
+} catch (err) {
+  console.error(err.message); // your string
+  console.error(err.errors);  // still the raw per-key messages
+}
+```
+
+- `errors` is a read-only copy of the same raw diagnostics `error.errors` carries. These are the existing messages, so they can include non-sensitive input examples (values of `sensitive: true` keys stay masked, as before). `context` is separate and contains only `{ keys }`, the schema's key names; the environment object and schema rules are never passed in.
+- The string you return becomes `error.message`. `error.errors` is unchanged, and without the option the message is byte-for-byte what it was.
+- A hook that throws, or returns anything other than a string, falls back to the default message. A `formatError` that is not a function is a `TypeError`.
+- With `{ throwOnError: false }` no error is thrown, so the hook is not called and `errors` in the result stays raw. `loadEnv` always throws, so it forwards the hook for validation failures. Failures before validation, such as an unreadable or unparsable `.env` file, throw their own errors and are outside the hook's scope. Malformed-schema errors are not formatted either.
+
+In TypeScript, `{ throwOnError: false }` (not `formatError`) narrows the return type to `ValidateResult<S>` (`{ env: EnvResult<S>; errors: string[] }`), so `env.PORT` keeps the type inferred from the schema.
 
 ### Strict mode — catch typos in variable names
 

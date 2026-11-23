@@ -1,7 +1,7 @@
 // env-saaf type tests — sirf `tsc` se check hote hain (`npm test` me shamil).
 // Runtime me kuch nahi chalta: ye file sirf TypeScript inference verify karti hai.
 // Issue #7: validateEnv ka return type schema se infer hona chahiye.
-import { validateEnv, EnvSchema, EnvResult, maskSecrets, Masked, toJsonSchema } from './index';
+import { validateEnv, loadEnv, EnvSchema, EnvResult, maskSecrets, Masked, toJsonSchema } from './index';
 
 const env = validateEnv({
   PORT: { type: 'port', required: true },
@@ -166,3 +166,11 @@ const badBound: string = jsonSchema.properties.PORT.minimum;
 toJsonSchema({ PORT: { type: 'integer', minimum: 0 } });
 
 export { port, count, url, mode, debug, name, doubled, fixed, wrongType, typo, debugStrict, myPort, myDebug, looseValue, tenantId, apiHash, collectedPort, collectedDebug, collectedErrors, collectedAsEnv, throwingPort, condSentry, condAlert, condTls, condFallback, condSentryStrict, validatedPort, validatedHost, validatedFlag, validatedNotes, wrongPorts, tags, ports, origins, flags, aliasedUrl, aliasedPort, aliasKey, maskedKey, maskedDbPassword, maskedDbPort, maskedTags, maskedNestedToken, maskedWhen, manual };
+
+// Issue #231: formatError receives readonly errors and { keys }, returns a string.
+validateEnv({ PORT: { type: 'port' } }, {}, {
+  formatError: (errors, context) => `${errors.length} problems in ${context.keys.join(', ')}`,
+});
+loadEnv({ PORT: { type: 'port' } }, { formatError: (errors) => errors.join('; ') });
+// @ts-expect-error formatError must return a string
+validateEnv({ PORT: { type: 'port' } }, {}, { formatError: () => 1 });
