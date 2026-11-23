@@ -151,6 +151,47 @@ const { loadEnv, validateEnv, EnvSaafError, parseEnvFile, scanCode, diffEnv, mas
     UNSUPPORTED: {},
   });
   assert.throws(() => toJsonSchema({ BROKEN: { type: 'port', min: NaN } }), EnvSaafError);
+
+  // Issue #262: grouped schemas nest as object schemas instead of collapsing to `string`.
+  assert.deepStrictEqual(toJsonSchema({
+    DB: { prefix: 'DB_', schema: { HOST: { type: 'host', required: true }, PORT: { type: 'port', default: 5432 } } },
+    NAME: { type: 'string' },
+  }), {
+    $schema: draft,
+    type: 'object',
+    properties: {
+      DB: {
+        type: 'object',
+        properties: {
+          HOST: types.host,
+          PORT: { type: 'integer', minimum: 0, maximum: 65535, default: 5432 },
+        },
+        required: ['HOST'],
+      },
+      NAME: { type: 'string' },
+    },
+  });
+  // A group with no required inner rules has no nested `required`, and the
+  // group key itself never lands in the top-level `required` list.
+  assert.deepStrictEqual(toJsonSchema({
+    CACHE: { prefix: 'CACHE_', schema: { TTL: { type: 'duration', min: 0, max: 60, choices: [5, 30] } } },
+  }), {
+    $schema: draft,
+    type: 'object',
+    properties: {
+      CACHE: {
+        type: 'object',
+        properties: { TTL: { type: 'number', minimum: 0, maximum: 60, enum: [5, 30] } },
+      },
+    },
+  });
+  // Flat schemas are unchanged by the group handling above.
+  assert.deepStrictEqual(toJsonSchema({ PORT: { type: 'port', required: true }, NAME: { type: 'string' } }), {
+    $schema: draft,
+    type: 'object',
+    properties: { PORT: { type: 'integer', minimum: 0, maximum: 65535 }, NAME: { type: 'string' } },
+    required: ['PORT'],
+  });
 }
 
 // v0.1.0 core
