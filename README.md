@@ -696,6 +696,8 @@ Keys that look like secrets (`API_KEY`, `DB_PASSWORD`, …) get an empty placeho
 `toJsonSchema(schema)` returns a [draft 2020-12 JSON Schema](https://json-schema.org/draft/2020-12)
 for documentation, editor tooling, or validation of **coerced values**, not raw `.env` strings.
 It does not read environment variables or run custom callbacks.
+Grouped schemas nest as object schemas, with the inner rules as `properties`
+and their required keys in the group's own `required` list.
 
 ```js
 const { toJsonSchema } = require('env-saaf');
