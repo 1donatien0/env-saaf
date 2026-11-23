@@ -4,6 +4,8 @@ Zero-dependency environment variable validator for Node.js. Fail fast at startup
 
 [![npm version](https://img.shields.io/npm/v/env-saaf.svg)](https://www.npmjs.com/package/env-saaf) [![npm downloads](https://img.shields.io/npm/dm/env-saaf.svg)](https://www.npmjs.com/package/env-saaf) [![GitHub stars](https://img.shields.io/github/stars/abhi478jeetur-rgb/env-saaf.svg)](https://github.com/abhi478jeetur-rgb/env-saaf/stargazers) [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://github.com/abhi478jeetur-rgb/env-saaf/blob/main/LICENSE)
 
+**Read in other languages:** [Español](README.es.md) · [Português](README.pt-BR.md) · [हिंदी](README.hi.md) · [简体中文](README.zh-CN.md)
+
 ## The problem
 
 Research into real developer pain points shows the same `.env` bugs again and again:
