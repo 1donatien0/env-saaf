@@ -4165,6 +4165,53 @@ assert.deepStrictEqual(
       && err.errors.includes('PORT: unknown option "defualt"'),
   );
 
+  // Issue #250: a typo'd option on the options object itself is rejected up
+  // front — same class of bug as #218, one layer up.
+  assert.throws(
+    () => validateEnv({ A: { type: 'string' } }, { A: 'x', TYPO_KEY: '1' }, { stric: true }),
+    err => err instanceof EnvSaafError
+      && err.errors.some((e) => e.includes('unknown option "stric"')),
+  );
+  assert.throws(
+    () => validateEnv({ A: { type: 'string' } }, { A: 'x' }, { throwOnEror: true }),
+    err => err instanceof EnvSaafError
+      && err.errors.some((e) => e.includes('unknown option "throwOnEror"')),
+  );
+  // The check runs even when the variable is absent and even with
+  // { throwOnError: false } — like schema errors, it always throws.
+  assert.throws(
+    () => validateEnv({ A: { type: 'string' } }, {}, { stric: true, throwOnError: false }),
+    err => err instanceof EnvSaafError
+      && err.errors.some((e) => e.includes('unknown option "stric"')),
+  );
+  // loadEnv rejects its own typos too, naming the loadEnv option set.
+  const tmp250 = require('node:fs').mkdtempSync(require('node:path').join(require('node:os').tmpdir(), 'env-saaf-250-'));
+  try {
+    assert.throws(
+      () => loadEnv({ A: { type: 'string' } }, { path: require('node:path').join(tmp250, 'x.env'), env: { A: 'x' }, overide: true }),
+      err => err instanceof EnvSaafError
+        && err.errors.some((e) => e.includes('unknown option "overide"')),
+    );
+    // A typo'd validateEnv option forwarded through loadEnv is rejected too.
+    assert.throws(
+      () => loadEnv({ A: { type: 'string' } }, { path: require('node:path').join(tmp250, 'x.env'), env: { A: 'x' }, stric: true }),
+      err => err instanceof EnvSaafError
+        && err.errors.some((e) => e.includes('unknown option "stric"')),
+    );
+  } finally {
+    require('node:fs').rmSync(tmp250, { recursive: true, force: true });
+  }
+  // Every currently valid option keeps working exactly as before.
+  assert.deepStrictEqual(
+    validateEnv({ A: { type: 'string' } }, { A: 'x', B: '1' }, { strict: true, throwOnError: false }).errors,
+    ['B: set but not in schema (strict mode)'],
+  );
+  assert.strictEqual(validateEnv({ A: { type: 'string' } }, { A: 'x' }, { throwOnError: false }).env.A, 'x');
+  assert.throws(
+    () => validateEnv({ A: { type: 'string', required: true } }, {}, { formatError: () => 'custom' }),
+    (e) => e.message === 'custom',
+  );
+
   // Issue #220: contradictory bounds are schema errors, even for absent keys.
   assert.throws(
     () => validateEnv({ N: { type: 'number', min: 10, max: 5 } }, { N: '7' }),
