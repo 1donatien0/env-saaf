@@ -4986,9 +4986,64 @@ assert.deepStrictEqual(
   }
   const reversed = { VALUE: { minLength: 4, maxLength: 3 } };
   assert.throws(() => validateEnv(reversed, {}), /must not exceed/);
-  for (const bounds of [{ minLength: 2.5 }, { maxLength: null }, { minLength: 4, maxLength: 3 }]) {
+  for (const bounds of [{ minLength: 2.5 }, { maxLength: null }, { minLength: 4, maxLength: 3 }, { minLength: -1, maxLength: 3 }]) {
     assert.strictEqual(generateExample({ VALUE: bounds }), generateExample({ VALUE: {} }));
   }
+}
+
+// Issue #275: oversized synthesized values keep the ordinary type example.
+{
+  const cases = [
+    ['string', { minLength: 4097 }],
+    ['url', { minLength: 4097 }],
+    ['base64', { minLength: 4097 }],
+    ['hex', { minLength: 0, length: 4097 }],
+  ];
+  for (const [type, bounds] of cases) {
+    const unbounded = parseEnvFile(generateExample({ VALUE: { type } })).VALUE;
+    const value = parseEnvFile(generateExample({ VALUE: { type, ...bounds } })).VALUE;
+    assert.strictEqual(value === unbounded, true, `${type}: expected the ordinary example, got ${value.length} characters`);
+  }
+  const exact = { VALUE: { type: 'hex', minLength: 0, length: 4096 } };
+  const env = parseEnvFile(generateExample(exact));
+  assert.strictEqual(validateEnv(exact, env).VALUE.length, 4096);
+}
+
+// Issue #275: growing examples shares a budget across groups and scalar types.
+{
+  const schema = {
+    FIRST: { minLength: 4096 },
+    SECOND: { type: 'base64', minLength: 4096 },
+    APP: { prefix: 'APP_', schema: {
+      SECOND: { type: 'hex', minLength: 0, length: 4096 },
+      THIRD: { type: 'email', minLength: 4096 },
+    } },
+    // The four large examples add 16,337 characters in total. Exactly 47 remain.
+    LAST: { minLength: 62 },
+    SPILL: { minLength: 16 },
+    SHORT: { maxLength: 3 },
+  };
+  const env = parseEnvFile(generateExample(schema));
+  for (const key of ['FIRST', 'SECOND', 'APP_SECOND', 'APP_THIRD']) assert.strictEqual(env[key].length, 4096);
+  assert.strictEqual(env.LAST.length, 62);
+  assert.strictEqual(env.SPILL, 'your_value_here');
+  assert.strictEqual(env.SHORT.length, 3);
+  assert.strictEqual(parseEnvFile(generateExample({ SPILL: schema.SPILL })).SPILL.length, 16);
+}
+
+// Issue #275: only usable protocol names can shape a generated URL.
+{
+  for (const protocols of [true, [], [true], ['bad!']]) {
+    const schema = { VALUE: { type: 'url', minLength: 25, protocols } };
+    assert.strictEqual(parseEnvFile(generateExample(schema)).VALUE, 'https://example.com');
+    assert.throws(() => validateEnv(schema, {}), /"protocols" must be a non-empty array of schemes/);
+  }
+  const mixed = { VALUE: { type: 'url', minLength: 25, protocols: ['bad!', true, 'HTTP:'] } };
+  const value = parseEnvFile(generateExample(mixed)).VALUE;
+  assert.strictEqual(new URL(value).protocol, 'http:');
+  assert.strictEqual(value.length, 25);
+  const exact = { VALUE: { type: 'url', minLength: 19, maxLength: 19, protocols: ['http', 'https'] } };
+  assert.strictEqual(parseEnvFile(generateExample(exact)).VALUE, 'https://example.com');
 }
 
 // Issue #275: length adjustment applies only to synthesized placeholders.
@@ -5024,6 +5079,16 @@ assert.deepStrictEqual(
   assert.strictEqual(parseEnvFile(generateExample(custom)).VALUE.length, 20);
   assert.strictEqual(calls, 0);
   assert.strictEqual(parseEnvFile(generateExample({ VALUE: { minLength: 1, maxLength: 20 } })).VALUE, 'your_value_here');
+
+  const supplied = 'a'.repeat(4097);
+  const authoredOverBudget = parseEnvFile(generateExample({
+    DEFAULTED: { minLength: 4097, default: supplied },
+    CHOSEN: { minLength: 4097, choices: [supplied, 'x'] },
+    GENERATED: { minLength: 20 },
+  }));
+  assert.strictEqual(authoredOverBudget.DEFAULTED, supplied);
+  assert.strictEqual(authoredOverBudget.CHOSEN, supplied);
+  assert.strictEqual(authoredOverBudget.GENERATED.length, 20);
 }
 
 // Issue #234: maskSecrets recurses into plain objects/arrays; cycles get a placeholder
