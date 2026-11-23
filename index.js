@@ -1517,12 +1517,19 @@ function arrayPlaceholder(rule) {
   return items.join(rule.separator || ',');
 }
 
-/** Placeholder for a scalar (non-array) rule, per its declared type. */
+/** Placeholder for a scalar (non-array) rule, per its declared type. Every
+ * value is a literal that itself validates against the type (issue #251),
+ * so a generated .env.example passes `check` out of the box — except `file`,
+ * whose './config.json' path the user must create. */
 function scalarPlaceholder(type) {
   return type === 'port' ? '3000' : type === 'url' ? 'https://example.com'
     : type === 'ipv4' ? '192.168.0.1' : type === 'semver' ? '1.0.0'
     : type === 'date' ? '2026-01-31' : type === 'duration' ? '15m' : type === 'host' ? 'localhost'
-    : type === 'file' ? './config.json' : 'your_value_here';
+    : type === 'file' ? './config.json'
+    : type === 'email' ? 'user@example.com' : type === 'uuid' ? '550e8400-e29b-41d4-a716-446655440000'
+    : type === 'number' ? '3.14' : type === 'int' ? '42' : type === 'boolean' ? 'true'
+    : type === 'json' ? '{"key":"value"}' : type === 'base64' ? 'aGVsbG8=' : type === 'hex' ? 'deadbeef'
+    : 'your_value_here';
 }
 
 /** Generate .env.example text from a schema. Values are placeholders/defaults only — never real secrets. */

@@ -69,6 +69,7 @@
 - Fixed: `maskValue` returns an empty string unchanged instead of `'****'`, so an empty value no longer looks set in logs; `maskSecrets` keeps empty values the same way (fixes #159)
 - Fixed: `loadEnv` reports `env-saaf: cannot read .env file at <path>: <reason>` when a file exists but cannot be read — a directory passed as `path` (or as an entry of `paths`) no longer leaks a raw `EISDIR`, and a permission-denied file no longer leaks `EACCES`; missing-file behaviour is unchanged (fixes #157)
 - Fixed: `loadEnv` throws `env-saaf: .env file not found: <path>` when an explicitly passed single `path` does not exist, instead of silently returning an empty result — a typo'd path no longer boots the app with defaults; the implicit default `.env` and list forms (`paths: [...]` or `path` as an array) keep skipping missing files (fixes #158)
+- Fixed: `generateExample` now suggests a placeholder that itself validates for every scalar type — `email` suggests `user@example.com`, `uuid` a canonical UUID, `number` `3.14`, `int` `42`, `boolean` `true`, `json` `{"key":"value"}`, `base64` `aGVsbG8=`, `hex` `deadbeef` — instead of the literal `your_value_here`, so a generated `.env.example` passes `check` out of the box; the already-correct placeholders (`port`, `url`, `date`, `duration`, `host`, `semver`, `ipv4`) are unchanged, and `file` stays the documented exception (`./config.json` is a path the user must create) (fixes #251)
 
 ## 1.5.0 — 2026-11-20
 

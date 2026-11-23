@@ -4463,6 +4463,46 @@ assert.deepStrictEqual(
   assert.ok(generateExample({ NS: { type: 'array', of: 'int', minItems: 5, maxItems: 4 } }).includes('NS=1,2,3,1\n'));
 }
 
+// Issue #251: generateExample — every scalar type gets a placeholder that
+// itself validates, so the generated file passes `check` out of the box.
+{
+  const schema = {
+    E: { type: 'email' }, U: { type: 'uuid' }, N: { type: 'number' },
+    I: { type: 'int' }, B: { type: 'boolean' }, J: { type: 'json' },
+    B64: { type: 'base64' }, HX: { type: 'hex' },
+  };
+  const ex = generateExample(schema);
+  assert.ok(ex.includes('E=user@example.com'), ex);
+  assert.ok(ex.includes('U=550e8400-e29b-41d4-a716-446655440000'), ex);
+  assert.ok(ex.includes('N=3.14'), ex);
+  assert.ok(ex.includes('I=42'), ex);
+  assert.ok(ex.includes('B=true'), ex);
+  assert.ok(ex.includes('J={"key":"value"}'), ex);
+  assert.ok(ex.includes('B64=aGVsbG8='), ex);
+  assert.ok(ex.includes('HX=deadbeef'), ex);
+  // Round-trip: the whole generated file validates cleanly.
+  const parsed = validateEnv(schema, parseEnvFile(ex));
+  assert.strictEqual(parsed.E, 'user@example.com');
+  assert.strictEqual(parsed.U, '550e8400-e29b-41d4-a716-446655440000');
+  assert.strictEqual(parsed.N, 3.14);
+  assert.strictEqual(parsed.I, 42);
+  assert.strictEqual(parsed.B, true);
+  assert.deepStrictEqual(parsed.J, { key: 'value' });
+  assert.strictEqual(parsed.B64, 'aGVsbG8=');
+  assert.strictEqual(parsed.HX, 'deadbeef');
+  // Placeholders for the already-correct types are unchanged.
+  assert.ok(generateExample({ P: { type: 'port' } }).includes('P=3000'));
+  assert.ok(generateExample({ A: { type: 'url' } }).includes('A=https://example.com'));
+  assert.ok(generateExample({ D: { type: 'date' } }).includes('D=2026-01-31'));
+  assert.ok(generateExample({ DU: { type: 'duration' } }).includes('DU=15m'));
+  assert.ok(generateExample({ H: { type: 'host' } }).includes('H=localhost'));
+  assert.ok(generateExample({ S: { type: 'semver' } }).includes('S=1.0.0'));
+  assert.ok(generateExample({ IP: { type: 'ipv4' } }).includes('IP=192.168.0.1'));
+  // `file` stays the documented exception: no placeholder can guarantee the
+  // path exists, so its example is a path the user must create.
+  assert.ok(generateExample({ F: { type: 'file' } }).includes('F=./config.json'));
+}
+
 // Issue #234: maskSecrets recurses into plain objects/arrays; cycles get a placeholder
 {
   // The issue's example: the masked structure mirrors the input shape and
