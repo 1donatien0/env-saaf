@@ -90,6 +90,11 @@ function fatalExit(code) {
 }
 let fromExampleOpt = null; // null = off; true = bare flag; string = --from-example=file
 let groupsOpt = false;
+// Issue #278: tokens starting with `--` that match no known flag, and
+// value-taking flags left without a value, are collected here and rejected
+// after parsing — they used to fall into `positional` and vanish silently.
+const unknownFlags = [];
+const valuelessFlags = [];
 const positional = [];
 for (let i = 1; i < argv.length; i++) {
   const a = argv[i];
@@ -111,7 +116,10 @@ for (let i = 1; i < argv.length; i++) {
   else if (a === '--from-example') fromExampleOpt = true;
   else if (a.startsWith('--from-example=')) fromExampleOpt = a.slice('--from-example='.length) || '.env.example';
   else if (a === '--groups') groupsOpt = true;
-  else if (a !== '--no-color') positional.push(a);
+  else if (a === '--no-color') { /* global flag, allowed on every command */ }
+  else if (a === '--file' || a === '--schema') valuelessFlags.push(a);
+  else if (a.startsWith('--')) unknownFlags.push(a);
+  else positional.push(a);
 }
 const dir = positional[0] || process.cwd();
 // Issue #232: with a bare `--from-example`, a second positional names the
@@ -120,6 +128,43 @@ let exampleOpt = null;
 if (fromExampleOpt !== null) {
   if (fromExampleOpt === true) exampleOpt = positional[1] || '.env.example';
   else exampleOpt = fromExampleOpt;
+}
+
+// Issue #278: flags are per-command. A flag the parser recognised but the
+// command does not support — or one it does not recognise at all — used to
+// be silently ignored, so `scan --json-schema` ran a plain scan and a typo
+// like `--jsoon` in CI produced text output where JSON was expected. Fail
+// fast with exit 2, in the same message shape as other usage errors.
+const COMMAND_FLAGS = {
+  check: ['--file', '--schema', '--json', '--json-schema', '--watch'],
+  scan: ['--file', '--json', '--watch'],
+  example: ['--write', '--force', '--schema'],
+  init: ['--schema', '--force', '--from-example', '--groups'],
+};
+if (COMMAND_FLAGS[cmd]) {
+  const seenFlags = new Set();
+  if (fileExplicit) seenFlags.add('--file');
+  if (schemaOpt !== null) seenFlags.add('--schema');
+  if (jsonMode) seenFlags.add('--json');
+  if (jsonSchemaOpt) seenFlags.add('--json-schema');
+  if (writeOpt !== null) seenFlags.add('--write');
+  if (forceOpt) seenFlags.add('--force');
+  if (watchOpt) seenFlags.add('--watch');
+  if (fromExampleOpt !== null) seenFlags.add('--from-example');
+  if (groupsOpt) seenFlags.add('--groups');
+  let flagError = null;
+  if (valuelessFlags.length) flagError = `${valuelessFlags[0]} needs a value`;
+  else if (unknownFlags.length) flagError = `unknown flag ${unknownFlags[0]} for ${cmd}`;
+  else {
+    const bad = [...seenFlags].find(f => !COMMAND_FLAGS[cmd].includes(f));
+    if (bad) flagError = `flag ${bad} is not supported for ${cmd}`;
+  }
+  if (flagError) {
+    const message = `env-saaf: ${flagError}`;
+    if (jsonMode) console.log(JSON.stringify({ ok: false, error: message }));
+    else console.error(message);
+    process.exit(2);
+  }
 }
 
 // Issue #60: the scaffold `init` writes. Commented examples of the main types

@@ -515,6 +515,31 @@ try {
     assert.match(schemaText, /A_X: \{ type: 'port' \}/);
     assert.match(schemaText, /A_Y: \{ type: 'port' \}/);
   }
+
+  // --- issue #278: unknown and misplaced flags fail fast with exit 2
+  {
+    const dir = mkProject({ 'app.js': 'process.env.PORT;\n', '.env.example': 'PORT=3000\n' });
+    const unknown = run(['check', dir, '--bogus'], dir);
+    assert.strictEqual(unknown.status, 2);
+    assert.match(unknown.stderr, /unknown flag --bogus for check/);
+    const misplaced = run(['scan', dir, '--json-schema'], dir);
+    assert.strictEqual(misplaced.status, 2);
+    assert.match(misplaced.stderr, /flag --json-schema is not supported for scan/);
+    const exJson = run(['example', dir, '--json'], dir);
+    assert.strictEqual(exJson.status, 2);
+    const exWatch = run(['example', dir, '--watch'], dir);
+    assert.strictEqual(exWatch.status, 2);
+    const initJson = run(['init', dir, '--json'], dir);
+    assert.strictEqual(initJson.status, 2);
+    const valueless = run(['check', dir, '--file'], dir);
+    assert.strictEqual(valueless.status, 2);
+    assert.match(valueless.stderr, /--file needs a value/);
+    // Valid combinations keep working:
+    const okJson = run(['scan', dir, '--json'], dir);
+    assert.strictEqual(okJson.status, 0, `${okJson.stdout}${okJson.stderr}`);
+    const okCheck = run(['check', dir, '--json'], dir);
+    assert.strictEqual(okCheck.status, 0, `${okCheck.stdout}${okCheck.stderr}`);
+  }
 } finally {
   cleanup();
 }
