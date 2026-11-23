@@ -424,8 +424,17 @@ function coerce(key, raw, type, trim = true, protocols, sensitive = false, of = 
       return n;
     }
     case 'int': {
-      // Whole numbers only: counts, retries, pool sizes. '1e3' is 1000, so
-      // it passes; '3.5', 'abc', and non-finite values ('Infinity', '1e999') do not.
+      // Whole numbers only: counts, retries, pool sizes. Only plain integer
+      // literals pass — optional sign + digits ('42', '-3', '007'). Decimal
+      // and scientific spellings ('1.0', '1e3', '1.5e2') are rejected even
+      // when they happen to be whole numbers (issue #277): in a .env file
+      // they are almost always a copied float or a formatted export, and
+      // silently accepting them hides the mistake. Non-string values (a
+      // number passed directly, e.g. as a default) still just need to be an
+      // integer; '3.5', 'abc', and non-finite values ('Infinity', '1e999')
+      // do not pass. The shape is checked on the trimmed spelling so
+      // surrounding whitespace behaves the same with trim: false.
+      if (typeof v === 'string' && !/^[+-]?\d+$/.test(v.trim())) throw new Error(`${key}: expected an integer (e.g. ${TYPE_EXAMPLES.int}), got "${shown}"`);
       const n = decimalNumber(v);
       if (v === '' || !Number.isFinite(n) || !Number.isInteger(n)) throw new Error(`${key}: expected an integer (e.g. ${TYPE_EXAMPLES.int}), got "${shown}"`);
       return n;
@@ -632,6 +641,11 @@ function coerce(key, raw, type, trim = true, protocols, sensitive = false, of = 
       return s;
     }
     case 'port': {
+      // Issue #277: same plain-literal rule as 'int' — '8080.0' and '1e3'
+      // are rejected even though they resolve to a port in range.
+      if (typeof v === 'string' && !/^[+-]?\d+$/.test(v.trim())) {
+        throw new Error(`${key}: expected a port (0-65535, e.g. ${TYPE_EXAMPLES.port}), got "${shown}"`);
+      }
       const n = decimalNumber(v);
       const zeroWithoutValue = n === 0 && typeof v !== 'number'
         && (typeof v !== 'string' || v.trim() === '');

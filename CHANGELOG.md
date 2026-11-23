@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Fixed: `int` (and `port`, which builds on it) now only accepts plain integer literals — optional sign + digits — so decimal and scientific spellings such as `1.0`, `1e3` and `1.5e2` are rejected even when they happen to be whole numbers, instead of silently passing (fixes #277). `number` still accepts them.
+
 - Added: warn when requiredIf references an undeclared full env name, including inside groups, while preserving external env flag behavior. validateEnv and loadEnv use the existing onWarn hook (fixes #295).
 
 - Fixed: reject repeated units in compound durations, including case variants such as `1h1H`, instead of silently adding them together (fixes #280).

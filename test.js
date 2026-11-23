@@ -1460,8 +1460,10 @@ assert.deepStrictEqual(
   const ints = validateEnv({ N: { type: 'int', required: true } }, { N: '42' });
   assert.strictEqual(ints.N, 42);
   assert.strictEqual(validateEnv({ N: { type: 'int' } }, { N: '-3' }).N, -3);
-  assert.strictEqual(validateEnv({ N: { type: 'int' } }, { N: '1e3' }).N, 1000); // 1e3 is a whole value
-  assert.strictEqual(validateEnv({ N: { type: 'int' } }, { N: '1.5e2' }).N, 150); // 1.5e2 is whole too
+  // Issue #277: decimal/scientific spellings are rejected even when whole.
+  assert.throws(() => validateEnv({ N: { type: 'int' } }, { N: '1e3' }), /expected an integer/);
+  assert.throws(() => validateEnv({ N: { type: 'int' } }, { N: '1.5e2' }), /expected an integer/);
+  assert.throws(() => validateEnv({ N: { type: 'int' } }, { N: '1.0' }), /expected an integer/);
   assert.throws(() => validateEnv({ N: { type: 'int' } }, { N: '3.5' }), /expected an integer/);
   assert.throws(() => validateEnv({ N: { type: 'int' } }, { N: 'abc' }), /expected an integer/);
   // min/max: both, min alone, max alone; the error names the allowed range.
@@ -1496,7 +1498,7 @@ assert.deepStrictEqual(
       }
       assert.throws(() => validateEnv({ N: { type, default: raw } }, {}), EnvSaafError);
     }
-    for (const [raw, value] of [['42', 42], ['+42', 42], ['042', 42], ['1e3', 1000], ['0', 0]]) {
+    for (const [raw, value] of [['42', 42], ['+42', 42], ['042', 42], ['0', 0]]) {
       for (const trim of [true, false]) {
         assert.strictEqual(validateEnv({ N: { type, trim } }, { N: ` ${raw} ` }).N, value);
         assert.deepStrictEqual(
@@ -1504,6 +1506,29 @@ assert.deepStrictEqual(
           [value, 1],
         );
       }
+    }
+    // Issue #277: decimal/scientific spellings are not plain integer
+    // literals. 'number' still accepts them; 'int' and 'port' reject them
+    // (as env values, as array items, and as defaults), in both trims.
+    if (type === 'number') {
+      for (const [raw, value] of [['1e3', 1000], ['1.5e2', 150], ['1.0', 1]]) {
+        assert.strictEqual(validateEnv({ N: { type } }, { N: raw }).N, value);
+      }
+    } else {
+      for (const raw of ['1e3', '1.5e2', '1.0', '8080.0']) {
+        for (const trim of [true, false]) {
+          assert.throws(
+            () => validateEnv({ N: { type, trim } }, { N: ` ${raw} ` }),
+            err => err instanceof EnvSaafError && err.errors[0].includes(`N: ${expected[type]}`),
+          );
+          assert.throws(
+            () => validateEnv({ N: { type: 'array', of: type, trim } }, { N: `1,${raw}` }),
+            err => err instanceof EnvSaafError && err.errors[0].includes(`N[1]: ${expected[type]}`),
+          );
+        }
+      }
+      assert.throws(() => validateEnv({ N: { type, default: '1e3' } }, {}), EnvSaafError);
+      assert.throws(() => validateEnv({ N: { type, default: '1.0' } }, {}), EnvSaafError);
     }
     for (const value of [0x10, 0b101, 0o17]) {
       assert.strictEqual(validateEnv({ N: { type, default: value } }, {}).N, value);
@@ -1524,6 +1549,39 @@ assert.deepStrictEqual(
     assert.strictEqual(validateEnv({ N: { type } }, { N: '-3' }).N, -3);
   }
   assert.strictEqual(validateEnv({ N: { type: 'string' } }, { N: '0x10' }).N, '0x10');
+}
+
+// Issue #277: 'int' (and 'port', which builds on it) only accepts plain
+// integer literals — optional sign + digits. Decimal/scientific spellings
+// that happen to be whole numbers are rejected, while 'number' is unchanged.
+{
+  // Accepted: plain literals, both signs, leading zeros, zero itself.
+  for (const [raw, value] of [['42', 42], ['-42', -42], ['+42', 42], ['007', 7], ['0', 0]]) {
+    assert.strictEqual(validateEnv({ N: { type: 'int' } }, { N: raw }).N, value);
+  }
+  // Rejected: decimal and scientific spellings, even when whole.
+  for (const raw of ['1.0', '1e3', '1.5e2', '42.0', '1E3', '+1.0']) {
+    assert.throws(
+      () => validateEnv({ N: { type: 'int' } }, { N: raw }),
+      err => err instanceof EnvSaafError && err.errors[0] === `N: expected an integer (e.g. 42), got "${raw}"`,
+    );
+    assert.throws(
+      () => validateEnv({ P: { type: 'port' } }, { P: raw }),
+      err => err instanceof EnvSaafError && err.errors[0].startsWith('P: expected a port'),
+    );
+  }
+  // 'port' keeps its range: plain literals in range pass, out of range fail.
+  assert.strictEqual(validateEnv({ P: { type: 'port' } }, { P: '8080' }).P, 8080);
+  assert.strictEqual(validateEnv({ P: { type: 'port' } }, { P: '0' }).P, 0);
+  assert.throws(() => validateEnv({ P: { type: 'port' } }, { P: '8080.0' }), /expected a port/);
+  // 'number' behaviour is unchanged: the same spellings still pass there.
+  assert.strictEqual(validateEnv({ N: { type: 'number' } }, { N: '1.0' }).N, 1);
+  assert.strictEqual(validateEnv({ N: { type: 'number' } }, { N: '1e3' }).N, 1000);
+  assert.strictEqual(validateEnv({ N: { type: 'number' } }, { N: '1.5e2' }).N, 150);
+  // Non-throwing mode collects the error and omits the key.
+  const collected = validateEnv({ N: { type: 'int' } }, { N: '1e3' }, { throwOnError: false });
+  assert.deepStrictEqual(collected.env, {});
+  assert.deepStrictEqual(collected.errors, ['N: expected an integer (e.g. 42), got "1e3"']);
 }
 
 // Issues #32 + #48: 'json' type (parse JSON values) and minLength/maxLength for strings.
@@ -2502,8 +2560,12 @@ assert.deepStrictEqual(
   for (const [raw, expected] of [['0', 0], ['42', 42], ['-7', -7], ['3.14', 3.14], ['-0.5', -0.5], ['1e3', 1000], ['1.5e-2', 0.015]]) {
     assert.strictEqual(validateEnv({ N: { type: 'number' } }, { N: raw }).N, expected);
   }
-  for (const [raw, expected] of [['0', 0], ['42', 42], ['-7', -7], ['1e3', 1000], ['1.5e2', 150]]) {
+  for (const [raw, expected] of [['0', 0], ['42', 42], ['-7', -7]]) {
     assert.strictEqual(validateEnv({ N: { type: 'int' } }, { N: raw }).N, expected);
+  }
+  // Issue #277: whole-valued decimal/scientific spellings are not integers.
+  for (const raw of ['1e3', '1.5e2', '1.0']) {
+    assert.throws(() => validateEnv({ N: { type: 'int' } }, { N: raw }), /expected an integer/);
   }
 }
 
