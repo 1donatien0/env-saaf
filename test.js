@@ -4730,6 +4730,33 @@ assert.deepStrictEqual(
   assert.ok(generateExample({ F: { type: 'file' } }).includes('F=./config.json'));
 }
 
+// Issue #273: choices supply valid examples after defaults and secret handling.
+{
+  const schema = {
+    S: { type: 'string', choices: ['alpha', 'beta'] },
+    N: { type: 'number', choices: [1, 2] },
+    Z: { type: 'int', choices: [0, 1] },
+    B: { type: 'boolean', choices: [false, true] },
+    GROUP: { prefix: 'APP_', schema: { MODE: { choices: ['dev', 'prod'] } } },
+  };
+  const example = generateExample(schema);
+  for (const line of ['S=alpha', 'N=1', 'Z=0', 'B=false', 'APP_MODE=dev']) {
+    assert.ok(example.includes(line + '\n'), example);
+  }
+  assert.deepStrictEqual(validateEnv(schema, parseEnvFile(example)), {
+    S: 'alpha', N: 1, Z: 0, B: false, GROUP: { MODE: 'dev' },
+  });
+  const priority = generateExample({
+    MODE: { choices: ['alpha', 'beta'], default: 'beta' },
+    API_KEY: { choices: ['alpha', 'beta'] },
+    SESSION: { sensitive: true, choices: ['alpha', 'beta'] },
+    TOKEN: { choices: ['alpha', 'beta'], default: 'beta' },
+  });
+  for (const line of ['MODE=beta', 'API_KEY=', 'SESSION=', 'TOKEN=beta']) {
+    assert.ok(priority.includes(line + '\n'), priority);
+  }
+}
+
 // Issue #234: maskSecrets recurses into plain objects/arrays; cycles get a placeholder
 {
   // The issue's example: the masked structure mirrors the input shape and

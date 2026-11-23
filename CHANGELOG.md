@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Fixed: generateExample uses the first allowed choice instead of a generic placeholder, preserving explicit defaults and empty secret placeholders (fixes #273).
+
 - Fixed: `int` (and `port`, which builds on it) now only accepts plain integer literals — optional sign + digits — so decimal and scientific spellings such as `1.0`, `1e3` and `1.5e2` are rejected even when they happen to be whole numbers, instead of silently passing (fixes #277). `number` still accepts them.
 
 - Added: `unique: true` on `array` rules rejects repeated items, compared after item coercion (so `'1,01'` for `of: 'int'` counts as a duplicate), with an error naming the key and the duplicated item; it applies to `default` values too, is rejected up front on non-`array` rules, and `toJsonSchema` renders it as `uniqueItems: true` (fixes #291).
