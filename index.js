@@ -10,8 +10,8 @@ const net = require('node:net');
 const path = require('node:path');
 
 class EnvSaafError extends Error {
-  constructor(errors) {
-    super('Invalid environment variables:\n' + errors.map(e => `  - ${e}`).join('\n'));
+  constructor(errors, message) {
+    super(typeof message === 'string' ? message : 'Invalid environment variables:\n' + errors.map(e => `  - ${e}`).join('\n'));
     this.name = 'EnvSaafError';
     this.errors = errors;
   }
@@ -596,6 +596,9 @@ function validateEnv(schema, env = process.env, options = {}) {
   if (options.onWarn !== undefined && typeof options.onWarn !== 'function') {
     throw new TypeError('env-saaf: "onWarn" option must be a function');
   }
+  if (options.formatError !== undefined && typeof options.formatError !== 'function') {
+    throw new TypeError('env-saaf: "formatError" option must be a function');
+  }
   const warn = options.onWarn || ((msg) => console.warn(msg));
   if (options.strict) {
     const knownAliases = new Set();
@@ -813,7 +816,23 @@ function validateEnv(schema, env = process.env, options = {}) {
   // environment is clean. Only an explicit false opts in; anything else
   // (undefined, true) keeps the fail-fast default.
   if (options.throwOnError === false) return { env: Object.freeze(out), errors };
-  if (errors.length) throw new EnvSaafError(errors);
+  if (errors.length) {
+    // Issue #231: an opt-in hook may replace the message. It only ever sees an
+    // isolated copy of the error strings and the schema keys, never env values
+    // or the schema rules, and `error.errors` keeps the raw strings. A hook
+    // that throws or returns a non-string falls back to the default message.
+    let message;
+    if (options.formatError) {
+      try {
+        const formatted = options.formatError(
+          Object.freeze(errors.slice()),
+          Object.freeze({ keys: Object.freeze(Object.keys(schema)) })
+        );
+        if (typeof formatted === 'string') message = formatted;
+      } catch (_) { /* fall back to the default message */ }
+    }
+    throw new EnvSaafError(errors, message);
+  }
   return Object.freeze(out);
 }
 
