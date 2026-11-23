@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Added: `loadEnvAsync(schema, options)` reads .env files asynchronously with the same options and behavior as `loadEnv` (fixes #233).
+
 - Added: `toJsonSchema(schema)` exports a draft 2020-12 JSON Schema for coerced configuration values (fixes #229).
 
 - Changed: The `base64` type accepts standard and URL-safe strings with or without padding and preserves the input encoding (fixes #226).

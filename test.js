@@ -4507,6 +4507,78 @@ const watchModeErrorPathTest = (async () => {
   console.log('watch-mode error-path tests passed');
 })();
 
-Promise.all([watchModeTest, watchModeErrorPathTest])
+const loadEnvAsyncTest = (async () => {
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const os = require('node:os');
+  const { loadEnv, loadEnvAsync } = require('./index');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'env-saaf-async-'));
+  const first = path.join(dir, 'first.env');
+  const last = path.join(dir, 'last.env');
+  const missing = path.join(dir, 'missing.env');
+  const schema = { PORT: { type: 'port', required: true }, DATA: { type: 'json' } };
+  try {
+    fs.writeFileSync(first, 'PORT=3000\nDATA={"demo":true}\n');
+    fs.writeFileSync(last, 'PORT=4000\n');
+    const promise = loadEnvAsync(schema, { path: first, env: {} });
+    assert.ok(promise instanceof Promise);
+    assert.deepStrictEqual(await promise, { PORT: 3000, DATA: { demo: true } });
+    assert.deepStrictEqual(await loadEnvAsync(schema, { paths: [missing, first, last], env: {} }),
+      { PORT: 4000, DATA: { demo: true } });
+    assert.deepStrictEqual(await loadEnvAsync({}, { paths: [missing], env: {} }), {});
+    const defaultRead = fs.promises.readFile;
+    try {
+      fs.promises.readFile = async (file, encoding) => {
+        assert.strictEqual(file, '.env');
+        assert.strictEqual(encoding, 'utf8');
+        throw Object.assign(new Error('synthetic missing file'), { code: 'ENOENT' });
+      };
+      assert.deepStrictEqual(await loadEnvAsync({}, { env: {} }), {});
+    } finally {
+      fs.promises.readFile = defaultRead;
+    }
+
+    for (const override of [false, true]) {
+      const env = { PORT: '5000' };
+      const options = { path: [first, last], env, override, assign: true };
+      const syncEnv = { ...env };
+      const expected = loadEnv(schema, { ...options, env: syncEnv });
+      assert.deepStrictEqual(await loadEnvAsync(schema, options), expected);
+      assert.deepStrictEqual(env, syncEnv);
+      assert.deepStrictEqual(env, { PORT: override ? '4000' : '5000', DATA: '{"demo":true}' });
+    }
+
+    async function assertSameError(inputSchema, options) {
+      let expected;
+      assert.throws(() => loadEnv(inputSchema, options), error => {
+        expected = error;
+        return true;
+      });
+      await assert.rejects(loadEnvAsync(inputSchema, options), error => {
+        assert.strictEqual(error.constructor, expected.constructor);
+        assert.strictEqual(error.message, expected.message);
+        assert.deepStrictEqual(error.errors, expected.errors);
+        return true;
+      });
+    }
+
+    await assertSameError(schema, { path: missing, env: {} });
+    await assertSameError(schema, { paths: [missing], env: { PORT: '5000' } });
+    await assertSameError(schema, { paths: [missing, dir], env: {} });
+    await assertSameError(null, { get path() { throw new Error('options read too soon'); } });
+
+    fs.writeFileSync(last, 'PORT=invalid\n');
+    const env = { KEEP: 'synthetic' };
+    await assertSameError(schema, { paths: [first, last], env, assign: true, throwOnError: false });
+    assert.deepStrictEqual(env, { KEEP: 'synthetic' });
+
+    fs.writeFileSync(last, 'PORT=4000\nPORT=5000\n');
+    await assertSameError(schema, { paths: [last, dir], env: {} });
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+})();
+
+Promise.all([watchModeTest, watchModeErrorPathTest, loadEnvAsyncTest])
   .then(() => console.log('env-saaf v1.5.0: all tests passed'))
   .catch((err) => { console.error(err); process.exit(1); });
