@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Fixed: the CLI now rejects unknown flags, flags a command does not support, and `--file` / `--schema` without a value — exit 2 with a clear message — instead of silently ignoring them (fixes #278).
+
 - Fixed: validateEnv no longer stringifies non-string env values — `null` counts as "not set" and objects/arrays on scalar rules fail with an error naming the key, instead of becoming `"null"`, `"[object Object]"` or `""` (fixes #276).
 
 - Fixed: validateSchema now rejects `of` / `separator` on non-`array` rules and `protocols` on rules that are neither `url` nor `array`, instead of silently ignoring dead config (fixes #282).
