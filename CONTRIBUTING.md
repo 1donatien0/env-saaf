@@ -1,3 +1,5 @@
+**Other languages:** [Español](CONTRIBUTING.es.md) · [Português](CONTRIBUTING.pt-BR.md) · [हिंदी](CONTRIBUTING.hi.md) · [简体中文](CONTRIBUTING.zh-CN.md)
+
 # Contributing to env-saaf
 
 Thanks for stopping by! env-saaf is a small, zero-dependency package, and contributions of every size are welcome — a typo fix counts just as much as a new feature.
