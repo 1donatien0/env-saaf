@@ -729,6 +729,102 @@ Pass the keys explicitly rather than the whole `import.meta.env`: Vite only repl
 
 For a build-time check, the CLI's scanner already understands Vite: `scanCode` and `scan` find `import.meta.env.VITE_*` reads in dot, bracket, optional-chaining and destructured forms, so `npx env-saaf scan src` lists every key the client code reads, and `npx env-saaf check --schema env.schema.js` fails when one is missing from the deployment's environment. To validate the same schema in Node before Vite starts building (and without the browser bundle), import the schema module at the top of `vite.config.ts` and call `validateEnv` there with `process.env` from `loadEnv`.
 
+
+### NestJS
+
+Nest reads configuration through `@nestjs/config` (usually with Joi) by default. To validate with env-saaf instead, keep the schema in its own module so tests can use it, validate at import time so a bad environment fails before Nest boots, and expose the typed result as a provider rather than reading `process.env` in services.
+
+```ts
+// src/config/schema.ts — the schema alone, so tests can import it without
+// triggering a load
+export const envSchema = {
+  PORT:          { type: 'port', default: 3000 },
+  DATABASE_URL:  { type: 'url', required: true },
+  JWT_SECRET:    { type: 'string', minLength: 32, required: true, sensitive: true },
+  LOG_LEVEL:     { type: 'string', choices: ['info', 'warn', 'error'], default: 'info' },
+  CACHE_TTL:     { type: 'duration', default: '5m' },
+} as const;
+```
+
+```ts
+// src/config/env.ts — runs when this module is first imported
+import { loadEnv } from 'env-saaf';
+import { envSchema } from './schema';
+
+export const env = loadEnv(envSchema);   // throws EnvSaafError on a bad value
+export type Env = typeof env;            // PORT: number, CACHE_TTL: number, ...
+```
+
+```ts
+// src/config/env.module.ts
+import { Global, Module } from '@nestjs/common';
+import { env } from './env';
+
+export const ENV = Symbol('ENV');
+
+@Global()
+@Module({
+  providers: [{ provide: ENV, useValue: env }],
+  exports: [ENV],
+})
+export class EnvModule {}
+```
+
+Import `src/config/env` first in `main.ts`. Module imports are evaluated in order, so validation runs before `NestFactory.create()` and the process exits on a bad environment instead of starting a half-configured app:
+
+```ts
+// src/main.ts
+import './config/env';   // first: throw before Nest boots
+import { NestFactory } from '@nestjs/core';
+import { AppModule } from './app.module';
+import { env } from './config/env';
+
+async function bootstrap() {
+  const app = await NestFactory.create(AppModule);
+  await app.listen(env.PORT);
+}
+void bootstrap();
+```
+
+Add `EnvModule` to `AppModule`'s imports, then inject the object where it is needed — a property access on `env` is typed (`env.PORT` is a `number`, `env.CACHE_TTL` is milliseconds):
+
+```ts
+// src/users/users.service.ts
+import { Inject, Injectable } from '@nestjs/common';
+import { ENV } from '../config/env.module';
+import type { Env } from '../config/env';
+
+@Injectable()
+export class UsersService {
+  constructor(@Inject(ENV) private readonly config: Env) {}
+
+  cacheTtl(): number {
+    return this.config.CACHE_TTL;
+  }
+}
+```
+
+**With an existing `@nestjs/config` setup.** Two options:
+
+- *Replace it.* Drop `ConfigModule.forRoot({ validationSchema: Joi.object(...) })` and use `EnvModule` as above. Keep the rest of the app off `ConfigService`, or wrap it: `{ provide: ConfigService, useValue: { get: (key: keyof Env) => env[key] } }`.
+- *Coexist.* Keep `ConfigModule` for features that read it, and still validate with env-saaf. Both read `.env`, and env-saaf gives `process.env` precedence by default; pass `{ override: true }` to make the file win, or `{ assign: true }` to write the validated values back into `process.env` before `ConfigModule` reads them.
+
+In tests, import only `schema.ts` and pass a fixture object — no file and no process environment involved:
+
+```ts
+import { validateEnv } from 'env-saaf';
+import { envSchema } from './schema';
+
+const { env, errors } = validateEnv(
+  envSchema,
+  { DATABASE_URL: 'postgres://db/app', JWT_SECRET: 'x'.repeat(32) },
+  { throwOnError: false },
+);
+
+expect(errors).toEqual([]);
+expect(env.CACHE_TTL).toBe(300_000);
+```
+
 ### Keep `.env.example` honest (CLI)
 
 CLI output is plain text by default, including in pipes and CI. For scripts that set a shared color preference, pass `--no-color` before or after the command, or set `NO_COLOR=1`.
