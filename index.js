@@ -428,7 +428,13 @@ function validateSchemaRules(schema, warn, patterns = new Map()) {
       }
     }
   }
-  if (errors.length) throw new EnvSaafError([...new Set(errors)]);
+  if (errors.length) {
+    // Issue #283: a schema problem is a bug in the schema, not a bad env value.
+    // Label it "Invalid schema:" so users debug the right thing; the errors
+    // array is unchanged, only the header differs from genuine value errors.
+    const unique = [...new Set(errors)];
+    throw new EnvSaafError(unique, 'Invalid schema:\n' + unique.map(e => `  - ${e}`).join('\n'));
+  }
   // Check only the complete flattened schema: a group may reference a key
   // in another group or at the top level. External flags remain supported.
   for (const [key, rule] of Object.entries(flattenSchema(schema).flat)) {

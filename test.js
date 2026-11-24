@@ -5712,9 +5712,9 @@ const loadEnvAsyncTest = (async () => {
     assert.throws(() => validateEnv(schema, { PORT: '3000' }, { formatError: bad2 }), /formatError/);
   }
 
-  // Schema errors are bugs in code, not env problems: default message, hook unused.
+  // Schema errors are bugs in code, not env problems: schema header, hook unused.
   assert.throws(() => validateEnv({ A: { type: 'nope' } }, {}, { formatError: () => { calls++; return 'x'; } }),
-    (e) => { assert.ok(e instanceof EnvSaafError); assert.ok(e.message.startsWith('Invalid environment variables:')); return true; });
+    (e) => { assert.ok(e instanceof EnvSaafError); assert.ok(e.message.startsWith('Invalid schema:')); return true; });
   assert.strictEqual(calls, 0);
 
   // loadEnv threads the option through (it always throws, so throwOnError:false is ignored).
@@ -5730,6 +5730,36 @@ const loadEnvAsyncTest = (async () => {
     require('node:fs').rmSync(tmp, { recursive: true, force: true });
   }
   console.log('formatError tests passed');
+}
+
+// Issue #283: schema mistakes are reported as "Invalid schema:", not
+// "Invalid environment variables:". A bad rule is a bug in the schema, so the
+// header must point the developer at the schema instead of blaming the env.
+{
+  // Direct validateSchema: a bad type yields the schema header.
+  assert.throws(() => validateSchema({ A: { type: 'nope' } }), (e) => {
+    assert.ok(e instanceof EnvSaafError);
+    assert.strictEqual(e.message.split('\n')[0], 'Invalid schema:');
+    assert.ok(!e.message.startsWith('Invalid environment variables:'));
+    return true;
+  });
+
+  // validateEnv: schema errors keep the schema header and never run formatError.
+  let schemaHookCalls = 0;
+  assert.throws(() => validateEnv({ A: { type: 'nope' } }, {}, { formatError: () => { schemaHookCalls++; return 'x'; } }), (e) => {
+    assert.ok(e instanceof EnvSaafError);
+    assert.strictEqual(e.message.split('\n')[0], 'Invalid schema:');
+    return true;
+  });
+  assert.strictEqual(schemaHookCalls, 0);
+
+  // Genuine value errors still use the env header (no regression).
+  assert.throws(() => validateEnv({ PORT: { type: 'port', required: true } }, { PORT: 'abc' }), (e) => {
+    assert.ok(e instanceof EnvSaafError);
+    assert.strictEqual(e.message.split('\n')[0], 'Invalid environment variables:');
+    return true;
+  });
+  console.log('schema-error header tests passed');
 }
 
 // Issue #276: non-string values in a hand-built env object. `null` counts
