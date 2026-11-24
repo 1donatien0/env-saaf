@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Added: duration rules accept human duration strings for inclusive `min` / `max` bounds, including compound durations. Invalid or reversed bounds fail schema validation; numeric bounds keep their existing behavior. Generated examples and JSON Schema use the parsed bounds (fixes #322).
+
 - Added: generateExample annotates string and RegExp patterns without changing generated values (fixes #293).
 
 - Added: `EnvSaafError.details` and the `{ throwOnError: false }` result expose structured `{ key, message }` entries mirroring `errors` one-to-one, including grouped keys; printable `errors` strings and `message` formatting are unchanged (fixes #294).

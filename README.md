@@ -62,7 +62,7 @@ Environment inputs are strings. Output below is before an optional `transform`.
 | `semver` | `MAJOR.MINOR.PATCH`, optional prerelease and build suffixes, and one optional lowercase `v` prefix (`v1.2.3`). Leading numeric zeroes and uppercase `V` are rejected. | `string` | `trim`, `minLength`, `maxLength`, `pattern` |
 | `base64` | Standard or URL-safe alphabet, with optional padding. | `string` | `trim`, `minLength`, `maxLength`, `pattern` |
 | `date` | Valid `YYYY-MM-DD` or datetime with `T` and hours/minutes; optional seconds, fraction and `Z` or numeric offset. Accepts valid `Date` defaults. | `Date` | `trim`, `min`, `max` (ISO date strings) |
-| `duration` | Human duration: `500ms`, `30s`, `15m`, `2h`, `1d`, `1w`, compounds like `1h30m`; a bare number is milliseconds | `number` (milliseconds) | `trim`, `min`, `max` |
+| `duration` | Human duration: `500ms`, `30s`, `15m`, `2h`, `1d`, `1w`, compounds like `1h30m`; a bare number is milliseconds | `number` (milliseconds) | `trim`, `min`, `max` (milliseconds or duration strings, e.g. `min: '30s'`) |
 | `host` | Hostname (`db.internal`, `localhost`) or IPv4/IPv6 address; no scheme, path or port | `string` | `trim`, `minLength`, `maxLength`, `pattern` |
 | `array` | Delimited list split by `separator` (default `,`) with each item coerced as `of` (default `string`). Empty items are rejected. Accepts array defaults. | Typed array (`T[]`) | `of`, `separator`, `trim`, `protocols` (when `of: 'url'`), `minItems`, `maxItems`, `unique` |
 
