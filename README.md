@@ -47,7 +47,7 @@ Environment inputs are strings. Output below is before an optional `transform`.
 
 | Type | Accepted input | JavaScript output | Additional rule options |
 | --- | --- | --- | --- |
-| `string` | Any non-missing text (default type) | `string` | `trim`, `minLength`, `maxLength`, `pattern` |
+| `string` | Any non-missing text (default type) | `string` | `trim`, `minLength`, `maxLength`, `pattern` (`RegExp` or string) |
 | `number` | Non-empty decimal text, including fractions and exponent notation. Rejects radix prefixes (`0x`, `0b`, `0o`), `NaN` and non-finite values. | `number` | `trim`, `min`, `max` |
 | `int` | Plain integer literal: optional sign + digits, e.g. `42`, `-3`, `007`. Decimal and scientific spellings (`1.0`, `1e3`) are rejected, as are radix prefixes | `number` | `trim`, `min`, `max` |
 | `boolean` | Case-insensitive `true/false`, `1/0`, `yes/no`, `on/off`, `y/n` | `boolean` | None |
@@ -253,12 +253,12 @@ The transform runs after coercion, built-in checks (`min`/`max`, `minLength`/`ma
 ```js
 const env = validateEnv({
   ADMIN_EMAIL: { type: 'email', required: true },
-  SLUG:        { type: 'string', pattern: /^[a-z0-9-]+$/ },
+  SLUG:        { type: 'string', pattern: '^[a-z0-9-]+$' },
   API_KEY:     { type: 'string', pattern: /^sk_[A-Za-z0-9]+$/ },
 });
 ```
 
-The `email` check is pragmatic — one `@`, a non-empty local part and domain, and a dot in the domain — not full RFC 5322. `pattern` takes a `RegExp` that a string value must match (`string`, `email`, `url`, `file`, `uuid`, `hex`, `ipv4`, `semver`, `base64`, `host`); it runs after coercion and the `choices` check, a mismatch error names the pattern that failed, and using `pattern` on a non-string type is rejected up front.
+The `email` check is pragmatic: one `@`, a non-empty local part and domain, and a dot in the domain. It does not implement full RFC 5322. `pattern` accepts a `RegExp` or a regular expression source string on string-valued types (`string`, `email`, `url`, `file`, `uuid`, `hex`, `ipv4`, `semver`, `base64`, `host`). A source string has no `/.../` delimiters and is compiled without flags. Use a `RegExp` for flags such as `i`. Invalid sources and uses on non-string types produce a schema error naming the key. Matching runs after coercion and the `choices` check, and a mismatch names the pattern.
 
 ### `int` type and `min`/`max` — whole numbers and ranges
 
@@ -714,6 +714,7 @@ for documentation, editor tooling, or validation of **coerced values**, not raw 
 It does not read environment variables or run custom callbacks.
 Grouped schemas nest as object schemas, with the inner rules as `properties`
 and their required keys in the group's own `required` list.
+String `pattern` sources are copied verbatim into JSON Schema.
 
 ```js
 const { toJsonSchema } = require('env-saaf');

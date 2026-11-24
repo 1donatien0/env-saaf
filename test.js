@@ -1,6 +1,6 @@
 'use strict';
 const assert = require('node:assert');
-const { loadEnv, validateEnv, EnvSaafError, parseEnvFile, scanCode, diffEnv, maskSecrets, maskValue, generateExample, toJsonSchema } = require('./index');
+const { loadEnv, validateEnv, validateSchema, EnvSaafError, parseEnvFile, scanCode, diffEnv, maskSecrets, maskValue, generateExample, toJsonSchema } = require('./index');
 
 // Issue #229: JSON Schema export
 {
@@ -1441,11 +1441,94 @@ assert.deepStrictEqual(
     () => validateEnv({ E: { type: 'email', pattern: /@example\.com$/ } }, { E: 'a@other.com' }),
     /expected to match/
   );
-  // a non-RegExp pattern is a schema error naming the key
+  // A pattern that is neither a RegExp nor a string names the key.
   assert.throws(
-    () => validateEnv({ S: { type: 'string', pattern: '[a-z]+' } }, { S: 'abc' }),
-    /S: "pattern" must be a RegExp/
+    () => validateEnv({ S: { type: 'string', pattern: 123 } }, { S: 'abc' }),
+    /S: "pattern" must be a RegExp or string/
   );
+}
+
+// Issue #286: string patterns match and reject the same values as RegExp rules.
+{
+  for (const pattern of ['^[A-Z]+$', /^[A-Z]+$/]) {
+    const schema = { S: { type: 'string', pattern } };
+    assert.strictEqual(validateSchema(schema), undefined);
+    assert.strictEqual(validateEnv(schema, { S: 'ABC' }).S, 'ABC');
+    assert.throws(() => validateEnv(schema, { S: 'abc' }), /S: expected to match \/\^\[A-Z\]\+\$\//);
+  }
+  const email = { E: { type: 'email', pattern: '@example\\.com$' } };
+  assert.strictEqual(validateEnv(email, { E: 'a@example.com' }).E, 'a@example.com');
+  assert.throws(() => validateEnv(email, { E: 'a@example.org' }), /E: expected to match/);
+}
+
+// Issue #286: invalid patterns are schema errors even on absent keys.
+{
+  const invalid = { S: { pattern: '([' } };
+  const invalidGroup = { DB: { prefix: 'DB_', schema: { HOST: { pattern: '([' } } } };
+  for (const [schema, key] of [[invalid, 'S'], [invalidGroup, 'DB_HOST']]) {
+    for (const check of [validateSchema, toJsonSchema, s => validateEnv(s, {}, { throwOnError: false })]) {
+      assert.throws(() => check(schema), e => e instanceof EnvSaafError
+        && e.errors.length === 1 && e.errors[0] === `${key}: "pattern" is not a valid regular expression string`);
+    }
+  }
+}
+
+// Issue #286: string sources cannot enable pattern on non-string rule types.
+{
+  assert.throws(() => validateSchema({ N: { type: 'int', pattern: '^4' } }), e => e instanceof EnvSaafError
+    && e.errors.length === 1 && e.errors[0].startsWith('N: "pattern" only applies to string types'));
+}
+
+// Issue #286: frozen grouped schemas can be reused without rewriting the source.
+{
+  const rule = Object.freeze({ type: 'host', pattern: '^db\\.' });
+  const schema = Object.freeze({ DB: Object.freeze({ prefix: 'DB_', schema: Object.freeze({ HOST: rule }) }) });
+  for (const host of ['db.primary', 'db.replica']) {
+    assert.deepStrictEqual(validateEnv(schema, { DB_HOST: host }), { DB: { HOST: host } });
+  }
+  assert.throws(() => validateEnv(schema, { DB_HOST: 'cache.internal' }), /DB_HOST: expected to match/);
+  assert.strictEqual(toJsonSchema(schema).properties.DB.properties.HOST.pattern, '^db\\.');
+  assert.strictEqual(rule.pattern, '^db\\.');
+}
+
+// Issue #286: changes to a mutable rule do not use a stale compiled pattern.
+{
+  const rule = { pattern: '^A+$' };
+  const schema = { SWITCH: { validate: () => { rule.pattern = '^B+$'; } }, S: rule };
+  assert.strictEqual(validateEnv(schema, { S: 'AAA' }).S, 'AAA');
+  rule.pattern = '^C+$';
+  assert.throws(() => validateEnv(schema, { S: 'AAA' }), /S: expected to match/);
+  assert.strictEqual(validateEnv(schema, { S: 'CCC' }).S, 'CCC');
+  assert.strictEqual(validateEnv(schema, { SWITCH: 'on', S: 'BBB' }).S, 'BBB');
+}
+
+// Issue #286: caller-supplied RegExp flags and state are unchanged.
+{
+  const pattern = /a/gi;
+  const schema = { S: { pattern } };
+  assert.strictEqual(validateSchema(schema), undefined);
+  assert.strictEqual(validateEnv(schema, { S: 'A' }).S, 'A');
+  assert.strictEqual(pattern.lastIndex, 1);
+  assert.throws(() => validateEnv(schema, { S: 'A' }), /S: expected to match \/a\/gi/);
+  assert.strictEqual(pattern.lastIndex, 0);
+  assert.deepStrictEqual(toJsonSchema(schema).properties.S, { type: 'string' });
+}
+
+// Issue #286: JSON Schema keeps the input string and any built-in pattern.
+{
+  const schema = {
+    PATH: { pattern: '^east/west$' },
+    ANY: { pattern: '' },
+    HEX: { type: 'hex', pattern: '^fe' },
+    REGEXP: { pattern: /^east\/west$/ },
+  };
+  assert.strictEqual(validateEnv(schema, { ANY: 'value' }).ANY, 'value');
+  assert.deepStrictEqual(toJsonSchema(schema).properties, {
+    PATH: { type: 'string', pattern: '^east/west$' },
+    ANY: { type: 'string', pattern: '' },
+    HEX: { type: 'string', pattern: '^fe', allOf: [{ pattern: '^[0-9a-fA-F]+$' }] },
+    REGEXP: { type: 'string', pattern: '^east\\/west$' },
+  });
 }
 
 // Issue #33: scanCode finds process.env[`KEY`] template-literal access,
@@ -2206,7 +2289,7 @@ assert.deepStrictEqual(
   assert.throws(unknown, /emial/);
 
   // The invalid option is reported before any environment value is read.
-  assert.throws(() => validateEnv({ K: { type: 'string', pattern: 'not-a-regexp' } }, {}), /"pattern" must be a RegExp/);
+  assert.throws(() => validateEnv({ K: { type: 'string', pattern: null } }, {}), /"pattern" must be a RegExp or string/);
   assert.throws(() => validateEnv({ K: { type: 'string', transform: 'nope' } }, {}), /"transform" must be a function/);
   assert.throws(() => validateEnv({ K: { type: 'number', min: 'x' } }, {}), /"min"/);
   assert.throws(() => validateEnv({ K: { type: 'number', max: 'x' } }, {}), /"max"/);

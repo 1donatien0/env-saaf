@@ -137,7 +137,16 @@ const validatedHost: string = validated.REPLICA_HOST;
 const validatedFlag: boolean = validated.FLAG;
 const validatedNotes: string | undefined = validated.NOTES;
 
-
+// Issue #286: both pattern forms preserve inferred string result types.
+const patterned = validateEnv({
+  NAME: { pattern: '^[A-Z]+$', required: true },
+  MODE: { type: 'string', pattern: /^prod$/i },
+});
+const patternedName: string = patterned.NAME;
+const patternedMode: string | undefined = patterned.MODE;
+void patternedName; void patternedMode;
+// @ts-expect-error pattern is either a string or a RegExp
+validateEnv({ BAD_PATTERN: { pattern: 123 } });
 
 // Issue #228: group rules nest in the inferred result type.
 import { EnvGroupRule } from './index';
@@ -146,7 +155,7 @@ const grouped = validateEnv({
   DB: {
     prefix: 'DB_',
     schema: {
-      HOST: { type: 'host', required: true },
+      HOST: { type: 'host', required: true, pattern: '^db\\.' },
       PORT: { type: 'port', default: 5432 },
       USER: { type: 'string' },
     },
@@ -186,7 +195,7 @@ const maskedWhen: string = masked.WHEN;
 const manual: Masked<{ A: number; B: { C: string[] } }> = { A: '****', B: { C: ['****'] } };
 
 // Issue #229: the export takes an env-saaf schema and returns typed keywords.
-const jsonSchema = toJsonSchema({ PORT: { type: 'port', default: 0 } });
+const jsonSchema = toJsonSchema({ PORT: { type: 'port', default: 0 }, NAME: { pattern: '^[A-Z]+$' } });
 const schemaType: 'object' = jsonSchema.type;
 const minimumPort: number | undefined = jsonSchema.properties.PORT.minimum;
 const requiredKeys: string[] | undefined = jsonSchema.required;
