@@ -6003,3 +6003,22 @@ const formatErrorThrowingHookTest = (async () => {
 Promise.all([watchModeTest, watchModeErrorPathTest, loadEnvAsyncTest, formatErrorThrowingHookTest])
   .then(() => console.log('env-saaf v1.5.0: all tests passed'))
   .catch((err) => { console.error(err); process.exit(1); });
+
+// Issue #321: quoted keys share the env-file key grammar.
+for (const head of ['process.env', 'import.meta.env']) {
+  for (const key of ['DB.PORT', 'MY-KEY', 'PLAIN_KEY']) {
+    for (const quote of ["'", '"', '`']) {
+      assert.deepStrictEqual(scanCode(`${head}[${quote}${key}${quote}]`), [key]);
+      assert.deepStrictEqual(scanCode(`${head}?.[${quote}${key}${quote}]`), [key]);
+    }
+    for (const quote of ["'", '"']) {
+      assert.deepStrictEqual(scanCode(`const { ${quote}${key}${quote}: value } = ${head};`), [key]);
+    }
+  }
+  assert.deepStrictEqual(scanCode(`// ${head}['DB.PORT']`), []);
+  assert.deepStrictEqual(scanCode(`const s = "${head}['DB.PORT']";`), []);
+  assert.deepStrictEqual(scanCode(`${head}['9BAD.KEY']; ${head}[\`DB.\${KEY}\`];`), []);
+  assert.deepStrictEqual(scanCode(`const { A = "x,'FAKE.KEY': z" } = ${head};`), ['A']);
+}
+
+assert.deepStrictEqual(scanCode("const env = process.env; env['DB.PORT']; env[`MY-KEY`];"), ['DB.PORT', 'MY-KEY']);

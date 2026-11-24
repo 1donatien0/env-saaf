@@ -1519,25 +1519,25 @@ function scanCode(text) {
   // Each pattern is paired with the head whose span must be real code.
   const patterns = [
     [/process\.env\.([A-Za-z_][A-Za-z0-9_]*)/g, 'process.env'],
-    [/process\.env\[['"]([A-Za-z_][A-Za-z0-9_]*)['"]\]/g, 'process.env'],
-    // Backtick bracket access with a plain identifier — `process.env[`KEY`]`:
+    [/process\.env\[['"]([A-Za-z_][A-Za-z0-9_.-]*)['"]\]/g, 'process.env'],
+    // Backtick bracket access with a static key — `process.env[`KEY`]`:
     // a template with ${} interpolation cannot be known statically and
     // stays unmatched (the identifier charset excludes $ and {).
-    [/process\.env\[`([A-Za-z_][A-Za-z0-9_]*)`\]/g, 'process.env'],
+    [/process\.env\[`([A-Za-z_][A-Za-z0-9_.-]*)`\]/g, 'process.env'],
     // Vite exposes env through import.meta.env (issue #225) — same shapes.
     [/import\.meta\.env\.([A-Za-z_][A-Za-z0-9_]*)/g, 'import.meta.env'],
-    [/import\.meta\.env\[['"]([A-Za-z_][A-Za-z0-9_]*)['"]\]/g, 'import.meta.env'],
-    [/import\.meta\.env\[`([A-Za-z_][A-Za-z0-9_]*)`\]/g, 'import.meta.env'],
+    [/import\.meta\.env\[['"]([A-Za-z_][A-Za-z0-9_.-]*)['"]\]/g, 'import.meta.env'],
+    [/import\.meta\.env\[`([A-Za-z_][A-Za-z0-9_.-]*)`\]/g, 'import.meta.env'],
     // Optional chaining (issue #222): `process.env?.KEY`, `process.env?.['KEY']`,
     // `process.env?.[`KEY`]` — valid and increasingly common reads, same shapes
     // as the plain forms above.
     [/process\.env\?\.([A-Za-z_][A-Za-z0-9_]*)/g, 'process.env'],
-    [/process\.env\?\.\[['"]([A-Za-z_][A-Za-z0-9_]*)['"]\]/g, 'process.env'],
-    [/process\.env\?\.\[`([A-Za-z_][A-Za-z0-9_]*)`\]/g, 'process.env'],
+    [/process\.env\?\.\[['"]([A-Za-z_][A-Za-z0-9_.-]*)['"]\]/g, 'process.env'],
+    [/process\.env\?\.\[`([A-Za-z_][A-Za-z0-9_.-]*)`\]/g, 'process.env'],
     // Optional chaining on import.meta.env (issue #222) as well.
     [/import\.meta\.env\?\.([A-Za-z_][A-Za-z0-9_]*)/g, 'import.meta.env'],
-    [/import\.meta\.env\?\.\[['"]([A-Za-z_][A-Za-z0-9_]*)['"]\]/g, 'import.meta.env'],
-    [/import\.meta\.env\?\.\[`([A-Za-z_][A-Za-z0-9_]*)`\]/g, 'import.meta.env'],
+    [/import\.meta\.env\?\.\[['"]([A-Za-z_][A-Za-z0-9_.-]*)['"]\]/g, 'import.meta.env'],
+    [/import\.meta\.env\?\.\[`([A-Za-z_][A-Za-z0-9_.-]*)`\]/g, 'import.meta.env'],
   ];
   // The read itself must be code: a `process.env.X` in a comment or a string is
   // not a read. Bracket and destructured reads keep their key in a literal, so
@@ -1550,9 +1550,18 @@ function scanCode(text) {
   const codeView = code.split(MASKED).join(' ');
   const destructure = /(?:const|let|var)\s*\{([^}]+)\}\s*=\s*(?:process\.env|import\.meta\.env)/g;
   for (const m of codeView.matchAll(destructure)) {
+    const start = m.index + m[0].indexOf('{') + 1;
+    let offset = 0;
     for (const part of m[1].split(',')) {
       const name = part.split(':')[0].split('=')[0].trim();
       if (/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) found.add(name);
+      // Split the masked view so commas in defaults cannot invent properties.
+      if (part.trim().startsWith(':')) {
+        const original = src.slice(start + offset, start + offset + part.length);
+        const quoted = /^\s*(['"])([A-Za-z_][A-Za-z0-9_.-]*)\1\s*:/.exec(original);
+        if (quoted) found.add(quoted[2]);
+      }
+      offset += part.length + 1;
     }
   }
   const aliases = new Map();
@@ -1581,7 +1590,7 @@ function scanCode(text) {
     }
   }
   if (aliases.size) {
-    const access = /(?<![#$\p{ID_Continue}])([A-Za-z_$][\w$]*)(?:\.([A-Za-z_]\w*)(?![$\p{ID_Continue}])|\[(['"\x60])([A-Za-z_]\w*)\3\])/gu;
+    const access = /(?<![#$\p{ID_Continue}])([A-Za-z_$][\w$]*)(?:\.([A-Za-z_]\w*)(?![$\p{ID_Continue}])|\[(['"\x60])([A-Za-z_][\w.-]*)\3\])/gu;
     for (const m of src.matchAll(access)) {
       const declaredAt = aliases.get(m[1]);
       if (declaredAt === undefined || declaredAt > m.index || !isCode(m.index, m.index + m[1].length)) continue;
