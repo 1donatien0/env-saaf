@@ -159,6 +159,20 @@ try {
     assert.match(r.stderr, /env-saaf example/);
   }
 
+  // Issue #321: scanner results and template checks agree on quoted env keys.
+  {
+    const dir = mkProject({
+      'src/app.js': "process.env['DB.PORT']; process.env[`MY-KEY`]; const { 'OTHER.KEY': x } = process.env;",
+      '.env.example': 'DB.PORT=5432\nMY-KEY=hello\nOTHER.KEY=value\n',
+    });
+    const scan = run(['scan', dir, '--json'], dir);
+    assert.strictEqual(scan.status, 0);
+    assert.deepStrictEqual(JSON.parse(scan.stdout).vars, ['DB.PORT', 'MY-KEY', 'OTHER.KEY']);
+    const check = run(['check', dir], dir);
+    assert.strictEqual(check.status, 0, check.stdout + check.stderr);
+    assert.match(check.stdout, /all clean/);
+  }
+
   // --- scan: lists used vars on stdout, exit 0 -------------------------------
   {
     const dir = mkProject({ 'src/app.js': SRC_WITH_USAGE, 'lib/util.js': 'module.exports = process.env.PORT;\n' });
