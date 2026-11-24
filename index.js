@@ -8,6 +8,7 @@
 const fs = require('node:fs');
 const net = require('node:net');
 const path = require('node:path');
+const { isProxy } = require('node:util').types;
 
 class EnvSaafError extends Error {
   constructor(errors, message) {
@@ -2105,6 +2106,96 @@ function jsonSchemaForRule(key, rule, required) {
   return property;
 }
 
+function jsonSchemaRequiredPath(key, groupOf, match) {
+  const path = groupOf.get(key) || [key];
+  let constraint = { required: [path[path.length - 1]] };
+  if (match) constraint.properties = { [path[path.length - 1]]: match };
+  for (let i = path.length - 2; i >= 0; i--) {
+    constraint = {
+      required: [path[i]],
+      properties: { [path[i]]: { type: 'object', ...constraint } },
+    };
+  }
+  return constraint;
+}
+
+function isArrayIncludes(method) {
+  const includes = Array.prototype.includes;
+  if (method === includes) return true;
+  if (typeof method !== 'function'
+    || Function.prototype.toString.call(method) !== Function.prototype.toString.call(includes)) return false;
+  // A different realm has its own native function. Other built-ins called
+  // includes (String, TypedArray) do not compare a symbol on an array-like object.
+  try {
+    const entry = Symbol();
+    return Reflect.apply(method, { 0: entry, length: 1 }, [entry]) === true;
+  } catch {
+    return false;
+  }
+}
+
+function jsonSchemaMembershipValues(list) {
+  // A proxy can change membership lookups without changing its descriptors.
+  for (let owner = list; owner !== null; owner = Object.getPrototypeOf(owner)) {
+    if (isProxy(owner)) return;
+  }
+  const descriptor = key => {
+    for (let owner = list; owner !== null; owner = Object.getPrototypeOf(owner)) {
+      const property = Object.getOwnPropertyDescriptor(owner, key);
+      if (property) return property;
+    }
+  };
+  // Array#includes visits indices, not the iterator. Don't infer results
+  // from overridden membership or execute accessors during schema export.
+  if (!isArrayIncludes(descriptor('includes')?.value)) return;
+  const values = [];
+  for (let i = 0; i < list.length; i++) {
+    const entry = descriptor(i);
+    if (!entry) continue;
+    if (!Object.prototype.hasOwnProperty.call(entry, 'value')) return;
+    values.push(entry.value);
+  }
+  return values;
+}
+
+function jsonSchemaRequiredIfMatch(source, condition) {
+  const type = source.type ?? 'string';
+  if (source.validate !== undefined || source.transform !== undefined || type === 'date' || type === 'array') return;
+  const membership = Object.prototype.hasOwnProperty.call(condition, 'in') && condition.in !== undefined;
+  const candidates = membership ? jsonSchemaMembershipValues(condition.in) : [condition.equals];
+  if (!candidates) return;
+  // JSON Schema compares structures; runtime object comparisons use identity.
+  if (type === 'json' && candidates.some(value => value !== null && typeof value === 'object')) return;
+  // Non-JSON primitives cannot match canonical values. Keep other list entries
+  // as typed literals, not env spellings such as 'false' or '01'.
+  const valueType = STRING_TYPES.has(type) ? 'string' : type === 'boolean' ? 'boolean' : 'number';
+  const values = [...new Set(candidates.filter(value => isJsonPrimitive(value)
+    && (type === 'json' || typeof value === valueType)))];
+  if (values.length) return membership ? { enum: values } : { const: values[0] };
+}
+
+function addJsonSchemaRequiredIf(schema, result) {
+  const { flat, groupOf } = flattenSchema(schema);
+  const clauses = [];
+  let grouped = false;
+  for (const [key, rule] of Object.entries(flat)) {
+    const condition = rule.requiredIf;
+    // Runtime consults requiredIf only for a missing key with no default.
+    if (!condition || rule.default !== undefined || !Object.prototype.hasOwnProperty.call(flat, condition.key)) continue;
+    const match = jsonSchemaRequiredIfMatch(flat[condition.key], condition);
+    if (!match) continue;
+    // `properties` alone matches absent values. Require every step of the
+    // source path, as well as the full target path when the condition matches.
+    clauses.push({
+      if: jsonSchemaRequiredPath(condition.key, groupOf, match),
+      then: jsonSchemaRequiredPath(key, groupOf),
+    });
+    grouped = grouped || groupOf.has(key) || groupOf.has(condition.key);
+  }
+  if (clauses.length === 1 && !grouped) Object.assign(result, clauses[0]);
+  else if (clauses.length) result.allOf = clauses;
+}
+
 function toJsonSchema(schema) {
   validateSchema(schema);
   const required = [];
@@ -2112,6 +2203,7 @@ function toJsonSchema(schema) {
     [key, jsonSchemaForRule(key, rule, required)]));
   const result = { $schema: 'https://json-schema.org/draft/2020-12/schema', type: 'object', properties };
   if (required.length) result.required = required;
+  addJsonSchemaRequiredIf(schema, result);
   return result;
 }
 

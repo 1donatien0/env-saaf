@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Added: `toJsonSchema` expresses `requiredIf` on canonical values with `if` / `then`, including conditions across groups (fixes #289).
+
 - Added: groups can contain nested groups, with concatenated env prefixes and nested results at each level. Validation, example generation, JSON Schema export, and file loading support the same structure; circular references and composed-prefix collisions are rejected (fixes #287).
 
 - Fixed: CLI `--schema` loading in `check`, `check --json-schema`, `check --watch`, and `example` now supports ES module schemas (`.mjs` and `"type": "module"` `.js`), unwrapping a sole plain-object `default` export while preserving CommonJS schemas (including keys named `default`), named exports, and module load errors (fixes #285).

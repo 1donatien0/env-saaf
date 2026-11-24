@@ -767,9 +767,24 @@ date-time strings (the schema also accepts the `date` format). The `json` type
 allows any JSON shape. JSON-compatible `choices` become `enum` values without
 re-coercion. Representable defaults are exported in coerced form as annotations;
 JSON Schema does not fill in missing values. Avoid putting secrets in schema
-defaults or choices that will be shared.
+defaults, choices or condition values that will be shared.
 
-**Not represented:** `transform`, `validate`, `requiredIf`, `aliases`, `sensitive`,
+`requiredIf` becomes [conditional validation](https://json-schema.org/understanding-json-schema/reference/conditionals#if-then-else)
+with `if` / `then`, using `const` for `equals` and `enum` for `in`. Multiple or
+grouped conditions use `allOf`. A condition tests a present, canonical value
+without re-coercing it. For groups, use the full env name in `requiredIf.key`;
+the exported test and requirement use the respective nested JSON paths.
+Resolve aliases and apply defaults before validating if they affect the values
+you supply: an omitted discriminator does not match, even if it has a `default`
+annotation. A target with its own default does not become conditionally required.
+
+Conditions on undeclared env keys, discriminators with custom validation or
+transforms, and `date` or `array` discriminators are not exported. Comparisons
+that depend on object identity or custom membership behavior are also omitted.
+For a `json` discriminator, JSON scalars (including `null`) can match; values
+like `Infinity` cannot match canonical JSON and are ignored in membership lists.
+
+**Not represented:** `transform`, `validate`, `aliases`, `sensitive`,
 input trimming and splitting, regular-expression flags (flagged patterns are omitted),
 and defaults that cannot be converted to JSON without loss or depend on local time.
 File existence and the detailed `base64` check remain runtime-only.

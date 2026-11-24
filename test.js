@@ -6266,10 +6266,6 @@ const formatErrorThrowingHookTest = (async () => {
   assert.deepStrictEqual(composed.properties.B64, { type: 'string' });
 }
 
-Promise.all([watchModeTest, watchModeErrorPathTest, watchModeEsmSchemaTest, loadEnvAsyncTest, formatErrorThrowingHookTest])
-  .then(() => console.log('env-saaf v1.5.0: all tests passed'))
-  .catch((err) => { console.error(err); process.exit(1); });
-
 // Issue #321: quoted keys share the env-file key grammar.
 for (const head of ['process.env', 'import.meta.env']) {
   for (const key of ['DB.PORT', 'MY-KEY', 'PLAIN_KEY']) {
@@ -6288,3 +6284,262 @@ for (const head of ['process.env', 'import.meta.env']) {
 }
 
 assert.deepStrictEqual(scanCode("const env = process.env; env['DB.PORT']; env[`MY-KEY`];"), ['DB.PORT', 'MY-KEY']);
+
+// Issue #289: a flat equals condition requires a present discriminator.
+{
+  const schema = {
+    TOKEN: { requiredIf: { key: 'MODE', equals: 'production', in: undefined } },
+    MODE: { type: 'string' },
+  };
+  assert.deepStrictEqual(validateEnv(schema, {}, { throwOnError: false }), { env: {}, errors: [] });
+  assert.deepStrictEqual(validateEnv(schema, { MODE: ' production ' }, { throwOnError: false }), {
+    env: { MODE: 'production' }, errors: ['TOKEN: missing required variable'],
+  });
+  assert.deepStrictEqual(toJsonSchema(schema), {
+    $schema: 'https://json-schema.org/draft/2020-12/schema',
+    type: 'object',
+    properties: { TOKEN: { type: 'string' }, MODE: { type: 'string' } },
+    if: { required: ['MODE'], properties: { MODE: { const: 'production' } } },
+    then: { required: ['TOKEN'] },
+  });
+}
+
+// Issue #289: independent clauses use strict typed equality and membership.
+{
+  const schema = {
+    NAME: { required: true },
+    FLAG: { type: 'boolean' },
+    COUNT: { type: 'int' },
+    DATA: { type: 'json' },
+    CERT: { requiredIf: { key: 'FLAG', equals: false } },
+    NOTE: { requiredIf: { key: 'COUNT', in: [0, 2, 2, '2'] } },
+    TEXT: { requiredIf: { key: 'COUNT', equals: '2' } },
+    EXTRA: { requiredIf: { key: 'DATA', equals: null } },
+  };
+  const result = toJsonSchema(schema);
+  assert.deepStrictEqual(result.required, ['NAME']);
+  assert.deepStrictEqual(result.allOf, [
+    { if: { required: ['FLAG'], properties: { FLAG: { const: false } } }, then: { required: ['CERT'] } },
+    { if: { required: ['COUNT'], properties: { COUNT: { enum: [0, 2] } } }, then: { required: ['NOTE'] } },
+    { if: { required: ['DATA'], properties: { DATA: { const: null } } }, then: { required: ['EXTRA'] } },
+  ]);
+}
+
+// Issue #289: full env names resolve to the correct source and target paths.
+{
+  const schema = {
+    SWITCH: {},
+    APP: { prefix: 'CFG_', schema: {
+      MODE: {},
+      HOST: { required: true },
+      AUTH: { requiredIf: { key: 'SWITCH', equals: 'on' } },
+      CODE: { type: 'hex', pattern: /^ff/, requiredIf: { key: 'CFG_MODE', equals: 'on' } },
+    } },
+    MAIL: { prefix: 'EMAIL_', schema: {
+      TOKEN: { requiredIf: { key: 'CFG_MODE', in: ['on', 'test'] } },
+    } },
+    NOTICE: { requiredIf: { key: 'CFG_MODE', equals: 'on' } },
+  };
+  const result = toJsonSchema(schema);
+  const appOn = {
+    required: ['APP'], properties: {
+      APP: { type: 'object', required: ['MODE'], properties: { MODE: { const: 'on' } } },
+    },
+  };
+  assert.deepStrictEqual(result.allOf, [
+    {
+      if: { required: ['SWITCH'], properties: { SWITCH: { const: 'on' } } },
+      then: { required: ['APP'], properties: { APP: { type: 'object', required: ['AUTH'] } } },
+    },
+    { if: appOn, then: { required: ['APP'], properties: { APP: { type: 'object', required: ['CODE'] } } } },
+    {
+      if: { required: ['APP'], properties: {
+        APP: { type: 'object', required: ['MODE'], properties: { MODE: { enum: ['on', 'test'] } } },
+      } },
+      then: { required: ['MAIL'], properties: { MAIL: { type: 'object', required: ['TOKEN'] } } },
+    },
+    { if: appOn, then: { required: ['NOTICE'] } },
+  ]);
+  assert.strictEqual(result.required, undefined);
+  assert.deepStrictEqual(result.properties.APP.required, ['HOST']);
+  assert.deepStrictEqual(result.properties.APP.properties.CODE, {
+    type: 'string', pattern: '^ff', allOf: [{ pattern: '^[0-9a-fA-F]+$' }],
+  });
+  const single = toJsonSchema({
+    SWITCH: {}, APP: { prefix: 'CFG_', schema: { AUTH: schema.APP.schema.AUTH } },
+  });
+  assert.deepStrictEqual(single.allOf, [result.allOf[0]]);
+}
+
+// Issue #289: aliases and defaults are resolved before matching canonical values.
+{
+  const condition = { key: 'MODE', equals: true };
+  const schema = {
+    MODE: { type: 'boolean', aliases: ['OLD_MODE'], default: 'yes' },
+    TOKEN: { aliases: ['OLD_TOKEN'], default: undefined, requiredIf: condition },
+    PORT: { type: 'int', default: 0, requiredIf: condition },
+  };
+  const options = { throwOnError: false, onWarn: () => {} };
+  assert.deepStrictEqual(validateEnv(schema, {}, options), {
+    env: { MODE: true, PORT: 0 }, errors: ['TOKEN: missing required variable'],
+  });
+  assert.deepStrictEqual(validateEnv(schema, { OLD_MODE: 'on', OLD_TOKEN: 'value' }, options), {
+    env: { MODE: true, TOKEN: 'value', PORT: 0 }, errors: [],
+  });
+  const result = toJsonSchema(schema);
+  assert.deepStrictEqual(result.if, { required: ['MODE'], properties: { MODE: { const: true } } });
+  assert.deepStrictEqual(result.then, { required: ['TOKEN'] });
+  assert.deepStrictEqual(result.properties, {
+    MODE: { type: 'boolean', default: true }, TOKEN: { type: 'string' }, PORT: { type: 'integer', default: 0 },
+  });
+}
+
+// Issue #289: runtime-only or lossy comparisons do not become schema requirements.
+{
+  let calls = 0;
+  const callback = () => { calls++; return 'changed'; };
+  const reference = { active: true };
+  const result = toJsonSchema({
+    MODE: {},
+    TRANSFORMED: { transform: callback },
+    CHECKED: { validate: callback },
+    DATA: { type: 'json' },
+    DATE: { type: 'date' },
+    LIST: { type: 'array' },
+    GOOD: { requiredIf: { key: 'MODE', equals: 'prod' } },
+    EXTERNAL: { requiredIf: { key: 'OUTSIDE', equals: 'prod' } },
+    CHANGED: { requiredIf: { key: 'TRANSFORMED', equals: 'prod' } },
+    CHECK: { requiredIf: { key: 'CHECKED', equals: 'prod' } },
+    REF: { requiredIf: { key: 'DATA', equals: reference } },
+    MIXED: { requiredIf: { key: 'DATA', in: [true, reference] } },
+    NON_FINITE: { requiredIf: { key: 'DATA', in: [Infinity] } },
+    SPARSE: { requiredIf: { key: 'DATA', in: Array(1) } },
+    SERIALIZED_DATE: { requiredIf: { key: 'DATE', equals: '2026-01-31' } },
+    ARRAY_ITEM: { requiredIf: { key: 'LIST', equals: 'first' } },
+  });
+  assert.deepStrictEqual(result.if, { required: ['MODE'], properties: { MODE: { const: 'prod' } } });
+  assert.deepStrictEqual(result.then, { required: ['GOOD'] });
+  assert.strictEqual(result.allOf, undefined);
+  assert.strictEqual(calls, 0);
+}
+
+// Issue #289: non-JSON numbers do not hide representable JSON membership values.
+{
+  const schema = {
+    DATA: { type: 'json' },
+    TOKEN: { requiredIf: { key: 'DATA', in: [true, Infinity, NaN, null] } },
+  };
+  for (const [raw, coerced] of [['true', true], ['null', null]]) {
+    assert.deepStrictEqual(validateEnv(schema, { DATA: raw }, { throwOnError: false }), {
+      env: { DATA: coerced }, errors: ['TOKEN: missing required variable'],
+    });
+  }
+  const result = toJsonSchema(schema);
+  assert.deepStrictEqual(result.if, { required: ['DATA'], properties: { DATA: { enum: [true, null] } } });
+  assert.deepStrictEqual(result.then, { required: ['TOKEN'] });
+}
+
+// Issue #289: membership uses indexed values, not iteration or custom callbacks.
+{
+  const indexed = ['prod'];
+  indexed[Symbol.iterator] = function* () { yield 'dev'; };
+  const overridden = ['prod'];
+  overridden.includes = value => value === 'test';
+  const borrowed = ['prod'];
+  borrowed.includes = String.prototype.includes;
+  let reads = 0;
+  const accessor = ['prod'];
+  Object.defineProperty(accessor, 0, { get: () => { reads++; return 'prod'; } });
+  const schema = {
+    MODE: {},
+    TOKEN: { requiredIf: { key: 'MODE', in: indexed } },
+    CUSTOM: { requiredIf: { key: 'MODE', in: overridden } },
+    BORROWED: { requiredIf: { key: 'MODE', in: borrowed } },
+    ACCESSOR: { requiredIf: { key: 'MODE', in: accessor } },
+  };
+  assert.deepStrictEqual(validateEnv(schema, { MODE: 'dev' }, { throwOnError: false }).errors, []);
+  assert.deepStrictEqual(validateEnv(schema, { MODE: 'prod' }, { throwOnError: false }).errors, [
+    'TOKEN: missing required variable', 'BORROWED: missing required variable', 'ACCESSOR: missing required variable',
+  ]);
+  const before = reads;
+  const result = toJsonSchema(schema);
+  assert.deepStrictEqual(result.if, { required: ['MODE'], properties: { MODE: { enum: ['prod'] } } });
+  assert.deepStrictEqual(result.then, { required: ['TOKEN'] });
+  assert.strictEqual(result.allOf, undefined);
+  assert.strictEqual(reads, before);
+}
+
+// Issue #289: plain membership arrays may come from another JavaScript realm.
+{
+  const members = require('node:vm').runInNewContext("['prod']");
+  const schema = { MODE: {}, TOKEN: { requiredIf: { key: 'MODE', in: members } } };
+  assert.deepStrictEqual(validateEnv(schema, { MODE: 'prod' }, { throwOnError: false }).errors,
+    ['TOKEN: missing required variable']);
+  const result = toJsonSchema(schema);
+  assert.deepStrictEqual(result.if, { required: ['MODE'], properties: { MODE: { enum: ['prod'] } } });
+  assert.deepStrictEqual(result.then, { required: ['TOKEN'] });
+}
+
+// Issue #289: omit proxy-backed membership without dropping ordinary lists.
+{
+  const handler = {
+    get(target, key, receiver) {
+      if (key === 'includes') return value => value === 'stage';
+      return Reflect.get(target, key, receiver);
+    },
+  };
+  const proxy = new Proxy(['prod'], handler);
+  const inherited = Object.setPrototypeOf(['prod'], new Proxy(Array.prototype, handler));
+  for (const members of [proxy, inherited]) {
+    const schema = {
+      MODE: {},
+      OPAQUE: { requiredIf: { key: 'MODE', in: members } },
+      TOKEN: { requiredIf: { key: 'MODE', in: ['prod'] } },
+    };
+    const options = { throwOnError: false };
+    assert.deepStrictEqual(validateEnv(schema, { MODE: 'stage' }, options).errors, ['OPAQUE: missing required variable']);
+    assert.deepStrictEqual(validateEnv(schema, { MODE: 'prod' }, options).errors, ['TOKEN: missing required variable']);
+    const result = toJsonSchema(schema);
+    assert.deepStrictEqual(result.if, { required: ['MODE'], properties: { MODE: { enum: ['prod'] } } });
+    assert.deepStrictEqual(result.then, { required: ['TOKEN'] });
+    assert.strictEqual(result.allOf, undefined);
+  }
+}
+
+// Issue #289: nested groups export nested if/then paths for requiredIf.
+{
+  const schema = {
+    APP: { prefix: 'APP_', schema: {
+      DB: { prefix: 'DB_', schema: {
+        MODE: {},
+        AUTH: { requiredIf: { key: 'APP_DB_MODE', equals: 'tls' } },
+      } },
+      MAIL: { prefix: 'MAIL_', schema: {
+        TOKEN: { requiredIf: { key: 'APP_DB_MODE', in: ['tls', 'mtls'] } },
+      } },
+    } },
+    AUDIT: { requiredIf: { key: 'APP_DB_MODE', equals: 'tls' } },
+  };
+  assert.deepStrictEqual(validateEnv(schema, { APP_DB_MODE: 'tls' }, { throwOnError: false }).errors, [
+    'APP_DB_AUTH: missing required variable',
+    'APP_MAIL_TOKEN: missing required variable',
+    'AUDIT: missing required variable',
+  ]);
+  const result = toJsonSchema(schema);
+  const wrap = (path, leaf) => path.reduceRight((inner, name) => ({
+    required: [name], properties: { [name]: { type: 'object', ...inner } },
+  }), leaf);
+  const dbTls = wrap(['APP', 'DB'], { required: ['MODE'], properties: { MODE: { const: 'tls' } } });
+  assert.deepStrictEqual(result.allOf, [
+    { if: dbTls, then: wrap(['APP', 'DB'], { required: ['AUTH'] }) },
+    {
+      if: wrap(['APP', 'DB'], { required: ['MODE'], properties: { MODE: { enum: ['tls', 'mtls'] } } }),
+      then: wrap(['APP', 'MAIL'], { required: ['TOKEN'] }),
+    },
+    { if: dbTls, then: { required: ['AUDIT'] } },
+  ]);
+}
+
+Promise.all([watchModeTest, watchModeErrorPathTest, watchModeEsmSchemaTest, loadEnvAsyncTest, formatErrorThrowingHookTest])
+  .then(() => console.log('env-saaf v1.5.0: all tests passed'))
+  .catch((err) => { console.error(err); process.exit(1); });

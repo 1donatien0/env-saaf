@@ -2,8 +2,8 @@ export type EnvScalarType = 'string' | 'number' | 'int' | 'boolean' | 'url' | 'p
 export type EnvType = EnvScalarType | 'array';
 
 export type RequiredIfCondition =
-  | { key: string; equals: string | number | boolean; in?: never }
-  | { key: string; in: Array<string | number | boolean>; equals?: never };
+  | { key: string; equals: string | number | boolean | null; in?: never }
+  | { key: string; in: Array<string | number | boolean | null>; equals?: never };
 
 export interface EnvRule {
   type?: EnvType;
@@ -299,13 +299,16 @@ type JsonPrimitive = string | number | boolean | null;
 type JsonValue = JsonPrimitive | JsonValue[] | { [key: string]: JsonValue };
 
 export interface JsonSchemaProperty {
-  type?: 'string' | 'integer' | 'number' | 'boolean' | 'array';
+  type?: 'string' | 'integer' | 'number' | 'boolean' | 'array' | 'object';
+  properties?: Record<string, JsonSchemaProperty>;
+  required?: string[];
   format?: 'uri' | 'email' | 'uuid' | 'ipv4' | 'ipv6' | 'hostname' | 'date' | 'date-time';
   pattern?: string;
   minLength?: number;
   maxLength?: number;
   minimum?: number;
   maximum?: number;
+  const?: JsonPrimitive;
   enum?: JsonPrimitive[];
   default?: JsonValue;
   items?: JsonSchemaProperty;
@@ -314,13 +317,14 @@ export interface JsonSchemaProperty {
   uniqueItems?: boolean;
   anyOf?: JsonSchemaProperty[];
   allOf?: JsonSchemaProperty[];
+  if?: JsonSchemaProperty;
+  then?: JsonSchemaProperty;
 }
 
-export interface JsonSchema {
+export interface JsonSchema extends JsonSchemaProperty {
   $schema: 'https://json-schema.org/draft/2020-12/schema';
   type: 'object';
   properties: Record<string, JsonSchemaProperty>;
-  required?: string[];
 }
 
 /** Describe coerced values as a draft 2020-12 JSON Schema without reading the environment. */
