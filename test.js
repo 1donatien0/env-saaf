@@ -2,6 +2,100 @@
 const assert = require('node:assert');
 const { loadEnv, validateEnv, validateSchema, EnvSaafError, parseEnvFile, scanCode, diffEnv, maskSecrets, maskValue, generateExample, toJsonSchema } = require('./index');
 
+// Issue #296: a hand-rolled structural check for the draft 2020-12 keywords
+// env-saaf emits. Keeping the keyword map local means the whole exported
+// document is checked without adding a schema-validator dependency.
+const DRAFT_2020_12 = 'https://json-schema.org/draft/2020-12/schema';
+const JSON_SCHEMA_TYPES = new Set(['null', 'boolean', 'object', 'array', 'number', 'integer', 'string']);
+
+function isJsonValue(value, seen = new Set()) {
+  if (value === null || typeof value === 'boolean' || typeof value === 'string') return true;
+  if (typeof value === 'number') return Number.isFinite(value);
+  if (typeof value !== 'object') return false;
+  if (seen.has(value)) return false;
+  const next = new Set(seen);
+  next.add(value);
+  if (Array.isArray(value)) return value.every(item => isJsonValue(item, next));
+  const proto = Object.getPrototypeOf(value);
+  if (proto !== Object.prototype && proto !== null) return false;
+  return Object.entries(value).every(([, item]) => isJsonValue(item, next));
+}
+
+function assertDraft202012Schema(schema, path = '#', root = true) {
+  assert.ok(schema && typeof schema === 'object' && !Array.isArray(schema), `${path}: expected a schema object`);
+  for (const [keyword, value] of Object.entries(schema)) {
+    const at = `${path}.${keyword}`;
+    switch (keyword) {
+      case '$schema':
+        assert.ok(root, `${at}: $schema is only allowed at the document root`);
+        assert.strictEqual(value, DRAFT_2020_12, `${at}: expected the draft 2020-12 dialect`);
+        break;
+      case 'type': {
+        const types = Array.isArray(value) ? value : [value];
+        assert.ok(types.length > 0, `${at}: expected at least one type`);
+        for (const type of types) assert.ok(JSON_SCHEMA_TYPES.has(type), `${at}: unknown JSON Schema type ${JSON.stringify(type)}`);
+        break;
+      }
+      case 'properties':
+        assert.ok(value && typeof value === 'object' && !Array.isArray(value), `${at}: expected an object`);
+        for (const [key, child] of Object.entries(value)) {
+          assertDraft202012Schema(child, `${path}.properties[${JSON.stringify(key)}]`, false);
+        }
+        break;
+      case 'required':
+        assert.ok(Array.isArray(value) && value.length > 0, `${at}: expected a non-empty array`);
+        assert.ok(value.every(key => typeof key === 'string'), `${at}: expected an array of strings`);
+        assert.strictEqual(new Set(value).size, value.length, `${at}: duplicate entries`);
+        break;
+      case 'items':
+        assertDraft202012Schema(value, `${path}.items`, false);
+        break;
+      case 'enum':
+        assert.ok(Array.isArray(value) && value.length > 0, `${at}: expected a non-empty array`);
+        assert.ok(value.every(item => isJsonValue(item)), `${at}: expected JSON values`);
+        break;
+      case 'const':
+      case 'default':
+        assert.ok(isJsonValue(value), `${at}: expected a JSON value`);
+        break;
+      case 'minimum':
+      case 'maximum':
+        assert.ok(typeof value === 'number' && Number.isFinite(value), `${at}: expected a finite number`);
+        break;
+      case 'minLength':
+      case 'maxLength':
+      case 'minItems':
+      case 'maxItems':
+        assert.ok(Number.isInteger(value) && value >= 0, `${at}: expected a non-negative integer`);
+        break;
+      case 'uniqueItems':
+      case 'writeOnly':
+        assert.strictEqual(typeof value, 'boolean', `${at}: expected a boolean`);
+        break;
+      case 'pattern':
+      case 'format':
+        assert.strictEqual(typeof value, 'string', `${at}: expected a string`);
+        break;
+      case 'allOf':
+      case 'anyOf':
+        assert.ok(Array.isArray(value) && value.length > 0, `${at}: expected a non-empty array`);
+        value.forEach((child, i) => assertDraft202012Schema(child, `${at}[${i}]`, false));
+        break;
+      case 'if':
+      case 'then':
+      case 'else':
+        assertDraft202012Schema(value, at, false);
+        break;
+      default:
+        assert.fail(`${at}: unknown keyword ${JSON.stringify(keyword)}`);
+    }
+  }
+  if (root) {
+    assert.strictEqual(schema.$schema, DRAFT_2020_12, `${path}: missing $schema`);
+    assert.strictEqual(schema.type, 'object', `${path}: root must be an object schema`);
+  }
+}
+
 // Issue #229: JSON Schema export
 {
   const draft = 'https://json-schema.org/draft/2020-12/schema';
@@ -195,6 +289,43 @@ const { loadEnv, validateEnv, validateSchema, EnvSaafError, parseEnvFile, scanCo
     properties: { PORT: { type: 'integer', minimum: 0, maximum: 65535 }, NAME: { type: 'string' } },
     required: ['PORT'],
   });
+
+  // Issue #296: check the complete exported documents, not just keyword mappings.
+  {
+    const comprehensive = {
+      NAME: { type: 'string', required: true, minLength: 1 },
+      MODE: { type: 'string', choices: ['dev', 'prod'], default: 'dev', minLength: 2, maxLength: 8, pattern: /^[a-z]+$/ },
+      RETRIES: { type: 'int', min: 0, max: 5, choices: [0, 2], default: '0' },
+      RATIO: { type: 'number', min: -0.5, max: 0, default: '-0.25' },
+      DEBUG: { type: 'boolean', default: 'no' },
+      PAYLOAD: { type: 'json', default: '{"ok":true}' },
+      WHEN: { type: 'date', default: '2026-01-31' },
+      URL: { type: 'url', protocols: ['https'] },
+      TAGS: { type: 'array', of: 'string', choices: ['a', 'b'], minItems: 1, maxItems: 3, unique: true, default: ['a'] },
+      PORTS: { type: 'array', of: 'port', minItems: 0, maxItems: 2, default: '0;443' },
+      SECRET: { type: 'string', sensitive: true },
+      HEX: { type: 'hex', length: 4 },
+      DB: { prefix: 'DB_', schema: { HOST: { type: 'host', required: true }, PORT: { type: 'port', default: 5432 } } },
+      TOKEN: { type: 'string', requiredIf: { key: 'MODE', equals: 'prod' } },
+    };
+    for (const document of [toJsonSchema(rules), options, result, toJsonSchema(comprehensive)]) {
+      assertDraft202012Schema(document);
+    }
+
+    // Prove the checker rejects malformed output rather than rubber-stamping it.
+    const broken = toJsonSchema({ PORT: { type: 'port', required: true } });
+    broken.properties.PORT.minimum = 'x';
+    assert.throws(() => assertDraft202012Schema(broken), /minimum: expected a finite number/);
+    const typo = toJsonSchema({ PORT: { type: 'port' } });
+    typo.properties.PORT.minumum = 0;
+    assert.throws(() => assertDraft202012Schema(typo), /unknown keyword "minumum"/);
+    const badRequired = toJsonSchema({ PORT: { type: 'port', required: true } });
+    badRequired.required = 'PORT';
+    assert.throws(() => assertDraft202012Schema(badRequired), /#\.required: expected a non-empty array/);
+    const missingDraft = toJsonSchema({ PORT: { type: 'port' } });
+    delete missingDraft.$schema;
+    assert.throws(() => assertDraft202012Schema(missingDraft), /missing \$schema/);
+  }
 }
 
 // v0.1.0 core

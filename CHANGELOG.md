@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Added: tests validate complete `toJsonSchema` documents against the draft 2020-12 keyword shapes with a hand-rolled, zero-dependency checker, covering all types, groups, choices, defaults, bounds, arrays and `requiredIf` (fixes #296).
+
 - Added: `toJsonSchema` expresses `requiredIf` on canonical values with `if` / `then`, including conditions across groups (fixes #289).
 
 - Added: groups can contain nested groups, with concatenated env prefixes and nested results at each level. Validation, example generation, JSON Schema export, and file loading support the same structure; circular references and composed-prefix collisions are rejected (fixes #287).
