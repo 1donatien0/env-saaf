@@ -669,11 +669,11 @@ CLI output is plain text by default, including in pipes and CI. For scripts that
 npx env-saaf --version      # print the installed version
 npx env-saaf scan ./src     # every env var your code actually uses
                            # scans .js/.cjs/.mjs/.ts/.mts/.cts/.tsx/.jsx and .vue/.svelte/.astro components
-npx env-saaf check .        # code vs .env.example diff — exit 1 on any finding (CI-ready)
+npx env-saaf check .        # compare code against .env.example
 npx env-saaf check . --file .env.sample  # compare against a differently-named template file instead
-npx env-saaf check . --json # machine-readable JSON output (ok/missing/extra/unused) for CI or tooling
+npx env-saaf check . --json # machine-readable check results for CI or tooling
 npx env-saaf check . --schema ./env.schema.js  # also validate the values in .env against a schema — exit 1 on a type error
-npx env-saaf scan ./src --json  # JSON list of used vars
+npx env-saaf scan ./src --json  # JSON object containing the used vars
 npx env-saaf check . --watch    # re-run check whenever the code, .env.example/.env or schema changes (Ctrl-C to stop)
 npx env-saaf example ./src  # draft a .env.example from a code scan
 npx env-saaf example ./src --write  # save the draft to .env.example (refuses, exit 1, when the scan finds no variables)
@@ -695,7 +695,23 @@ When a real `.env` sits next to the template, `check` also compares their keys: 
 
 The scanner finds dot access and static bracket keys through simple local aliases declared with `const`, `let` or `var`, such as `const env = process.env; env.PORT`. This also works with `import.meta.env`. The text scanner tracks reads after declaration. Reassignment, shadowing, alias chains and destructuring through an alias are outside its scope.
 
-`check` exits 1 whenever it prints any finding, and `--json` `ok` carries the same value, so a CI job fails exactly when the output reports a problem; a fully clean project exits 0. `UNUSED` counts as a finding too: a key left in the template after its code usage is gone fails the run, so remove it from the template when you remove the last usage. The one exception is a project with no `process.env` usage at all — a fresh scaffold, for example: `check` then passes with a single note (a `note` field in `--json`) instead of one `UNUSED` line per key, because there is no code for the template to drift from yet.
+#### Exit codes
+
+These codes describe a single CLI run.
+
+| Code | Meaning |
+| --- | --- |
+| `0` | The command completed successfully. Its output may include warnings or notes. |
+| `1` | A check found drift or invalid values, or the command refused to write its output. |
+| `2` | Usage or input error, such as an unknown command, a missing project directory, or an invalid input file. |
+
+- `check` exits `1` for missing keys, unused template keys, differences between `.env` and the template, or schema validation failures. If no code reads environment variables and unused template keys are the only finding, it exits `0` with a scaffold note. In comparison JSON, `ok: true` means exit `0` and `ok: false` means exit `1`. Usage and input errors such as a missing or malformed template exit `2` with `ok: false` and an `error` field in JSON mode.
+- `scan` exits `0` even when it finds unused keys or no environment variable reads. In JSON mode, `ok: true` accompanies `vars` and any template comparison appears in `unused`. A malformed template or missing directory exits `2` with `ok: false` and an `error` field in JSON mode.
+- `example` exits `0` when it prints or writes a draft. Printing with no discovered keys still succeeds. Writing a scan-based draft with no keys, or overwriting an existing output without `--force`, exits `1`. An unloadable schema exits `2`.
+- `init` exits `0` when it creates the scaffold or infers a schema. An existing output without `--force` exits `1`. A missing `--from-example` input exits `2`.
+
+`example` and `init` use text output. Passing `--json` to either command exits `2` with a JSON error object containing `ok: false` and `error`.
+
 
 `--schema` is opt-in: without it, `check` only compares key presence. With it, `check` loads the schema file (`module.exports = { PORT: { type: 'port', required: true } }`, resolved relative to the checked directory) and runs the same `validateEnv` the library uses over the values of the real `.env` file. A type error is reported as `INVALID: PORT: expected a port (0-65535, e.g. 3000), got "not-a-port"` and fails the check (exit 1); in `--json` mode the failures appear in the `invalid` field. An explicit `--file` names the file to validate instead; with no `.env` file and no explicit `--file`, the schema step is skipped — the template's placeholders are not real values. A schema file that cannot be loaded (or does not export a schema object) is a usage error: a clear message and exit 2. With `--json-schema`, `check` prints the `--schema` file as a draft 2020-12 JSON Schema document to stdout instead of running the check, so editors and CI validators can consume it directly; the `.env.example` is never read, so a schema converts even before an example file exists. Without `--schema` there is nothing to convert, so the flag is a usage error (exit 2).
 
@@ -726,7 +742,7 @@ jobs:
       - run: npx env-saaf check .
 ```
 
-Real secrets come from the repository's Actions secrets (Settings, Secrets and variables, Actions), never from the repo: commit only `.env.example` and keep `.env` in `.gitignore`. The `.env` above exists only inside the job's temporary checkout. `check` compares key names only and never prints values, so a secret does not end up in the log. Without a `.env` the job still compares code and `.env.example`; with one it also reports `EXTRA in .env` / `MISSING in .env` keys (available since 1.4.0; with 1.3.0 `check` compares code and `.env.example` only). Any finding exits 1 and fails the job.
+Real secrets come from the repository's Actions secrets (Settings, Secrets and variables, Actions), never from the repo: commit only `.env.example` and keep `.env` in `.gitignore`. The `.env` above exists only inside the job's temporary checkout. `check` compares key names only and never prints values, so a secret does not end up in the log. Without a `.env` the job still compares code and `.env.example`; with one it also reports `EXTRA in .env` / `MISSING in .env` keys (available since 1.4.0; with 1.3.0 `check` compares code and `.env.example` only). The final step uses the CLI exit status directly. Exit `0` passes the step, exit `1` fails it on drift, and exit `2` fails it on a usage or input error.
 
 Two limits of the optional `.env` step: a key is only *missing* when it is absent, so a secret that is not set still writes `API_KEY=` with an empty value and passes the key check (`check` is not a value check; use `validateEnv` at startup for that). And `printf` writes each secret verbatim, so keep every secret on a single line; a multi-line secret would be read as extra `NAME=value` entries.
 
