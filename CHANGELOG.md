@@ -7,6 +7,11 @@
   instead of living only as README snippets. Both fail with the env-saaf message
   when a required value is missing (fixes #364).
 
+- Added: `toJsonSchema` emits a `pattern` for `base64` rules, so a consumer
+  validating against the exported schema accepts exactly the standard,
+  unpadded and URL-safe forms the runtime accepts and rejects a mixed alphabet
+  or bad padding (fixes #351).
+
 - Fixed: `validateSchema` rejects `required: true` together with a `default` (the default means the key can never be missing, so `required` was dead config). The `init` starter schema no longer sets both on `PORT` (fixes #340).
 
 - Fixed: duration bound errors name the duration and show milliseconds for numeric bounds, while preserving explicit units in string bounds (fixes #341).
