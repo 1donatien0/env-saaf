@@ -7183,6 +7183,67 @@ assert.deepStrictEqual(scanCode("const env = process.env; env['DB.PORT']; env[`M
       { file: '-', line: 1 },
       { file: '-', line: 3 },
     ]);
+
+    // Prototype-sensitive keys must not crash either locations builder.
+    const protoKeys = 'process.env.constructor;\nprocess.env.__proto__;\nprocess.env.toString;\n';
+    const protoScan = scanCodeLocations(protoKeys);
+    assert.deepStrictEqual(protoScan.vars, ['__proto__', 'constructor', 'toString']);
+    assert.deepStrictEqual(protoScan.locations.constructor, [{ file: '-', line: 1 }]);
+    assert.deepStrictEqual(protoScan.locations.__proto__, [{ file: '-', line: 2 }]);
+    assert.deepStrictEqual(protoScan.locations.toString, [{ file: '-', line: 3 }]);
+    assert.ok(Object.prototype.hasOwnProperty.call(protoScan.locations, '__proto__'));
+    assert.ok(Object.prototype.hasOwnProperty.call(protoScan.locations, 'constructor'));
+    assert.ok(Object.prototype.hasOwnProperty.call(protoScan.locations, 'toString'));
+
+    // Bare CR (and CRLF) line breaks: 1-based lines without double-counting CRLF.
+    const bareCr = scanCodeLocations('process.env.A;\rprocess.env.B;\r');
+    assert.deepStrictEqual(bareCr.locations.A, [{ file: '-', line: 1 }]);
+    assert.deepStrictEqual(bareCr.locations.B, [{ file: '-', line: 2 }]);
+    const crlf = scanCodeLocations('process.env.A;\r\nprocess.env.B;\r\n');
+    assert.deepStrictEqual(crlf.locations.A, [{ file: '-', line: 1 }]);
+    assert.deepStrictEqual(crlf.locations.B, [{ file: '-', line: 2 }]);
+
+    // Directory builder: same prototype keys via synthetic files only.
+    const protoDir = fs.mkdtempSync(path.join(os.tmpdir(), 'env-saaf-335-proto-'));
+    try {
+      fs.writeFileSync(path.join(protoDir, 'c.js'), 'process.env.constructor;\n');
+      fs.writeFileSync(path.join(protoDir, 'p.js'), 'process.env.__proto__;\n');
+      fs.writeFileSync(path.join(protoDir, 't.js'), 'process.env.toString;\n');
+      const dirProto = scanDirLocations(protoDir);
+      assert.deepStrictEqual(dirProto.vars, ['__proto__', 'constructor', 'toString']);
+      assert.deepStrictEqual(dirProto.locations.constructor, [{ file: 'c.js', line: 1 }]);
+      assert.deepStrictEqual(dirProto.locations.__proto__, [{ file: 'p.js', line: 1 }]);
+      assert.deepStrictEqual(dirProto.locations.toString, [{ file: 't.js', line: 1 }]);
+      const dirJson = run(['scan', protoDir, '--json']);
+      assert.strictEqual(dirJson.status, 0);
+      const dirParsed = JSON.parse(dirJson.stdout);
+      assert.deepStrictEqual(dirParsed.vars, ['__proto__', 'constructor', 'toString']);
+      assert.deepStrictEqual(dirParsed.locations.constructor, [{ file: 'c.js', line: 1 }]);
+      assert.deepStrictEqual(dirParsed.locations.__proto__, [{ file: 'p.js', line: 1 }]);
+      assert.deepStrictEqual(dirParsed.locations.toString, [{ file: 't.js', line: 1 }]);
+      assert.strictEqual(run(['scan', protoDir]).stdout, '__proto__\nconstructor\ntoString\n');
+    } finally {
+      fs.rmSync(protoDir, { recursive: true, force: true });
+    }
+
+    // Stdin --json: prototype keys and bare-CR line numbers through the CLI helper path.
+    const runStdin = (args, input) => spawnSync(process.execPath, [cli, ...args], {
+      encoding: 'utf8',
+      input,
+    });
+    const stdinProto = runStdin(['scan', '--stdin', '--json'], protoKeys);
+    assert.strictEqual(stdinProto.status, 0, stdinProto.stderr);
+    const stdinProtoJson = JSON.parse(stdinProto.stdout);
+    assert.strictEqual(stdinProtoJson.ok, true);
+    assert.deepStrictEqual(stdinProtoJson.vars, ['__proto__', 'constructor', 'toString']);
+    assert.deepStrictEqual(stdinProtoJson.locations.constructor, [{ file: '-', line: 1 }]);
+    assert.deepStrictEqual(stdinProtoJson.locations.__proto__, [{ file: '-', line: 2 }]);
+    assert.deepStrictEqual(stdinProtoJson.locations.toString, [{ file: '-', line: 3 }]);
+    const stdinCr = runStdin(['scan', '--stdin', '--json'], 'process.env.A;\rprocess.env.B;\r');
+    assert.strictEqual(stdinCr.status, 0, stdinCr.stderr);
+    const stdinCrLoc = JSON.parse(stdinCr.stdout).locations;
+    assert.deepStrictEqual(stdinCrLoc.A, [{ file: '-', line: 1 }]);
+    assert.deepStrictEqual(stdinCrLoc.B, [{ file: '-', line: 2 }]);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }

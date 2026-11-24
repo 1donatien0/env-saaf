@@ -1659,9 +1659,23 @@ function codeOnly(src) {
   return out.join('');
 }
 
-/** 1-based line number of a character index in `text` (counts `\n` before the index). */
+/**
+ * 1-based line number of a character index in `text`.
+ * Counts LF, CRLF, and bare CR (without double-counting CRLF).
+ */
 function lineNumberAt(text, index) {
-  return String(text).slice(0, index).split('\n').length;
+  const s = String(text);
+  let line = 1;
+  for (let i = 0; i < index; i++) {
+    const c = s[i];
+    if (c === '\r') {
+      line++;
+      if (s[i + 1] === '\n') i++;
+    } else if (c === '\n') {
+      line++;
+    }
+  }
+  return line;
 }
 
 /**
@@ -1774,16 +1788,35 @@ function compareLocations(a, b) {
   return 0;
 }
 
+/** Own-property write so keys like `__proto__` / `constructor` cannot hit Object.prototype. */
+function setLocationEntries(target, key, entries) {
+  Object.defineProperty(target, key, {
+    value: entries,
+    enumerable: true,
+    writable: true,
+    configurable: true,
+  });
+}
+
 function buildLocationsMap(reads, file) {
-  const locations = {};
+  // Map accumulation is prototype-safe for keys like constructor / __proto__ / toString.
+  const byKey = new Map();
   // Push in reverse encounter order so sorting must restore file/line order.
   for (let i = reads.length - 1; i >= 0; i--) {
     const { key, index, text } = reads[i];
     const entry = { file, line: lineNumberAt(text, index) };
-    if (!locations[key]) locations[key] = [];
-    locations[key].push(entry);
+    let list = byKey.get(key);
+    if (!list) {
+      list = [];
+      byKey.set(key, list);
+    }
+    list.push(entry);
   }
-  for (const key of Object.keys(locations)) locations[key].sort(compareLocations);
+  const locations = {};
+  for (const [key, entries] of byKey) {
+    entries.sort(compareLocations);
+    setLocationEntries(locations, key, entries);
+  }
   return locations;
 }
 
@@ -1804,7 +1837,11 @@ function scanCodeLocations(text, file = '-') {
   const vars = [...new Set(reads.map((r) => r.key))].sort();
   const locations = buildLocationsMap(reads, file);
   // Every reported variable gets a locations entry, even when somehow empty.
-  for (const key of vars) if (!locations[key]) locations[key] = [];
+  for (const key of vars) {
+    if (!Object.prototype.hasOwnProperty.call(locations, key)) {
+      setLocationEntries(locations, key, []);
+    }
+  }
   return { vars, locations };
 }
 
@@ -1865,16 +1902,22 @@ function scanDirLocations(dir) {
     }
   }
   const vars = [...new Set(reads.map((r) => r.key))].sort();
-  const locations = {};
+  const byKey = new Map();
   for (let i = reads.length - 1; i >= 0; i--) {
     const { key, index, text, file } = reads[i];
     const entry = { file, line: lineNumberAt(text, index) };
-    if (!locations[key]) locations[key] = [];
-    locations[key].push(entry);
+    let list = byKey.get(key);
+    if (!list) {
+      list = [];
+      byKey.set(key, list);
+    }
+    list.push(entry);
   }
+  const locations = {};
   for (const key of vars) {
-    if (!locations[key]) locations[key] = [];
-    locations[key].sort(compareLocations);
+    const entries = byKey.get(key) || [];
+    entries.sort(compareLocations);
+    setLocationEntries(locations, key, entries);
   }
   return { vars, locations };
 }
