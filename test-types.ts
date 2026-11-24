@@ -199,6 +199,14 @@ const jsonSchema = toJsonSchema({ PORT: { type: 'port', default: 0 }, NAME: { pa
 const schemaType: 'object' = jsonSchema.type;
 const minimumPort: number | undefined = jsonSchema.properties.PORT.minimum;
 const requiredKeys: string[] | undefined = jsonSchema.required;
+const discriminator: string | number | boolean | null | undefined = jsonSchema.if?.properties?.MODE.const;
+const conditionalKeys: string[] | undefined = jsonSchema.then?.required;
+const groupConditionKeys: string[] | undefined = jsonSchema.allOf?.[0].then?.properties?.APP.required;
+toJsonSchema({
+  DATA: { type: 'json' },
+  A: { requiredIf: { key: 'DATA', equals: null } },
+  B: { requiredIf: { key: 'DATA', in: [true, null] } },
+});
 // @ts-expect-error — schema bounds are numbers, not strings
 const badBound: string = jsonSchema.properties.PORT.minimum;
 // @ts-expect-error — accepts env-saaf rules, not a JSON Schema document
