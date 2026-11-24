@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Fixed: duration bound errors name the duration and show milliseconds for numeric bounds, while preserving explicit units in string bounds (fixes #341).
+
 - Docs: document CLI exit codes and JSON results for `check`, `scan`, `example` and `init` (fixes #360).
 
 - Fixed: `scanDir` skips `dist`, `build`, `coverage`, `.next`, `out` and `target` (and `node_modules`/`.git*` as before), so a stale build output no longer makes an unused key look used (fixes #334).
