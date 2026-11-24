@@ -7,6 +7,11 @@
   instead of living only as README snippets. Both fail with the env-saaf message
   when a required value is missing (fixes #364).
 
+- Added: a near-miss hint on a missing required key and on a strict-mode extra
+  when a set key is the same name ignoring case or one edit away (a `PROT` /
+  `PORT` swap), e.g. `PORT: missing required variable (did you mean PROT? it is
+  set but not in the schema)`. Only key names are suggested (fixes #349).
+
 - Fixed: `validateSchema` rejects `required: true` together with a `default` (the default means the key can never be missing, so `required` was dead config). The `init` starter schema no longer sets both on `PORT` (fixes #340).
 
 - Fixed: duration bound errors name the duration and show milliseconds for numeric bounds, while preserving explicit units in string bounds (fixes #341).

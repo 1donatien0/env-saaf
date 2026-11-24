@@ -950,6 +950,7 @@ function validateEnvCore(schema, env, options) {
     throw new TypeError('env-saaf: "formatError" option must be a function');
   }
   const warn = options.onWarn || ((msg) => console.warn(msg));
+  const setKeys = Object.keys(env).filter((k) => env[k] !== undefined && env[k] !== '');
   if (options.strict) {
     const knownAliases = new Set();
     for (const rule of Object.values(flat)) {
@@ -957,11 +958,14 @@ function validateEnvCore(schema, env, options) {
         for (const alias of rule.aliases) knownAliases.add(alias);
       }
     }
+    const declaredKeys = Object.keys(flat);
     for (const key of Object.keys(env)) {
       if (!Object.prototype.hasOwnProperty.call(flat, key)
         && !knownAliases.has(key)
         && env[key] !== undefined && env[key] !== '') {
-        errors.push(`${key}: set but not in schema (strict mode)`);
+        const hint = nearMissKey(key, declaredKeys);
+        errors.push(`${key}: set but not in schema (strict mode)`
+          + (hint ? ` (did you mean ${hint}? it is declared in the schema)` : ''));
       }
     }
   }
@@ -1019,7 +1023,15 @@ function validateEnvCore(schema, env, options) {
     if (raw === undefined || raw === '') {
       if (rule.default !== undefined) { raw = rule.default; usingDefault = true; }
       else {
-        if (rule.required) errors.push(`${key}: missing required variable`);
+        if (rule.required) {
+          // Issue #349: a set-but-undeclared near miss is the usual cause; a
+          // case-only mismatch always qualifies. Names only, never values.
+          const hint = nearMissKey(key, setKeys.filter((k) => k !== key));
+          const where = hint && !Object.prototype.hasOwnProperty.call(flat, hint)
+            ? 'it is set but not in the schema' : 'it is set';
+          errors.push(`${key}: missing required variable`
+            + (hint ? ` (did you mean ${hint}? ${where})` : ''));
+        }
         else if (rule.requiredIf !== undefined) pendingRequiredIf.push([key, rule.requiredIf]);
         continue;
       }
@@ -1231,7 +1243,13 @@ function validateEnvCore(schema, env, options) {
     const matched = Object.prototype.hasOwnProperty.call(cond, 'in') && cond.in !== undefined
       ? cond.in.includes(refVal)
       : refVal === cond.equals;
-    if (matched) errors.push(`${key}: missing required variable`);
+    if (matched) {
+      const hint = nearMissKey(key, setKeys.filter((k) => k !== key));
+      const where = hint && !Object.prototype.hasOwnProperty.call(flat, hint)
+        ? 'it is set but not in the schema' : 'it is set';
+      errors.push(`${key}: missing required variable`
+        + (hint ? ` (did you mean ${hint}? ${where})` : ''));
+    }
   }
   // Non-throwing mode lives in the public wrapper below; the core always
   // returns both the values and the errors (issue #55).
@@ -1257,6 +1275,43 @@ function formatErrorMessage(errors, schema, options) {
     if (typeof formatted === 'string') message = formatted;
   }
   return message;
+}
+
+/** Damerau-Levenshtein distance (an adjacent swap is one edit), for key hints (issue #349). */
+function editDistance(a, b) {
+  if (a === b) return 0;
+  if (Math.abs(a.length - b.length) > 1) return 2; // only one-edit suggestions matter
+  const d = Array.from({ length: a.length + 1 }, () => new Array(b.length + 1).fill(0));
+  for (let i = 0; i <= a.length; i++) d[i][0] = i;
+  for (let j = 0; j <= b.length; j++) d[0][j] = j;
+  for (let i = 1; i <= a.length; i++) {
+    for (let j = 1; j <= b.length; j++) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      d[i][j] = Math.min(d[i - 1][j] + 1, d[i][j - 1] + 1, d[i - 1][j - 1] + cost);
+      if (i > 1 && j > 1 && a[i - 1] === b[j - 2] && a[i - 2] === b[j - 1]) {
+        d[i][j] = Math.min(d[i][j], d[i - 2][j - 2] + 1);
+      }
+    }
+  }
+  return d[a.length][b.length];
+}
+
+/** One conservative near-miss for `key`, or null: same name ignoring case, or one edit. */
+function nearMissKey(key, candidates) {
+  if (key.length < 3) return null;
+  let best = null;
+  let bestDistance = 2;
+  for (const candidate of candidates) {
+    if (candidate === key || candidate.length < 3) continue;
+    const distance = candidate.toLowerCase() === key.toLowerCase() ? 0 : editDistance(key, candidate);
+    if (distance < bestDistance || (distance === bestDistance && best !== null && candidate < best)) {
+      if (distance <= 1) {
+        best = candidate;
+        bestDistance = distance;
+      }
+    }
+  }
+  return best;
 }
 
 function validateEnv(schema, env = process.env, options = {}) {

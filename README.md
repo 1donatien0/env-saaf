@@ -198,6 +198,8 @@ const env = validateEnv(schema, process.env, { strict: true });
 // throws EnvSaafError listing e.g. "DATABSE_URL: set but not in schema (strict mode)"
 ```
 
+A near miss is named: when a required key is missing and a set-but-undeclared key is the same name ignoring case or one edit away (a `PROT`/`PORT` swap), the message ends with `(did you mean PROT? it is set but not in the schema)`. The strict-mode extra gets the matching hint in the other direction. Only key names are suggested — values are never echoed, even for `sensitive` rules.
+
 Default stays off — many apps share one environment with other tools.
 
 ### Renaming variables safely with `aliases`
