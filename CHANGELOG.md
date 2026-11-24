@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Fixed: CLI `--schema` loading in `check`, `check --json-schema`, `check --watch`, and `example` now supports ES module schemas (`.mjs` and `"type": "module"` `.js`), unwrapping a sole plain-object `default` export while preserving CommonJS schemas (including keys named `default`), named exports, and module load errors (fixes #285).
+
 - Fixed: grouped result objects are frozen along with the top-level result in `validateEnv`, `loadEnv`, and `loadEnvAsync`, while rule values keep their existing mutability (fixes #284).
 
 - Added: `toJsonSchema` emits the `semver` validation `pattern` on scalar `semver` rules and `array` rules with `of: 'semver'` (fixes #303).

@@ -5548,6 +5548,61 @@ const watchModeErrorPathTest = (async () => {
   console.log('watch-mode error-path tests passed');
 })();
 
+// Issue #285: watch mode picks up edits and syntax errors in an ESM (.mjs) --schema file.
+const watchModeEsmSchemaTest = (async () => {
+  const { spawn } = require('node:child_process');
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const path = require('node:path');
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'env-saaf-watch-esm-'));
+  try {
+    fs.writeFileSync(path.join(dir, 'app.js'), 'console.log(process.env.PORT);\n');
+    fs.writeFileSync(path.join(dir, '.env.example'), 'PORT=\n');
+    fs.writeFileSync(path.join(dir, '.env'), 'PORT=3000\n');
+    fs.writeFileSync(path.join(dir, 'env.schema.mjs'), 'export default { PORT: { type: "int", min: 1, max: 65535 } };\n');
+    const childEnv = { PATH: process.env.PATH || '' };
+    if (process.platform === 'win32') { if (process.env.SYSTEMROOT) childEnv.SYSTEMROOT = process.env.SYSTEMROOT; }
+    else if (process.env.HOME) childEnv.HOME = process.env.HOME;
+    const child = spawn(process.execPath, [path.join(__dirname, 'cli.js'), 'check', dir, '--schema', 'env.schema.mjs', '--watch'], { cwd: dir, env: childEnv });
+    let out = '';
+    child.stdout.on('data', (d) => { out += d; });
+    child.stderr.on('data', (d) => { out += d; });
+    let exited = null;
+    child.on('exit', (code) => { exited = code; });
+    const waitFor = async (pred, what, timeoutMs = 8000) => {
+      const start = Date.now();
+      while (!(typeof pred === 'function' ? pred() : pred.test(out))) {
+        if (Date.now() - start > timeoutMs) throw new Error(`timed out waiting for ${what}; output so far:\n${out}`);
+        await sleep(50);
+      }
+    };
+    const runCount = () => (out.match(/check finished, exit/g) || []).length;
+
+    await waitFor(() => /all clean/.test(out) && /check finished, exit 0/.test(out), 'initial clean run with .mjs schema');
+    assert.strictEqual(runCount(), 1);
+
+    // Editing the .mjs schema reloads the new export default without stale module caching.
+    fs.writeFileSync(path.join(dir, 'env.schema.mjs'), 'export default { PORT: { type: "int", min: 1, max: 100 } };\n');
+    await waitFor(() => /INVALID: PORT/.test(out) && /check finished, exit 1/.test(out) && runCount() >= 2, 're-run after .mjs schema edit');
+
+    // A broken .mjs edit mid-watch reports exit 2 and keeps watching; fixing it recovers.
+    fs.writeFileSync(path.join(dir, 'env.schema.mjs'), 'export default {{{\n');
+    await waitFor(() => /cannot load schema env\.schema\.mjs/.test(out) && /check finished, exit 2/.test(out) && runCount() >= 3, 'broken .mjs edit reports exit 2');
+    await sleep(300);
+    assert.strictEqual(exited, null, 'watcher must survive a broken .mjs schema');
+
+    fs.writeFileSync(path.join(dir, 'env.schema.mjs'), 'export default { PORT: { type: "port", required: true } };\n');
+    await waitFor(() => /check finished, exit 0/.test(out) && runCount() >= 4, 'recovery after fixing .mjs schema');
+
+    const exitCode = await new Promise((resolve) => { child.on('exit', resolve); child.kill('SIGINT'); });
+    assert.strictEqual(exitCode, 0, 'SIGINT in watch mode exits 0');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+  console.log('watch-mode ESM schema tests passed');
+})();
+
 const loadEnvAsyncTest = (async () => {
   const fs = require('node:fs');
   const path = require('node:path');
@@ -5975,6 +6030,6 @@ const loadEnvAsyncTest = (async () => {
   assert.deepStrictEqual(composed.properties.B64, { type: 'string' });
 }
 
-Promise.all([watchModeTest, watchModeErrorPathTest, loadEnvAsyncTest])
+Promise.all([watchModeTest, watchModeErrorPathTest, watchModeEsmSchemaTest, loadEnvAsyncTest])
   .then(() => console.log('env-saaf v1.5.0: all tests passed'))
   .catch((err) => { console.error(err); process.exit(1); });
