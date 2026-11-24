@@ -4,6 +4,14 @@
 
 - Added: duration rules accept human duration strings for inclusive `min` / `max` bounds, including compound durations. Invalid or reversed bounds fail schema validation; numeric bounds keep their existing behavior. Generated examples and JSON Schema use the parsed bounds (fixes #322).
 
+- Added: `EnvSaafError.details` and the `{ throwOnError: false }` result expose structured `{ key, message }` entries mirroring `errors` one-to-one, including grouped keys; printable `errors` strings and `message` formatting are unchanged (fixes #294).
+
+- Added: tests validate complete `toJsonSchema` documents against the draft 2020-12 keyword shapes with a hand-rolled, zero-dependency checker, covering all types, groups, choices, defaults, bounds, arrays and `requiredIf` (fixes #296).
+
+- Added: `toJsonSchema` expresses `requiredIf` on canonical values with `if` / `then`, including conditions across groups (fixes #289).
+
+- Added: groups can contain nested groups, with concatenated env prefixes and nested results at each level. Validation, example generation, JSON Schema export, and file loading support the same structure; circular references and composed-prefix collisions are rejected (fixes #287).
+
 - Fixed: CLI `--schema` loading in `check`, `check --json-schema`, `check --watch`, and `example` now supports ES module schemas (`.mjs` and `"type": "module"` `.js`), unwrapping a sole plain-object `default` export while preserving CommonJS schemas (including keys named `default`), named exports, and module load errors (fixes #285).
 
 - Added: `date` rules accept `min` / `max` bounds as ISO date (or datetime) strings — or `Date` objects — compared chronologically against the parsed value, inclusive on both ends; a numeric bound or a `min` above `max` is a schema error, and `generateExample` uses the bound when the default example falls outside the range (fixes #292).
@@ -19,6 +27,10 @@
 
 - Fixed: generateExample uses the first allowed choice instead of a generic placeholder, preserving explicit defaults and empty secret placeholders (fixes #273).
 - Fixed: `validateSchema` now rejects `choices` entries that can never match the declared type (for example `['1', '2']` on an `int` rule, `['true']` on a `boolean` rule, or any `choices` on a `date` rule) instead of accepting the schema and failing every value at runtime; string-typed rules and non-finite numbers, which `toJsonSchema` drops from `enum`, are unaffected (fixes #305).
+
+- Fixed: `choices` on `array` rules now apply to each coerced item instead of the whole array, with errors naming the offending item and its index; `validateSchema` applies the #305 item-type check against `of`, `toJsonSchema` emits `items.enum`, and `generateExample` builds placeholders from allowed choices while respecting `minItems`/`maxItems` (fixes #320).
+
+- Fixed: maskValue masks only strings; maskSecrets preserves non-string leaves while copying plain objects and arrays. TypeScript return types now retain those leaf types (fixes #281).
 
 - Fixed: `int` (and `port`, which builds on it) now only accepts plain integer literals — optional sign + digits — so decimal and scientific spellings such as `1.0`, `1e3` and `1.5e2` are rejected even when they happen to be whole numbers, instead of silently passing (fixes #277). `number` still accepts them.
 

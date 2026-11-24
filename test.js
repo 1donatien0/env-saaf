@@ -48,6 +48,100 @@ const { loadEnv, validateEnv, validateSchema, EnvSaafError, parseEnvFile, scanCo
   assert.deepStrictEqual(rule, { type: 'duration', min: '30s', max: '1h30m' });
 }
 
+// Issue #296: a hand-rolled structural check for the draft 2020-12 keywords
+// env-saaf emits. Keeping the keyword map local means the whole exported
+// document is checked without adding a schema-validator dependency.
+const DRAFT_2020_12 = 'https://json-schema.org/draft/2020-12/schema';
+const JSON_SCHEMA_TYPES = new Set(['null', 'boolean', 'object', 'array', 'number', 'integer', 'string']);
+
+function isJsonValue(value, seen = new Set()) {
+  if (value === null || typeof value === 'boolean' || typeof value === 'string') return true;
+  if (typeof value === 'number') return Number.isFinite(value);
+  if (typeof value !== 'object') return false;
+  if (seen.has(value)) return false;
+  const next = new Set(seen);
+  next.add(value);
+  if (Array.isArray(value)) return value.every(item => isJsonValue(item, next));
+  const proto = Object.getPrototypeOf(value);
+  if (proto !== Object.prototype && proto !== null) return false;
+  return Object.entries(value).every(([, item]) => isJsonValue(item, next));
+}
+
+function assertDraft202012Schema(schema, path = '#', root = true) {
+  assert.ok(schema && typeof schema === 'object' && !Array.isArray(schema), `${path}: expected a schema object`);
+  for (const [keyword, value] of Object.entries(schema)) {
+    const at = `${path}.${keyword}`;
+    switch (keyword) {
+      case '$schema':
+        assert.ok(root, `${at}: $schema is only allowed at the document root`);
+        assert.strictEqual(value, DRAFT_2020_12, `${at}: expected the draft 2020-12 dialect`);
+        break;
+      case 'type': {
+        const types = Array.isArray(value) ? value : [value];
+        assert.ok(types.length > 0, `${at}: expected at least one type`);
+        for (const type of types) assert.ok(JSON_SCHEMA_TYPES.has(type), `${at}: unknown JSON Schema type ${JSON.stringify(type)}`);
+        break;
+      }
+      case 'properties':
+        assert.ok(value && typeof value === 'object' && !Array.isArray(value), `${at}: expected an object`);
+        for (const [key, child] of Object.entries(value)) {
+          assertDraft202012Schema(child, `${path}.properties[${JSON.stringify(key)}]`, false);
+        }
+        break;
+      case 'required':
+        assert.ok(Array.isArray(value) && value.length > 0, `${at}: expected a non-empty array`);
+        assert.ok(value.every(key => typeof key === 'string'), `${at}: expected an array of strings`);
+        assert.strictEqual(new Set(value).size, value.length, `${at}: duplicate entries`);
+        break;
+      case 'items':
+        assertDraft202012Schema(value, `${path}.items`, false);
+        break;
+      case 'enum':
+        assert.ok(Array.isArray(value) && value.length > 0, `${at}: expected a non-empty array`);
+        assert.ok(value.every(item => isJsonValue(item)), `${at}: expected JSON values`);
+        break;
+      case 'const':
+      case 'default':
+        assert.ok(isJsonValue(value), `${at}: expected a JSON value`);
+        break;
+      case 'minimum':
+      case 'maximum':
+        assert.ok(typeof value === 'number' && Number.isFinite(value), `${at}: expected a finite number`);
+        break;
+      case 'minLength':
+      case 'maxLength':
+      case 'minItems':
+      case 'maxItems':
+        assert.ok(Number.isInteger(value) && value >= 0, `${at}: expected a non-negative integer`);
+        break;
+      case 'uniqueItems':
+      case 'writeOnly':
+        assert.strictEqual(typeof value, 'boolean', `${at}: expected a boolean`);
+        break;
+      case 'pattern':
+      case 'format':
+        assert.strictEqual(typeof value, 'string', `${at}: expected a string`);
+        break;
+      case 'allOf':
+      case 'anyOf':
+        assert.ok(Array.isArray(value) && value.length > 0, `${at}: expected a non-empty array`);
+        value.forEach((child, i) => assertDraft202012Schema(child, `${at}[${i}]`, false));
+        break;
+      case 'if':
+      case 'then':
+      case 'else':
+        assertDraft202012Schema(value, at, false);
+        break;
+      default:
+        assert.fail(`${at}: unknown keyword ${JSON.stringify(keyword)}`);
+    }
+  }
+  if (root) {
+    assert.strictEqual(schema.$schema, DRAFT_2020_12, `${path}: missing $schema`);
+    assert.strictEqual(schema.type, 'object', `${path}: root must be an object schema`);
+  }
+}
+
 // Issue #229: JSON Schema export
 {
   const draft = 'https://json-schema.org/draft/2020-12/schema';
@@ -241,6 +335,43 @@ const { loadEnv, validateEnv, validateSchema, EnvSaafError, parseEnvFile, scanCo
     properties: { PORT: { type: 'integer', minimum: 0, maximum: 65535 }, NAME: { type: 'string' } },
     required: ['PORT'],
   });
+
+  // Issue #296: check the complete exported documents, not just keyword mappings.
+  {
+    const comprehensive = {
+      NAME: { type: 'string', required: true, minLength: 1 },
+      MODE: { type: 'string', choices: ['dev', 'prod'], default: 'dev', minLength: 2, maxLength: 8, pattern: /^[a-z]+$/ },
+      RETRIES: { type: 'int', min: 0, max: 5, choices: [0, 2], default: '0' },
+      RATIO: { type: 'number', min: -0.5, max: 0, default: '-0.25' },
+      DEBUG: { type: 'boolean', default: 'no' },
+      PAYLOAD: { type: 'json', default: '{"ok":true}' },
+      WHEN: { type: 'date', default: '2026-01-31' },
+      URL: { type: 'url', protocols: ['https'] },
+      TAGS: { type: 'array', of: 'string', choices: ['a', 'b'], minItems: 1, maxItems: 3, unique: true, default: ['a'] },
+      PORTS: { type: 'array', of: 'port', minItems: 0, maxItems: 2, default: '0;443' },
+      SECRET: { type: 'string', sensitive: true },
+      HEX: { type: 'hex', length: 4 },
+      DB: { prefix: 'DB_', schema: { HOST: { type: 'host', required: true }, PORT: { type: 'port', default: 5432 } } },
+      TOKEN: { type: 'string', requiredIf: { key: 'MODE', equals: 'prod' } },
+    };
+    for (const document of [toJsonSchema(rules), options, result, toJsonSchema(comprehensive)]) {
+      assertDraft202012Schema(document);
+    }
+
+    // Prove the checker rejects malformed output rather than rubber-stamping it.
+    const broken = toJsonSchema({ PORT: { type: 'port', required: true } });
+    broken.properties.PORT.minimum = 'x';
+    assert.throws(() => assertDraft202012Schema(broken), /minimum: expected a finite number/);
+    const typo = toJsonSchema({ PORT: { type: 'port' } });
+    typo.properties.PORT.minumum = 0;
+    assert.throws(() => assertDraft202012Schema(typo), /unknown keyword "minumum"/);
+    const badRequired = toJsonSchema({ PORT: { type: 'port', required: true } });
+    badRequired.required = 'PORT';
+    assert.throws(() => assertDraft202012Schema(badRequired), /#\.required: expected a non-empty array/);
+    const missingDraft = toJsonSchema({ PORT: { type: 'port' } });
+    delete missingDraft.$schema;
+    assert.throws(() => assertDraft202012Schema(missingDraft), /missing \$schema/);
+  }
 }
 
 // v0.1.0 core
@@ -2552,7 +2683,7 @@ assert.deepStrictEqual(
 
   // The returned env is frozen exactly like the throwing API's result.
   assert.ok(Object.isFrozen(strict.env));
-  assert.deepStrictEqual(validateEnv({}, {}, { throwOnError: false }), { env: {}, errors: [] });
+  assert.deepStrictEqual(validateEnv({}, {}, { throwOnError: false }), { env: {}, errors: [], details: [] });
 
   // A malformed schema is a bug in the code, not a config problem: it throws
   // even in non-throwing mode, where no result could be trusted.
@@ -3962,7 +4093,7 @@ assert.deepStrictEqual(
       { APP_PORT: '3000' },
       { throwOnError: false, onWarn: msg => warnings.push(msg) },
     );
-    assert.deepStrictEqual(collected, { env: { PORT: 3000 }, errors: [] });
+    assert.deepStrictEqual(collected, { env: { PORT: 3000 }, errors: [], details: [] });
     assert.deepStrictEqual(warnings, ['env-saaf: APP_PORT is deprecated; use PORT instead']);
   }
 
@@ -4683,6 +4814,259 @@ assert.deepStrictEqual(
   assert.doesNotThrow(() => validateSchema({ COUNT: { type: 'int', choices: [2, Infinity, 0, NaN] } }));
 }
 
+// Issue #287: groups compose prefixes and nest results at every level.
+{
+  const schema = {
+    MODE: { type: 'string' },
+    APP: { prefix: 'APP_', schema: {
+      DB: { prefix: 'DB_', schema: {
+        HOST: { type: 'host', required: true },
+        PORT: { type: 'port', default: 5432 },
+      } },
+      CACHE: { prefix: 'CACHE_', schema: { TTL: { type: 'int' } } },
+    } },
+  };
+  assert.doesNotThrow(() => validateSchema(schema));
+  const result = validateEnv(schema, { MODE: 'dev', APP_DB_HOST: 'db.internal' }, { strict: true });
+  assert.deepStrictEqual(result, { MODE: 'dev', APP: { DB: { HOST: 'db.internal', PORT: 5432 } } });
+  for (const container of [result, result.APP, result.APP.DB]) assert.ok(Object.isFrozen(container));
+  assert.throws(() => { result.APP.DB.HOST = 'changed'; }, TypeError);
+  assert.ok(!('CACHE' in result.APP));
+  assert.deepStrictEqual(validateEnv({ APP: { prefix: 'APP_', schema: {
+    CACHE: { prefix: 'CACHE_', schema: { TTL: { type: 'int' } } },
+  } } }, {}), {});
+
+  const partial = validateEnv(schema, {}, { throwOnError: false });
+  assert.deepStrictEqual(partial, {
+    env: { APP: { DB: { PORT: 5432 } } }, errors: ['APP_DB_HOST: missing required variable'],
+    details: [{ key: 'APP_DB_HOST', message: 'missing required variable' }],
+  });
+  assert.ok(Object.isFrozen(partial.env.APP.DB));
+  assert.throws(() => validateEnv(schema, { APP_DB_HOST: 'db.internal', APP_DB_EXTRA: 'x' }, { strict: true }),
+    err => err instanceof EnvSaafError && err.errors.includes('APP_DB_EXTRA: set but not in schema (strict mode)'));
+  assert.throws(() => validateSchema({ APP: { prefix: 'APP_', schema: {
+    DB: { prefix: 'DB_', schema: { PORT: { type: 'unknown' } } },
+  } } }), err => err instanceof EnvSaafError && err.errors.includes('APP_DB_PORT: unknown type "unknown"'));
+
+  const warnings = [];
+  const references = { APP: { prefix: 'APP_', schema: {
+    DB: { prefix: 'DB_', schema: { HOST: { type: 'host', aliases: ['OLD_DB_HOST'] } } },
+    MAIL: { prefix: 'MAIL_', schema: { HOST: { type: 'host', requiredIf: { key: 'APP_DB_HOST', equals: 'db.internal' } } } },
+  } } };
+  const referenced = validateEnv(references, { OLD_DB_HOST: 'db.internal', APP_MAIL_HOST: 'mail.internal' },
+    { strict: true, onWarn: warning => warnings.push(warning) });
+  assert.deepStrictEqual(referenced, { APP: { DB: { HOST: 'db.internal' }, MAIL: { HOST: 'mail.internal' } } });
+  assert.strictEqual(warnings.length, 1);
+  assert.ok(warnings[0].includes('OLD_DB_HOST is deprecated'));
+  const required = validateEnv(references, { APP_DB_HOST: 'db.internal' }, { throwOnError: false, onWarn: () => {} });
+  assert.deepStrictEqual(required.errors, ['APP_MAIL_HOST: missing required variable']);
+
+  const example = generateExample(schema);
+  assert.ok(example.includes("# group APP — the keys below are read from env vars prefixed with 'APP_'"));
+  assert.ok(example.includes("# group APP.DB — the keys below are read from env vars prefixed with 'APP_DB_'"));
+  assert.ok(example.includes("# group APP.CACHE — the keys below are read from env vars prefixed with 'APP_CACHE_'"));
+  assert.match(example, /^APP_DB_HOST=localhost$/m);
+  assert.match(example, /^APP_DB_PORT=5432$/m);
+  assert.match(example, /^APP_CACHE_TTL=42$/m);
+  assert.ok(example.indexOf('# group APP.DB') < example.indexOf('APP_DB_HOST='));
+  assert.strictEqual(validateEnv(schema, parseEnvFile(example), { strict: true }).APP.DB.PORT, 5432);
+  assert.deepStrictEqual(toJsonSchema(schema), {
+    $schema: 'https://json-schema.org/draft/2020-12/schema', type: 'object', properties: {
+      MODE: { type: 'string' },
+      APP: { type: 'object', properties: {
+        DB: { type: 'object', properties: {
+          HOST: { type: 'string', anyOf: [{ format: 'hostname' }, { format: 'ipv4' }, { format: 'ipv6' }] },
+          PORT: { type: 'integer', minimum: 0, maximum: 65535, default: 5432 },
+        }, required: ['HOST'] },
+        CACHE: { type: 'object', properties: { TTL: { type: 'integer' } } },
+      } },
+    },
+  });
+
+  const defaultValue = { count: 1 };
+  const transformedValue = { count: 2 };
+  const deep = { APP: { prefix: 'APP_', schema: {
+    DB: { prefix: 'DB_', schema: {
+      AUTH: { prefix: 'AUTH_', schema: {
+        USER: { type: 'string', required: true },
+        DATA: { type: 'json', default: defaultValue },
+        EXTRA: { type: 'json', transform: () => transformedValue },
+      } },
+    } },
+  } } };
+  const deepResult = validateEnv(deep, { APP_DB_AUTH_USER: 'alice', APP_DB_AUTH_EXTRA: '{}' });
+  assert.strictEqual(deepResult.APP.DB.AUTH.USER, 'alice');
+  for (const group of [deepResult.APP, deepResult.APP.DB, deepResult.APP.DB.AUTH]) assert.ok(Object.isFrozen(group));
+  assert.strictEqual(deepResult.APP.DB.AUTH.DATA, defaultValue);
+  assert.strictEqual(deepResult.APP.DB.AUTH.EXTRA, transformedValue);
+  deepResult.APP.DB.AUTH.DATA.count++;
+  deepResult.APP.DB.AUTH.EXTRA.count++;
+  assert.strictEqual(defaultValue.count, 2);
+  assert.strictEqual(transformedValue.count, 3);
+  assert.ok(generateExample(deep).includes('# group APP.DB.AUTH'));
+  assert.deepStrictEqual(toJsonSchema(deep).properties.APP.properties.DB.properties.AUTH.required, ['USER']);
+
+  const collides = candidate => assert.throws(() => validateSchema(candidate),
+    err => err instanceof EnvSaafError && err.errors.some(error => error.includes('collide')));
+  collides({ ...schema, APP_DB_HOST: { type: 'string' } });
+  collides({ ...schema, OTHER: { prefix: 'APP_DB_', schema: { HOST: {} } } });
+  collides({ APP: { prefix: 'APP_', schema: {
+    DB: { prefix: 'DB_', schema: { HOST: {} } }, DB_HOST: {},
+  } } });
+  // Group names remain reserved against prefixed keys, as for one-level groups.
+  collides({ ROOT: { prefix: 'APP_', schema: { DB: { prefix: 'DB_', schema: { HOST: {} } } } },
+    APP_DB_HOST: { prefix: 'OTHER_', schema: { KEY: {} } } });
+  assert.throws(() => validateSchema({ ...schema, OTHER: { aliases: ['APP_DB_HOST'] } }),
+    err => err instanceof EnvSaafError && err.errors.includes('OTHER: alias "APP_DB_HOST" conflicts with a declared schema key'));
+  const duplicateAlias = { APP: { prefix: 'APP_', schema: {
+    A: { prefix: 'A_', schema: { VALUE: { aliases: ['OLD_VALUE'] } } },
+    B: { prefix: 'B_', schema: { VALUE: { aliases: ['OLD_VALUE'] } } },
+  } } };
+  assert.throws(() => validateSchema(duplicateAlias),
+    err => err instanceof EnvSaafError && err.errors.some(error => error.includes('alias "OLD_VALUE" is already used')));
+
+  // Sharing a sub-schema is valid; only a reference back to an ancestor is circular.
+  const shared = Object.freeze({ PORT: Object.freeze({ type: 'port', default: 8080 }) });
+  const reused = Object.freeze({
+    APP: Object.freeze({ prefix: 'APP_', schema: Object.freeze({
+      A: Object.freeze({ prefix: 'A_', schema: shared }),
+      B: Object.freeze({ prefix: 'B_', schema: shared }),
+    }) }),
+  });
+  const reusedResult = validateEnv(reused, {});
+  assert.deepStrictEqual(reusedResult, { APP: { A: { PORT: 8080 }, B: { PORT: 8080 } } });
+  assert.notStrictEqual(reusedResult.APP.A, reusedResult.APP.B);
+  const circular = {};
+  circular.APP = { prefix: 'APP_', schema: circular };
+  for (const check of [validateSchema, generateExample, toJsonSchema, candidate => loadEnv(candidate, { paths: [], env: {} })]) {
+    assert.throws(() => check(circular), err => err instanceof EnvSaafError && /circular/.test(err.message));
+  }
+  // Group names are own properties even when Object.prototype has that name.
+  const named = validateEnv({ APP: { prefix: 'APP_', schema: Object.fromEntries(
+    ['__proto__', 'constructor', 'toString'].map((name, index) => [name, {
+      prefix: `N${index}_`, schema: { VALUE: { type: 'string', default: name } },
+    }]),
+  ) } }, {});
+  for (const name of ['__proto__', 'constructor', 'toString']) {
+    assert.ok(Object.prototype.hasOwnProperty.call(named.APP, name));
+    assert.strictEqual(named.APP[name].VALUE, name);
+    assert.ok(Object.isFrozen(named.APP[name]));
+  }
+  assert.strictEqual(Object.getPrototypeOf(named.APP), Object.prototype);
+  assert.ok(!Object.isFrozen(Object.prototype));
+
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const path = require('node:path');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'env-saaf-nested-'));
+  try {
+    const file = path.join(dir, '.env');
+    fs.writeFileSync(file, 'APP_DB_HOST=db.internal\nAPP_DB_PORT=6543\n');
+    const assigned = {};
+    const loaded = loadEnv(schema, { path: file, env: assigned, assign: true });
+    assert.deepStrictEqual(loaded, { APP: { DB: { HOST: 'db.internal', PORT: 6543 } } });
+    assert.deepStrictEqual(assigned, { APP_DB_HOST: 'db.internal', APP_DB_PORT: '6543' });
+    assert.ok(Object.isFrozen(loaded.APP.DB));
+    assert.throws(() => loadEnv(schema, { paths: [path.join(dir, 'missing.env')], env: {} }),
+      /required variables missing: APP_DB_HOST/);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+// Issue #320: `choices` on an `array` rule constrains each coerced item.
+{
+  const never = (key, entry, type) =>
+    `${key}: "choices" entry ${entry} can never match type '${type}' (a choice must be a value this type can produce)`;
+
+  // A value whose items are all allowed passes; a single bad item names the
+  // key, the offending item and its index.
+  assert.deepStrictEqual(
+    validateEnv({ A: { type: 'array', of: 'string', choices: ['a', 'b'] } }, { A: 'a,b,a' }),
+    { A: ['a', 'b', 'a'] },
+  );
+  assert.throws(
+    () => validateEnv({ A: { type: 'array', of: 'string', choices: ['a', 'b'] } }, { A: 'a,c' }),
+    err => err instanceof EnvSaafError
+      && err.errors.includes('A: expected one of [a, b], got "c" (item 1)'),
+  );
+
+  // Items are coerced before the choices check, just like scalar rules.
+  assert.deepStrictEqual(
+    validateEnv({ N: { type: 'array', of: 'int', choices: [1, 2] } }, { N: '01,2' }),
+    { N: [1, 2] },
+  );
+  assert.deepStrictEqual(
+    validateEnv({ B: { type: 'array', of: 'boolean', choices: [true] } }, { B: 'yes,true' }),
+    { B: [true, true] },
+  );
+  assert.throws(
+    () => validateEnv({ N: { type: 'array', of: 'int', choices: [1, 2] } }, { N: '1,3' }),
+    err => err instanceof EnvSaafError && /N: expected one of \[1, 2\], got "3"/.test(err.errors[0]),
+  );
+  // Defaults go through the same per-item check.
+  assert.deepStrictEqual(
+    validateEnv({ A: { type: 'array', choices: ['a', 'b'], default: ['b', 'a'] } }, {}),
+    { A: ['b', 'a'] },
+  );
+  assert.throws(
+    () => validateEnv({ A: { type: 'array', choices: ['a', 'b'], default: ['b', 'z'] } }, {}),
+    err => err instanceof EnvSaafError && err.errors.some(m => m.includes('got "z"')),
+  );
+
+  // Schema validation applies #305 to the item type.
+  assert.throws(
+    () => validateSchema({ N: { type: 'array', of: 'int', choices: ['1', '2'] } }),
+    err => err instanceof EnvSaafError
+      && err.errors.includes(never('N', '"1"', 'int'))
+      && err.errors.includes(never('N', '"2"', 'int')),
+  );
+  assert.throws(
+    () => validateSchema({ B: { type: 'array', of: 'boolean', choices: ['true'] } }),
+    err => err instanceof EnvSaafError && err.errors.includes(never('B', '"true"', 'boolean')),
+  );
+  assert.throws(
+    () => validateSchema({ D: { type: 'array', of: 'date', choices: ['2026-01-31'] } }),
+    err => err instanceof EnvSaafError
+      && err.errors.includes(`D: "choices" cannot be used with type 'date' (a parsed date is a new Date object, so no choice can ever match)`),
+  );
+  assert.doesNotThrow(() => validateSchema({
+    A: { type: 'array', choices: ['a', 'b'] },
+    N: { type: 'array', of: 'int', choices: [1, 2] },
+    U: { type: 'array', of: 'url', choices: ['https://example.com'] },
+  }));
+
+  // toJsonSchema puts the enum on items, not on the array itself.
+  assert.deepStrictEqual(
+    toJsonSchema({ A: { type: 'array', of: 'string', choices: ['a', 'b'] } }).properties.A,
+    { type: 'array', items: { type: 'string', minLength: 1, enum: ['a', 'b'] } },
+  );
+  assert.deepStrictEqual(
+    toJsonSchema({ N: { type: 'array', of: 'int', choices: [1, 2] } }).properties.N,
+    { type: 'array', items: { type: 'integer', enum: [1, 2] } },
+  );
+  // Scalar behaviour is unchanged.
+  assert.deepStrictEqual(
+    toJsonSchema({ S: { choices: ['a', 'b'] } }).properties.S,
+    { type: 'string', enum: ['a', 'b'] },
+  );
+
+  // generateExample emits allowed items that validate against the same schema.
+  const schema = { A: { type: 'array', of: 'string', choices: ['a', 'b'], required: true } };
+  const example = generateExample(schema);
+  assert.match(example, /^A=a,b$/m);
+  assert.deepStrictEqual(validateEnv(schema, parseEnvFile(example)), { A: ['a', 'b'] });
+  const typed = { N: { type: 'array', of: 'int', choices: [2, 4] } };
+  const typedExample = generateExample(typed);
+  assert.match(typedExample, /^N=2,4$/m);
+  assert.deepStrictEqual(validateEnv(typed, parseEnvFile(typedExample)), { N: [2, 4] });
+  // minItems/maxItems, separator, unique and explicit defaults are respected.
+  assert.match(generateExample({ A: { type: 'array', choices: ['a', 'b', 'c'], minItems: 4, maxItems: 5 } }), /^A=a,b,c,a$/m);
+  assert.match(generateExample({ A: { type: 'array', separator: ';', choices: ['x;y', 'ok'] } }), /^A=ok$/m);
+  assert.match(generateExample({ A: { type: 'array', unique: true, choices: ['a', 'b'] } }), /^A=a,b$/m);
+  assert.match(generateExample({ A: { type: 'array', choices: ['a', 'b'], default: ['b'] } }), /^A=b$/m);
+}
+
 // feat: grouped (nested) schemas with a key prefix (fixes #228)
 {
   const fs = require('node:fs');
@@ -4850,7 +5234,7 @@ assert.deepStrictEqual(
   bad({ G: { prefix: 'G_', schema: {} } }, 'group "schema" must not be empty');                // empty group
   bad({ G: { prefix: 'G_', schema: { A: {} }, type: 'string' } }, 'cannot also set "type"');  // type + schema
   bad({ G: { prefix: 'G_', schema: { A: {} }, required: true } }, 'group rules only support'); // extra option on group
-  bad({ G: { prefix: 'G_', schema: { A: { schema: {} } } } }, 'groups cannot be nested');     // nested group
+  bad({ G: { prefix: 'G_', schema: { A: { schema: {} } } } }, 'needs a non-empty string "prefix"'); // malformed nested group
   bad({ G: { prefix: 'G_', schema: { A: { type: 'nope' } } } }, 'G_A: unknown type');         // inner rule error uses full name
   bad({ DB_HOST: { type: 'string' }, G: { prefix: 'DB_', schema: { HOST: {} } } }, 'collide'); // prefix collision with a declared key
   bad({ A: { prefix: 'X_', schema: { K: {} } }, B: { prefix: 'X_', schema: { K: {} } } }, 'collide'); // two groups collide
@@ -5335,6 +5719,31 @@ assert.deepStrictEqual(
   assert.strictEqual(authoredOverBudget.GENERATED.length, 20);
 }
 
+// Issue #281: only strings are masked; other values keep their type/identity.
+{
+  const when = new Date(0);
+  const pattern = /secret/;
+  class Config { constructor() { this.token = 'abcdef'; } }
+  const instance = new Config();
+  const fn = () => 'abcdef';
+  const symbol = Symbol('secret');
+  const plain = { token: 'abcdef' };
+  const array = ['abcdef'];
+  for (const value of [undefined, null, 42, 0, false, true, 123n, symbol, when, pattern, instance, fn, plain, array]) {
+    assert.strictEqual(maskValue(value), value);
+  }
+  const input = { TEXT: 'abcdef', EMPTY: '', N: 42, B: false, U: undefined, Z: null,
+    BIG: 123n, SYMBOL: symbol, AT: when, AGAIN: when, RX: pattern, C: instance, FN: fn,
+    NESTED: { VALUES: ['abcdef', 42, false, undefined, null, 123n, when] } };
+  const output = maskSecrets(input);
+  assert.deepStrictEqual(output, { ...input, TEXT: 'ab***ef',
+    NESTED: { VALUES: ['ab***ef', 42, false, undefined, null, 123n, when] } });
+  for (const key of ['AT', 'AGAIN', 'RX', 'C', 'FN']) assert.strictEqual(output[key], input[key]);
+  assert.notStrictEqual(output, input);
+  assert.notStrictEqual(output.NESTED, input.NESTED);
+  assert.strictEqual(input.TEXT, 'abcdef');
+}
+
 // Issue #234: maskSecrets recurses into plain objects/arrays; cycles get a placeholder
 {
   // The issue's example: the masked structure mirrors the input shape and
@@ -5350,9 +5759,9 @@ assert.deepStrictEqual(
   // Deep nesting and arrays of objects keep their shape.
   assert.deepStrictEqual(
     maskSecrets({ a: { b: { c: { d: 'secret-value' } } }, list: [{ X: 'abcdef' }, 'xy', 42] }),
-    { a: { b: { c: { d: 'se***ue' } } }, list: [{ X: 'ab***ef' }, '****', '****'] }
+    { a: { b: { c: { d: 'se***ue' } } }, list: [{ X: 'ab***ef' }, '****', 42] }
   );
-  // Non-plain values (Date, class instances) are leaves via maskValue, as today.
+  // Non-plain values (Date, class instances) stay unchanged.
   const when = new Date('2026-01-01T00:00:00.000Z');
   assert.deepStrictEqual(maskSecrets({ AT: when }), { AT: maskValue(when) });
   class Cfg { constructor() { this.token = 'abcdef'; } }
@@ -5724,6 +6133,15 @@ const loadEnvAsyncTest = (async () => {
     assert.ok(Object.isFrozen(grouped.DB));
     assert.throws(() => { grouped.DB.HOST = 'changed.internal'; }, TypeError);
     assert.strictEqual(grouped.DB.HOST, 'db.internal');
+    fs.writeFileSync(groupedFile, 'APP_DB_HOST=db.internal\n');
+    const nestedTarget = {};
+    const nested = await loadEnvAsync({ APP: { prefix: 'APP_', schema: {
+      DB: { prefix: 'DB_', schema: { HOST: { type: 'host', required: true } } },
+    } } }, { path: groupedFile, env: nestedTarget, assign: true });
+    assert.deepStrictEqual(nested, { APP: { DB: { HOST: 'db.internal' } } });
+    assert.deepStrictEqual(nestedTarget, { APP_DB_HOST: 'db.internal' });
+    assert.ok(Object.isFrozen(nested.APP));
+    assert.ok(Object.isFrozen(nested.APP.DB));
     const defaultRead = fs.promises.readFile;
     try {
       fs.promises.readFile = async (file, encoding) => {
@@ -5986,7 +6404,7 @@ const formatErrorThrowingHookTest = (async () => {
 
   const warnings = [];
   const result = validateEnv(schema, {}, { onWarn: msg => warnings.push(msg), throwOnError: false });
-  assert.deepStrictEqual(result, { env: {}, errors: [] });
+  assert.deepStrictEqual(result, { env: {}, errors: [], details: [] });
   assert.deepStrictEqual(warnings, [expected]);
 
   // A legitimate undeclared NODE_ENV still makes the dependent key required.
@@ -6087,11 +6505,11 @@ const formatErrorThrowingHookTest = (async () => {
     assert.strictEqual(itemPattern.test(sample), true, `expected array item pattern to accept ${JSON.stringify(sample)}`);
     assert.deepStrictEqual(
       validateEnv({ V: { type: 'semver', trim: false } }, { V: sample }, { throwOnError: false }),
-      { env: { V: sample }, errors: [] }
+      { env: { V: sample }, errors: [], details: [] }
     );
     assert.deepStrictEqual(
       validateEnv({ VERSIONS: { type: 'array', of: 'semver', trim: false } }, { VERSIONS: [sample] }, { throwOnError: false }),
-      { env: { VERSIONS: [sample] }, errors: [] }
+      { env: { VERSIONS: [sample] }, errors: [], details: [] }
     );
   }
   for (const sample of invalidSemvers) {
@@ -6144,10 +6562,6 @@ const formatErrorThrowingHookTest = (async () => {
   assert.deepStrictEqual(composed.properties.B64, { type: 'string' });
 }
 
-Promise.all([watchModeTest, watchModeErrorPathTest, watchModeEsmSchemaTest, loadEnvAsyncTest, formatErrorThrowingHookTest])
-  .then(() => console.log('env-saaf v1.5.0: all tests passed'))
-  .catch((err) => { console.error(err); process.exit(1); });
-
 // Issue #321: quoted keys share the env-file key grammar.
 for (const head of ['process.env', 'import.meta.env']) {
   for (const key of ['DB.PORT', 'MY-KEY', 'PLAIN_KEY']) {
@@ -6166,3 +6580,341 @@ for (const head of ['process.env', 'import.meta.env']) {
 }
 
 assert.deepStrictEqual(scanCode("const env = process.env; env['DB.PORT']; env[`MY-KEY`];"), ['DB.PORT', 'MY-KEY']);
+
+// Issue #289: a flat equals condition requires a present discriminator.
+{
+  const schema = {
+    TOKEN: { requiredIf: { key: 'MODE', equals: 'production', in: undefined } },
+    MODE: { type: 'string' },
+  };
+  assert.deepStrictEqual(validateEnv(schema, {}, { throwOnError: false }), { env: {}, errors: [], details: [] });
+  assert.deepStrictEqual(validateEnv(schema, { MODE: ' production ' }, { throwOnError: false }), {
+    env: { MODE: 'production' }, errors: ['TOKEN: missing required variable'],
+    details: [{ key: 'TOKEN', message: 'missing required variable' }],
+  });
+  assert.deepStrictEqual(toJsonSchema(schema), {
+    $schema: 'https://json-schema.org/draft/2020-12/schema',
+    type: 'object',
+    properties: { TOKEN: { type: 'string' }, MODE: { type: 'string' } },
+    if: { required: ['MODE'], properties: { MODE: { const: 'production' } } },
+    then: { required: ['TOKEN'] },
+  });
+}
+
+// Issue #289: independent clauses use strict typed equality and membership.
+{
+  const schema = {
+    NAME: { required: true },
+    FLAG: { type: 'boolean' },
+    COUNT: { type: 'int' },
+    DATA: { type: 'json' },
+    CERT: { requiredIf: { key: 'FLAG', equals: false } },
+    NOTE: { requiredIf: { key: 'COUNT', in: [0, 2, 2, '2'] } },
+    TEXT: { requiredIf: { key: 'COUNT', equals: '2' } },
+    EXTRA: { requiredIf: { key: 'DATA', equals: null } },
+  };
+  const result = toJsonSchema(schema);
+  assert.deepStrictEqual(result.required, ['NAME']);
+  assert.deepStrictEqual(result.allOf, [
+    { if: { required: ['FLAG'], properties: { FLAG: { const: false } } }, then: { required: ['CERT'] } },
+    { if: { required: ['COUNT'], properties: { COUNT: { enum: [0, 2] } } }, then: { required: ['NOTE'] } },
+    { if: { required: ['DATA'], properties: { DATA: { const: null } } }, then: { required: ['EXTRA'] } },
+  ]);
+}
+
+// Issue #289: full env names resolve to the correct source and target paths.
+{
+  const schema = {
+    SWITCH: {},
+    APP: { prefix: 'CFG_', schema: {
+      MODE: {},
+      HOST: { required: true },
+      AUTH: { requiredIf: { key: 'SWITCH', equals: 'on' } },
+      CODE: { type: 'hex', pattern: /^ff/, requiredIf: { key: 'CFG_MODE', equals: 'on' } },
+    } },
+    MAIL: { prefix: 'EMAIL_', schema: {
+      TOKEN: { requiredIf: { key: 'CFG_MODE', in: ['on', 'test'] } },
+    } },
+    NOTICE: { requiredIf: { key: 'CFG_MODE', equals: 'on' } },
+  };
+  const result = toJsonSchema(schema);
+  const appOn = {
+    required: ['APP'], properties: {
+      APP: { type: 'object', required: ['MODE'], properties: { MODE: { const: 'on' } } },
+    },
+  };
+  assert.deepStrictEqual(result.allOf, [
+    {
+      if: { required: ['SWITCH'], properties: { SWITCH: { const: 'on' } } },
+      then: { required: ['APP'], properties: { APP: { type: 'object', required: ['AUTH'] } } },
+    },
+    { if: appOn, then: { required: ['APP'], properties: { APP: { type: 'object', required: ['CODE'] } } } },
+    {
+      if: { required: ['APP'], properties: {
+        APP: { type: 'object', required: ['MODE'], properties: { MODE: { enum: ['on', 'test'] } } },
+      } },
+      then: { required: ['MAIL'], properties: { MAIL: { type: 'object', required: ['TOKEN'] } } },
+    },
+    { if: appOn, then: { required: ['NOTICE'] } },
+  ]);
+  assert.strictEqual(result.required, undefined);
+  assert.deepStrictEqual(result.properties.APP.required, ['HOST']);
+  assert.deepStrictEqual(result.properties.APP.properties.CODE, {
+    type: 'string', pattern: '^ff', allOf: [{ pattern: '^[0-9a-fA-F]+$' }],
+  });
+  const single = toJsonSchema({
+    SWITCH: {}, APP: { prefix: 'CFG_', schema: { AUTH: schema.APP.schema.AUTH } },
+  });
+  assert.deepStrictEqual(single.allOf, [result.allOf[0]]);
+}
+
+// Issue #289: aliases and defaults are resolved before matching canonical values.
+{
+  const condition = { key: 'MODE', equals: true };
+  const schema = {
+    MODE: { type: 'boolean', aliases: ['OLD_MODE'], default: 'yes' },
+    TOKEN: { aliases: ['OLD_TOKEN'], default: undefined, requiredIf: condition },
+    PORT: { type: 'int', default: 0, requiredIf: condition },
+  };
+  const options = { throwOnError: false, onWarn: () => {} };
+  assert.deepStrictEqual(validateEnv(schema, {}, options), {
+    env: { MODE: true, PORT: 0 }, errors: ['TOKEN: missing required variable'],
+    details: [{ key: 'TOKEN', message: 'missing required variable' }],
+  });
+  assert.deepStrictEqual(validateEnv(schema, { OLD_MODE: 'on', OLD_TOKEN: 'value' }, options), {
+    env: { MODE: true, TOKEN: 'value', PORT: 0 }, errors: [], details: [],
+  });
+  const result = toJsonSchema(schema);
+  assert.deepStrictEqual(result.if, { required: ['MODE'], properties: { MODE: { const: true } } });
+  assert.deepStrictEqual(result.then, { required: ['TOKEN'] });
+  assert.deepStrictEqual(result.properties, {
+    MODE: { type: 'boolean', default: true }, TOKEN: { type: 'string' }, PORT: { type: 'integer', default: 0 },
+  });
+}
+
+// Issue #289: runtime-only or lossy comparisons do not become schema requirements.
+{
+  let calls = 0;
+  const callback = () => { calls++; return 'changed'; };
+  const reference = { active: true };
+  const result = toJsonSchema({
+    MODE: {},
+    TRANSFORMED: { transform: callback },
+    CHECKED: { validate: callback },
+    DATA: { type: 'json' },
+    DATE: { type: 'date' },
+    LIST: { type: 'array' },
+    GOOD: { requiredIf: { key: 'MODE', equals: 'prod' } },
+    EXTERNAL: { requiredIf: { key: 'OUTSIDE', equals: 'prod' } },
+    CHANGED: { requiredIf: { key: 'TRANSFORMED', equals: 'prod' } },
+    CHECK: { requiredIf: { key: 'CHECKED', equals: 'prod' } },
+    REF: { requiredIf: { key: 'DATA', equals: reference } },
+    MIXED: { requiredIf: { key: 'DATA', in: [true, reference] } },
+    NON_FINITE: { requiredIf: { key: 'DATA', in: [Infinity] } },
+    SPARSE: { requiredIf: { key: 'DATA', in: Array(1) } },
+    SERIALIZED_DATE: { requiredIf: { key: 'DATE', equals: '2026-01-31' } },
+    ARRAY_ITEM: { requiredIf: { key: 'LIST', equals: 'first' } },
+  });
+  assert.deepStrictEqual(result.if, { required: ['MODE'], properties: { MODE: { const: 'prod' } } });
+  assert.deepStrictEqual(result.then, { required: ['GOOD'] });
+  assert.strictEqual(result.allOf, undefined);
+  assert.strictEqual(calls, 0);
+}
+
+// Issue #289: non-JSON numbers do not hide representable JSON membership values.
+{
+  const schema = {
+    DATA: { type: 'json' },
+    TOKEN: { requiredIf: { key: 'DATA', in: [true, Infinity, NaN, null] } },
+  };
+  for (const [raw, coerced] of [['true', true], ['null', null]]) {
+    assert.deepStrictEqual(validateEnv(schema, { DATA: raw }, { throwOnError: false }), {
+      env: { DATA: coerced }, errors: ['TOKEN: missing required variable'],
+      details: [{ key: 'TOKEN', message: 'missing required variable' }],
+    });
+  }
+  const result = toJsonSchema(schema);
+  assert.deepStrictEqual(result.if, { required: ['DATA'], properties: { DATA: { enum: [true, null] } } });
+  assert.deepStrictEqual(result.then, { required: ['TOKEN'] });
+}
+
+// Issue #289: membership uses indexed values, not iteration or custom callbacks.
+{
+  const indexed = ['prod'];
+  indexed[Symbol.iterator] = function* () { yield 'dev'; };
+  const overridden = ['prod'];
+  overridden.includes = value => value === 'test';
+  const borrowed = ['prod'];
+  borrowed.includes = String.prototype.includes;
+  let reads = 0;
+  const accessor = ['prod'];
+  Object.defineProperty(accessor, 0, { get: () => { reads++; return 'prod'; } });
+  const schema = {
+    MODE: {},
+    TOKEN: { requiredIf: { key: 'MODE', in: indexed } },
+    CUSTOM: { requiredIf: { key: 'MODE', in: overridden } },
+    BORROWED: { requiredIf: { key: 'MODE', in: borrowed } },
+    ACCESSOR: { requiredIf: { key: 'MODE', in: accessor } },
+  };
+  assert.deepStrictEqual(validateEnv(schema, { MODE: 'dev' }, { throwOnError: false }).errors, []);
+  assert.deepStrictEqual(validateEnv(schema, { MODE: 'prod' }, { throwOnError: false }).errors, [
+    'TOKEN: missing required variable', 'BORROWED: missing required variable', 'ACCESSOR: missing required variable',
+  ]);
+  const before = reads;
+  const result = toJsonSchema(schema);
+  assert.deepStrictEqual(result.if, { required: ['MODE'], properties: { MODE: { enum: ['prod'] } } });
+  assert.deepStrictEqual(result.then, { required: ['TOKEN'] });
+  assert.strictEqual(result.allOf, undefined);
+  assert.strictEqual(reads, before);
+}
+
+// Issue #289: plain membership arrays may come from another JavaScript realm.
+{
+  const members = require('node:vm').runInNewContext("['prod']");
+  const schema = { MODE: {}, TOKEN: { requiredIf: { key: 'MODE', in: members } } };
+  assert.deepStrictEqual(validateEnv(schema, { MODE: 'prod' }, { throwOnError: false }).errors,
+    ['TOKEN: missing required variable']);
+  const result = toJsonSchema(schema);
+  assert.deepStrictEqual(result.if, { required: ['MODE'], properties: { MODE: { enum: ['prod'] } } });
+  assert.deepStrictEqual(result.then, { required: ['TOKEN'] });
+}
+
+// Issue #289: omit proxy-backed membership without dropping ordinary lists.
+{
+  const handler = {
+    get(target, key, receiver) {
+      if (key === 'includes') return value => value === 'stage';
+      return Reflect.get(target, key, receiver);
+    },
+  };
+  const proxy = new Proxy(['prod'], handler);
+  const inherited = Object.setPrototypeOf(['prod'], new Proxy(Array.prototype, handler));
+  for (const members of [proxy, inherited]) {
+    const schema = {
+      MODE: {},
+      OPAQUE: { requiredIf: { key: 'MODE', in: members } },
+      TOKEN: { requiredIf: { key: 'MODE', in: ['prod'] } },
+    };
+    const options = { throwOnError: false };
+    assert.deepStrictEqual(validateEnv(schema, { MODE: 'stage' }, options).errors, ['OPAQUE: missing required variable']);
+    assert.deepStrictEqual(validateEnv(schema, { MODE: 'prod' }, options).errors, ['TOKEN: missing required variable']);
+    const result = toJsonSchema(schema);
+    assert.deepStrictEqual(result.if, { required: ['MODE'], properties: { MODE: { enum: ['prod'] } } });
+    assert.deepStrictEqual(result.then, { required: ['TOKEN'] });
+    assert.strictEqual(result.allOf, undefined);
+  }
+}
+
+// Issue #289: nested groups export nested if/then paths for requiredIf.
+{
+  const schema = {
+    APP: { prefix: 'APP_', schema: {
+      DB: { prefix: 'DB_', schema: {
+        MODE: {},
+        AUTH: { requiredIf: { key: 'APP_DB_MODE', equals: 'tls' } },
+      } },
+      MAIL: { prefix: 'MAIL_', schema: {
+        TOKEN: { requiredIf: { key: 'APP_DB_MODE', in: ['tls', 'mtls'] } },
+      } },
+    } },
+    AUDIT: { requiredIf: { key: 'APP_DB_MODE', equals: 'tls' } },
+  };
+  assert.deepStrictEqual(validateEnv(schema, { APP_DB_MODE: 'tls' }, { throwOnError: false }).errors, [
+    'APP_DB_AUTH: missing required variable',
+    'APP_MAIL_TOKEN: missing required variable',
+    'AUDIT: missing required variable',
+  ]);
+  const result = toJsonSchema(schema);
+  const wrap = (path, leaf) => path.reduceRight((inner, name) => ({
+    required: [name], properties: { [name]: { type: 'object', ...inner } },
+  }), leaf);
+  const dbTls = wrap(['APP', 'DB'], { required: ['MODE'], properties: { MODE: { const: 'tls' } } });
+  assert.deepStrictEqual(result.allOf, [
+    { if: dbTls, then: wrap(['APP', 'DB'], { required: ['AUTH'] }) },
+    {
+      if: wrap(['APP', 'DB'], { required: ['MODE'], properties: { MODE: { enum: ['tls', 'mtls'] } } }),
+      then: wrap(['APP', 'MAIL'], { required: ['TOKEN'] }),
+    },
+    { if: dbTls, then: { required: ['AUDIT'] } },
+  ]);
+}
+
+// Issue #294: structured `details` mirror `errors` one-to-one.
+{
+  const schema = {
+    DB: { prefix: 'DB_', schema: {
+      PORT: { type: 'port', required: true },
+      HOST: { required: true },
+    } },
+    DEBUG: { type: 'boolean' },
+  };
+  const env = { DB_PORT: 'abc', DEBUG: 'maybe' };
+  const expectedErrors = [
+    'DB_PORT: expected a port (0-65535, e.g. 3000), got "abc"',
+    'DB_HOST: missing required variable',
+    'DEBUG: expected a boolean (e.g. true/false, yes/no, on/off, 1/0, y/n), got "maybe"',
+  ];
+  const expectedDetails = [
+    { key: 'DB_PORT', message: 'expected a port (0-65535, e.g. 3000), got "abc"' },
+    { key: 'DB_HOST', message: 'missing required variable' },
+    { key: 'DEBUG', message: 'expected a boolean (e.g. true/false, yes/no, on/off, 1/0, y/n), got "maybe"' },
+  ];
+
+  // Throwing mode: same order, split by full (grouped) env name.
+  let thrown;
+  try { validateEnv(schema, env); } catch (e) { thrown = e; }
+  assert.ok(thrown instanceof EnvSaafError);
+  assert.deepStrictEqual(thrown.errors, expectedErrors);
+  assert.deepStrictEqual(thrown.details, expectedDetails);
+  assert.strictEqual(thrown.details.length, thrown.errors.length);
+  for (let i = 0; i < thrown.errors.length; i++) {
+    assert.strictEqual(`${thrown.details[i].key}: ${thrown.details[i].message}`, thrown.errors[i]);
+  }
+
+  // Non-throwing mode carries the same details.
+  const collected = validateEnv(schema, env, { throwOnError: false });
+  assert.deepStrictEqual(collected.errors, expectedErrors);
+  assert.deepStrictEqual(collected.details, expectedDetails);
+  assert.deepStrictEqual(collected.details, thrown.details);
+
+  // Clean results have no details.
+  assert.deepStrictEqual(
+    validateEnv({ PORT: { type: 'port' } }, { PORT: '3000' }, { throwOnError: false }).details,
+    []
+  );
+
+  // Schema errors are structured too.
+  assert.throws(() => validateEnv({ PORT: { type: 'emial' } }, {}), e =>
+    e instanceof EnvSaafError
+    && e.errors[0] === 'PORT: unknown type "emial"'
+    && e.details[0].key === 'PORT'
+    && e.details[0].message === 'unknown type "emial"');
+
+  // Errors not tied to a key keep the full message with an empty key — the
+  // colon inside "validateEnv accepts: ..." must not be treated as a separator.
+  assert.throws(() => validateEnv({}, {}, { typo: true }), e =>
+    e instanceof EnvSaafError
+    && e.errors.length === 1
+    && e.details.length === 1
+    && e.details[0].key === ''
+    && e.details[0].message === e.errors[0]);
+
+  // Strict-mode errors keep their key.
+  assert.throws(() => validateEnv({ A: {} }, { TYPO: 'x' }, { strict: true }), e =>
+    e instanceof EnvSaafError
+    && e.details[0].key === 'TYPO'
+    && e.details[0].message === 'set but not in schema (strict mode)');
+
+  // A custom formatError changes only `message`; `errors` and `details` stay raw.
+  let formatted;
+  try {
+    validateEnv({ PORT: { required: true } }, {}, { formatError: () => 'CUSTOM MESSAGE' });
+  } catch (e) { formatted = e; }
+  assert.strictEqual(formatted.message, 'CUSTOM MESSAGE');
+  assert.deepStrictEqual(formatted.errors, ['PORT: missing required variable']);
+  assert.deepStrictEqual(formatted.details, [{ key: 'PORT', message: 'missing required variable' }]);
+}
+
+Promise.all([watchModeTest, watchModeErrorPathTest, watchModeEsmSchemaTest, loadEnvAsyncTest, formatErrorThrowingHookTest])
+  .then(() => console.log('env-saaf v1.5.0: all tests passed'))
+  .catch((err) => { console.error(err); process.exit(1); });

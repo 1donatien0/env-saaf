@@ -2,8 +2,8 @@ export type EnvScalarType = 'string' | 'number' | 'int' | 'boolean' | 'url' | 'p
 export type EnvType = EnvScalarType | 'array';
 
 export type RequiredIfCondition =
-  | { key: string; equals: string | number | boolean; in?: never }
-  | { key: string; in: Array<string | number | boolean>; equals?: never };
+  | { key: string; equals: string | number | boolean | null; in?: never }
+  | { key: string; in: Array<string | number | boolean | null>; equals?: never };
 
 export interface EnvRule {
   type?: EnvType;
@@ -131,12 +131,13 @@ export interface EnvRule {
  * A group rule (issue #228): nests a sub-schema under one env prefix.
  * `{ DB: { prefix: 'DB_', schema: { HOST: { type: 'host' } } } }` reads the
  * env var `DB_HOST` and the result nests it as `{ DB: { HOST: '...' } }`.
- * Groups cannot be nested, and a group may not also set `type`.
+ * Groups may contain groups; their prefixes concatenate and results nest at
+ * each level. A group may not also set `type`.
  * Inside a group, `aliases` and `requiredIf.key` use FULL env var names
  * (e.g. `'OLD_DB_HOST'`, `'NODE_ENV'`, or another group's `'DB_HOST'`).
  */
 export interface EnvGroupRule<S extends EnvSchema = EnvSchema> {
-  /** Env prefix applied to every inner key: inner `HOST` is read from `DB_HOST`. */
+  /** Prefix appended to ancestor prefixes before each inner key. */
   prefix: string;
   /** Inner rules keyed by their unprefixed names. The result nests under the group key. */
   schema: S;
@@ -195,8 +196,21 @@ export type EnvResult<S extends EnvSchema> = string extends keyof S
         : S[K] extends { required: true } ? never : S[K] extends { default: unknown } ? never : K]?: S[K] extends EnvGroupRule<infer I> ? EnvResult<I> | undefined : EnvValue<S[K]> | undefined;
     };
 
+/**
+ * Structured form of one validation diagnostic (issue #294). `key` is the full
+ * env name the message is about, or `''` for errors that are not tied to a key
+ * (e.g. an unknown option). `message` is the printable text without the
+ * `key: ` prefix, so it is safe to translate or map back to a form field.
+ */
+export interface ErrorDetail {
+  key: string;
+  message: string;
+}
+
 export class EnvSaafError extends Error {
   errors: string[];
+  /** The same diagnostics as `errors`, in the same order, split by key. */
+  details: ErrorDetail[];
 }
 
 /** Context passed to `formatError`: only the schema keys, never values. */
@@ -236,12 +250,14 @@ export interface ValidateResult<S extends EnvSchema> {
   env: EnvResult<S>;
   /** The same messages `EnvSaafError.errors` would carry, in the same order. */
   errors: string[];
+  /** The same diagnostics as `errors`, in the same order, split by key. */
+  details: ErrorDetail[];
 }
 
 /**
  * Validate the shape of the schema itself (types, option shapes, alias
  * conflicts, and — since #228 — group rules: `prefix`/`schema` shape,
- * nesting, and prefix collisions). Throws an `EnvSaafError` listing every
+ * circular references, and prefix collisions). Throws an `EnvSaafError` listing every
  * problem, naming the key (grouped rules use their full env name, e.g.
  * `DB_HOST`). Independent of any env values, so it can run at startup.
  */
@@ -277,15 +293,16 @@ export function parseEnvFile(text: string): Record<string, string>;
 export function scanCode(text: string): string[];
 export function scanDir(dir: string): string[];
 export function diffEnv(usedKeys: string[], documentedKeys: string[]): { usedNotDocumented: string[]; documentedNotUsed: string[] };
-export function maskValue(value: unknown): string;
-/** The masked counterpart of `T`: structure is preserved, every leaf is a string. */
+/** Mask strings only; return non-string values unchanged. */
+export function maskValue<T>(value: T): T extends string ? string : T;
+/** The masked counterpart of `T`: strings are masked, other leaves keep their type. */
 export type Masked<T> = T extends readonly unknown[]
   ? { [K in keyof T]: Masked<T[K]> }
   : T extends Date | RegExp | ((...args: never[]) => unknown)
-    ? string
+    ? T
     : T extends object
       ? { [K in keyof T]: Masked<T[K]> }
-      : string;
+      : T extends string ? string : T;
 export function maskSecrets<T extends Record<string, unknown>>(obj: T): { [K in keyof T]: Masked<T[K]> };
 /**
  * Generate `.env.example` text from a schema. Values are placeholders/defaults
@@ -300,13 +317,16 @@ type JsonPrimitive = string | number | boolean | null;
 type JsonValue = JsonPrimitive | JsonValue[] | { [key: string]: JsonValue };
 
 export interface JsonSchemaProperty {
-  type?: 'string' | 'integer' | 'number' | 'boolean' | 'array';
+  type?: 'string' | 'integer' | 'number' | 'boolean' | 'array' | 'object';
+  properties?: Record<string, JsonSchemaProperty>;
+  required?: string[];
   format?: 'uri' | 'email' | 'uuid' | 'ipv4' | 'ipv6' | 'hostname' | 'date' | 'date-time';
   pattern?: string;
   minLength?: number;
   maxLength?: number;
   minimum?: number;
   maximum?: number;
+  const?: JsonPrimitive;
   enum?: JsonPrimitive[];
   default?: JsonValue;
   items?: JsonSchemaProperty;
@@ -315,13 +335,14 @@ export interface JsonSchemaProperty {
   uniqueItems?: boolean;
   anyOf?: JsonSchemaProperty[];
   allOf?: JsonSchemaProperty[];
+  if?: JsonSchemaProperty;
+  then?: JsonSchemaProperty;
 }
 
-export interface JsonSchema {
+export interface JsonSchema extends JsonSchemaProperty {
   $schema: 'https://json-schema.org/draft/2020-12/schema';
   type: 'object';
   properties: Record<string, JsonSchemaProperty>;
-  required?: string[];
 }
 
 /** Describe coerced values as a draft 2020-12 JSON Schema without reading the environment. */

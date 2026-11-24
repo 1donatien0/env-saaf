@@ -98,12 +98,12 @@ Without a hook, runtime validation also uses `console.warn`.
 
 ### Non-throwing mode — collect errors instead of throwing
 
-A health check, a CLI, or a server that wants to boot in a degraded mode cannot use an API that throws on the first bad value. Pass `{ throwOnError: false }` and `validateEnv` returns `{ env, errors }` instead: `env` holds every value that validated, and `errors` is the same list `EnvSaafError` would have carried.
+A health check, a CLI, or a server that wants to boot in a degraded mode cannot use an API that throws on the first bad value. Pass `{ throwOnError: false }` and `validateEnv` returns `{ env, errors, details }` instead: `env` holds every value that validated, `errors` is the same list `EnvSaafError` would have carried, and `details` is the same list split into `{ key, message }` objects (see [Structured error details](#structured-error-details)).
 
 ```js
 const { validateEnv } = require('env-saaf');
 
-const { env, errors } = validateEnv(
+const { env, errors, details } = validateEnv(
   {
     PORT:  { type: 'port', required: true },
     DEBUG: { type: 'boolean', default: false },
@@ -114,6 +114,7 @@ const { env, errors } = validateEnv(
 
 if (errors.length) {
   console.warn('config problems:', errors);
+  for (const { key, message } of details) showFieldError(key, message);
   // keep booting: env.DEBUG is still usable, env.PORT is absent
 }
 ```
@@ -143,7 +144,24 @@ try {
 - If the hook throws, its error propagates out of `validateEnv` / `loadEnv` unchanged — a broken hook is a programming error, so it is never silently replaced by the default message. A hook that returns anything other than a string still falls back to the default message. A `formatError` that is not a function is a `TypeError`.
 - With `{ throwOnError: false }` no error is thrown, so the hook is not called and `errors` in the result stays raw. `loadEnv` always throws, so it forwards the hook for validation failures. Failures before validation, such as an unreadable or unparsable `.env` file, throw their own errors and are outside the hook's scope. Malformed-schema errors are not formatted either.
 
-In TypeScript, `{ throwOnError: false }` (not `formatError`) narrows the return type to `ValidateResult<S>` (`{ env: EnvResult<S>; errors: string[] }`), so `env.PORT` keeps the type inferred from the schema.
+In TypeScript, `{ throwOnError: false }` (not `formatError`) narrows the return type to `ValidateResult<S>` (`{ env: EnvResult<S>; errors: string[]; details: ErrorDetail[] }`), so `env.PORT` keeps the type inferred from the schema.
+
+### Structured error details
+
+For programmatic handling — mapping failures back to form fields, translating messages, grouping by key — both the thrown error and the non-throwing result expose a `details` array of `{ key, message }` objects. It mirrors `errors` one-to-one, in the same order, without changing the printable strings or `error.message`. `key` is the full env name (including the group prefix for grouped keys, e.g. `DB_HOST`), and `message` is the text with the `key: ` prefix removed. Errors that are not tied to a key (such as an unknown option) use `key: ''` and keep the full text as `message`.
+
+```js
+try {
+  validateEnv(schema, process.env);
+} catch (err) {
+  for (const { key, message } of err.details) {
+    // key: 'DB_PORT', message: 'expected a port (0-65535, e.g. 3000), got "abc"'
+    showFieldError(key, message);
+  }
+}
+```
+
+The same field is available without throwing: `const { env, errors, details } = validateEnv(schema, process.env, { throwOnError: false })`. A custom `formatError` changes only `error.message`; `errors` and `details` stay raw.
 
 ### Strict mode — catch typos in variable names
 
@@ -200,13 +218,35 @@ const env = validateEnv(
 ```
 
 - A group is a rule with a `schema` object and no `type`, plus a non-empty `prefix`. Every inner rule is read from `prefix + INNER_NAME`, so errors always name the full env var (`DB_HOST: missing required variable`).
+- Groups can contain other groups at any depth. Their prefixes concatenate, while the result follows the group keys:
+
+  ```js
+  const env = validateEnv({
+    APP: {
+      prefix: 'APP_',
+      schema: {
+        DB: {
+          prefix: 'DB_',
+          schema: {
+            HOST: { type: 'host', required: true },
+            PORT: { type: 'port', default: 5432 },
+          },
+        },
+      },
+    },
+  }, process.env);
+  // reads APP_DB_HOST / APP_DB_PORT
+  // returns { APP: { DB: { HOST: '...', PORT: 5432 } } }
+  ```
+
 - The result nests under the group key: `{ DB: { HOST, PORT } }`. If no inner key is present, the group key is omitted, just like an absent optional flat key.
 - The returned result and each group object are frozen. Rule values keep their existing mutability, including parsed JSON, arrays, and objects supplied by defaults or transforms.
 - `strict`, `aliases`, `requiredIf` and `default` all work inside groups; inside a group, `aliases` and `requiredIf.key` use **full env var names** (e.g. `aliases: ['DATABASE_HOST']`, `requiredIf: { key: 'NODE_ENV', equals: 'production' }`, or another group's `'DB_HOST'`).
-- `generateExample` still emits flat env names (`DB_HOST=...`) with a `# group DB` comment above the group's keys.
+- `generateExample` still emits flat env names (`DB_HOST=...`) with a comment at each group level (`# group APP`, `# group APP.DB`). `toJsonSchema` follows the nested result shape.
 - `loadEnv(..., { assign: true })` writes the flat names back (`DB_HOST=...`), never a nested object.
-- Malformed groups are rejected up front by `validateSchema` (now exported): a missing/empty `prefix`, a non-object or empty `schema`, a `type` on the group, nested groups, extra options on the group, or a prefix that collides with another key (e.g. a declared `DB_HOST` plus a `DB_` group) all throw `EnvSaafError` naming the problem.
+- Malformed groups are rejected up front by `validateSchema` (now exported): a missing/empty `prefix`, a non-object or empty `schema`, a `type` on the group, circular group references, extra options on the group, or a composed prefix that collides with another key (e.g. a declared `APP_DB_HOST` plus nested `APP_` / `DB_` groups) all throw `EnvSaafError` naming the problem. The same sub-schema can be reused in separate groups.
 - In TypeScript, `EnvResult` nests groups too: `env.DB` is `{ HOST: string; PORT: number; ... } | undefined` (the group key is optional; inner keys keep their own required/default optionality). `EnvGroupRule` is exported for typing a standalone group rule.
+
 ### Per-key `validate` — custom validation rules
 
 Some rules are app-specific — a path must be an existing directory, or two keys must differ. Pass a `validate(value, env)` function on the key instead of forking the library:
@@ -745,9 +785,24 @@ date-time strings (the schema also accepts the `date` format). The `json` type
 allows any JSON shape. JSON-compatible `choices` become `enum` values without
 re-coercion. Representable defaults are exported in coerced form as annotations;
 JSON Schema does not fill in missing values. Avoid putting secrets in schema
-defaults or choices that will be shared.
+defaults, choices or condition values that will be shared.
 
-**Not represented:** `transform`, `validate`, `requiredIf`, `aliases`, `sensitive`,
+`requiredIf` becomes [conditional validation](https://json-schema.org/understanding-json-schema/reference/conditionals#if-then-else)
+with `if` / `then`, using `const` for `equals` and `enum` for `in`. Multiple or
+grouped conditions use `allOf`. A condition tests a present, canonical value
+without re-coercing it. For groups, use the full env name in `requiredIf.key`;
+the exported test and requirement use the respective nested JSON paths.
+Resolve aliases and apply defaults before validating if they affect the values
+you supply: an omitted discriminator does not match, even if it has a `default`
+annotation. A target with its own default does not become conditionally required.
+
+Conditions on undeclared env keys, discriminators with custom validation or
+transforms, and `date` or `array` discriminators are not exported. Comparisons
+that depend on object identity or custom membership behavior are also omitted.
+For a `json` discriminator, JSON scalars (including `null`) can match; values
+like `Infinity` cannot match canonical JSON and are ignored in membership lists.
+
+**Not represented:** `transform`, `validate`, `aliases`, `sensitive`,
 input trimming and splitting, regular-expression flags (flagged patterns are omitted),
 and defaults that cannot be converted to JSON without loss or depend on local time.
 File existence and the detailed `base64` check remain runtime-only.
@@ -756,7 +811,7 @@ env-saaf's checks. JSON Schema counts Unicode characters for string lengths;
 env-saaf counts JavaScript UTF-16 code units. Use `validateEnv` or `loadEnv`
 for runtime validation.
 
-### Log config without leaking secrets
+### Mask string config values
 
 ```js
 const { maskSecrets } = require('env-saaf');
@@ -765,7 +820,9 @@ console.log(maskSecrets(process.env)); // values masked: sk***56
 
 An empty value stays empty — `maskValue('')` returns `''`, so an unset secret no longer looks set in logs.
 
-`maskSecrets` also recurses: nested plain objects and arrays keep their shape, and every scalar leaf is masked with the same `maskValue` rules, so a parsed config logs safely (`maskSecrets({ DB: { PASSWORD: 'hunter2' }, TAGS: ['a', 'b'] })` → `{ DB: { PASSWORD: 'hu***r2' }, TAGS: ['****', '****'] }`). Non-plain values (`Date`, class instances) are treated as leaves, a repeated reference such as a cycle is replaced with the fixed placeholder `'[Circular]'` instead of hanging, and the input object is never mutated. In TypeScript the return type mirrors the input shape recursively (`Masked<T>`), with every leaf typed as `string`.
+`maskValue` masks strings only. Empty strings stay empty; numbers, booleans, bigints, symbols, `null`, `undefined`, functions and objects pass through unchanged.
+
+`maskSecrets` recurses into plain objects and arrays, copies their shape and masks string leaves. Other primitives and non-plain objects (`Date`, `RegExp`, class instances) keep their values and identity. A repeated plain-object or array reference, including a cycle, becomes `'[Circular]'`. The input is never mutated. TypeScript's `Masked<T>` preserves non-string leaf types. These helpers have no schema or sensitive-key context: a numeric secret or a secret stored inside a class instance is not masked, so do not treat their output as automatically safe to log.
 
 ## How env-saaf compares to envalid, joi, and zod
 

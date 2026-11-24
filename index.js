@@ -8,12 +8,29 @@
 const fs = require('node:fs');
 const net = require('node:net');
 const path = require('node:path');
+const { isProxy } = require('node:util').types;
+
+// Issue #294: expose the structured form of every diagnostic alongside the
+// printable `errors` strings. A leading `KEY: ` is recognised only when the key
+// is the whole first token (no spaces or extra colons), so global messages such
+// as `unknown option "x" (validateEnv accepts: ...)` are not split at the colon
+// inside them. Grouped keys are already full env names (e.g. `DB_HOST`), and
+// dotted names are left intact.
+function errorDetails(errors) {
+  return errors.map(message => {
+    const match = /^([^\s:]+): ([\s\S]*)$/.exec(message);
+    return match
+      ? { key: match[1], message: match[2] }
+      : { key: '', message };
+  });
+}
 
 class EnvSaafError extends Error {
   constructor(errors, message) {
     super(typeof message === 'string' ? message : 'Invalid environment variables:\n' + errors.map(e => `  - ${e}`).join('\n'));
     this.name = 'EnvSaafError';
     this.errors = errors;
+    this.details = errorDetails(errors);
   }
 }
 
@@ -101,23 +118,40 @@ function groupShape(rule) {
     && rule.schema !== null && typeof rule.schema === 'object' && !Array.isArray(rule.schema);
 }
 
-// Flatten a (valid) schema into plain rules keyed by full env name, plus a
-// map from flat key back to its group for re-nesting the result.
-function flattenSchema(schema) {
-  const flat = {};
-  const groupOf = new Map();
+function invalidSchema(errors) {
+  const unique = [...new Set(errors)];
+  return new EnvSaafError(unique, 'Invalid schema:\n' + unique.map(e => `  - ${e}`).join('\n'));
+}
+
+// Keep env prefixes separate from result paths: APP_DB_HOST becomes APP.DB.HOST.
+// Only active ancestors are circular; a shared sub-schema can appear in several groups.
+function walkSchema(schema, onRule, onGroup = () => {}, prefix = '', path = [], ancestors = new Set()) {
+  if (ancestors.has(schema)) throw invalidSchema([`${path.join('.')}: group "schema" contains a circular reference`]);
+  ancestors.add(schema);
   for (const [key, rule] of Object.entries(schema)) {
     if (groupShape(rule)) {
-      for (const [innerKey, innerRule] of Object.entries(rule.schema)) {
-        const flatKey = rule.prefix + innerKey;
-        flat[flatKey] = innerRule;
-        groupOf.set(flatKey, { group: key, innerKey });
-      }
+      if (typeof rule.prefix !== 'string' || rule.prefix.trim() === '') continue; // shape validation reports it
+      const groupPath = [...path, key];
+      const groupPrefix = prefix + rule.prefix;
+      onGroup(groupPath, groupPrefix);
+      walkSchema(rule.schema, onRule, onGroup, groupPrefix, groupPath, ancestors);
     } else {
-      flat[key] = rule;
+      onRule(prefix + key, rule, [...path, key], prefix);
     }
   }
-  return { flat, groupOf };
+  ancestors.delete(schema);
+}
+
+// Flatten a (valid) schema into plain rules keyed by full env name, plus a
+// map back to each grouped result path for re-nesting.
+function flattenSchema(schema, prefix = '') {
+  const entries = [];
+  const groupOf = new Map();
+  walkSchema(schema, (key, rule, path) => {
+    entries.push([key, rule]);
+    if (path.length > 1) groupOf.set(key, path);
+  }, undefined, prefix);
+  return { flat: Object.fromEntries(entries), groupOf };
 }
 
 // Re-nest flat results: DB_HOST -> out.DB.HOST. Groups whose keys all
@@ -125,17 +159,20 @@ function flattenSchema(schema) {
 function nestGroups(out, groupOf) {
   const nested = {};
   const groups = [];
+  const put = (object, key, value) => Object.defineProperty(object, key, {
+    value, enumerable: true, writable: true, configurable: true,
+  });
   for (const [k, v] of Object.entries(out)) {
-    const g = groupOf.get(k);
-    if (g) {
-      if (nested[g.group] === undefined) {
-        nested[g.group] = {};
-        groups.push(nested[g.group]);
+    const path = groupOf.get(k) || [k];
+    let current = nested;
+    for (const key of path.slice(0, -1)) {
+      if (!Object.prototype.hasOwnProperty.call(current, key)) {
+        put(current, key, {});
+        groups.push(current[key]);
       }
-      nested[g.group][g.innerKey] = v;
-    } else {
-      nested[k] = v;
+      current = current[key];
     }
+    put(current, path[path.length - 1], v);
   }
   // Freeze only the containers we created, leaving rule values untouched.
   for (const group of groups) Object.freeze(group);
@@ -167,11 +204,14 @@ function validateSchema(schema) {
   validateSchemaRules(schema, msg => console.warn(msg));
 }
 
-function validateSchemaRules(schema, warn, patterns = new Map()) {
+function validateSchemaRules(schema, warn, patterns = new Map(), prefix = '', ancestors = new Set()) {
+  if (ancestors.has(schema)) throw invalidSchema([`${prefix}: group "schema" contains a circular reference`]);
+  ancestors = new Set(ancestors).add(schema);
   const errors = [];
-  const keys = new Set(Object.keys(schema));
+  const keys = new Set(Object.keys(schema).map(key => prefix + key));
   const aliasOwners = new Map();
-  for (const [key, rule] of Object.entries(schema)) {
+  for (const [name, rule] of Object.entries(schema)) {
+    const key = prefix + name;
     if (rule === null || typeof rule !== 'object' || Array.isArray(rule)) continue;
     // Issue #228: group rule — validate its shape, then its inner rules under
     // their full (prefixed) names so errors read `DB_HOST: ...`, not `HOST`.
@@ -193,17 +233,9 @@ function validateSchemaRules(schema, warn, patterns = new Map()) {
       } else {
         const innerKeys = Object.keys(inner);
         if (innerKeys.length === 0) errors.push(`${key}: group "schema" must not be empty`);
-        for (const ik of innerKeys) {
-          const ir = inner[ik];
-          if (ir !== null && typeof ir === 'object' && !Array.isArray(ir) && ir.schema !== undefined) {
-            errors.push(`${key}: groups cannot be nested (inner "${ik}" is itself a group)`);
-          }
-        }
-        if (typeof rule.prefix === 'string' && rule.prefix !== '') {
-          const sub = {};
-          for (const ik of innerKeys) sub[rule.prefix + ik] = inner[ik];
+        if (typeof rule.prefix === 'string' && rule.prefix.trim() !== '') {
           try {
-            validateSchemaRules(sub, () => {}, patterns);
+            validateSchemaRules(inner, () => {}, patterns, prefix + rule.prefix, ancestors);
           } catch (e) {
             if (e instanceof EnvSaafError) errors.push(...e.errors);
             else throw e;
@@ -339,22 +371,25 @@ function validateSchemaRules(schema, warn, patterns = new Map()) {
     // can never match any real input: the string '1' for an `int`, 'true' for
     // a `boolean`. Coerce each choice the way a value is coerced and reject
     // the ones that fail or come back different from what was written.
+    // Issue #320: on an `array` rule choices apply to each coerced item, so
+    // validate them against `of` (the item type) instead of 'array'.
     // String-typed rules are fine. A `date` value is always a freshly parsed
     // Date object, so no choice (Date or string) can ever be equal to it.
     // Non-finite numbers (Infinity, NaN) are left alone: toJsonSchema() drops
     // them from the generated `enum` on purpose, so they stay valid here.
     if (Array.isArray(rule.choices) && rule.choices.length > 0) {
-      if (effectiveType === 'date') {
+      const choiceType = effectiveType === 'array' ? (rule.of || 'string') : effectiveType;
+      if (choiceType === 'date') {
         errors.push(`${key}: "choices" cannot be used with type 'date' (a parsed date is a new Date object, so no choice can ever match)`);
-      } else if (['number', 'int', 'port', 'boolean', 'duration'].includes(effectiveType)) {
+      } else if (['number', 'int', 'port', 'boolean', 'duration'].includes(choiceType)) {
         for (const choice of rule.choices) {
           if (typeof choice === 'number' && !Number.isFinite(choice)) continue;
           let matches = false;
-          try { matches = coerce(key, choice, effectiveType) === choice; }
+          try { matches = coerce(key, choice, choiceType) === choice; }
           catch { /* not a value this type can produce */ }
           if (!matches) {
             const shownChoice = typeof choice === 'string' ? JSON.stringify(choice) : String(choice);
-            errors.push(`${key}: "choices" entry ${shownChoice} can never match type '${effectiveType}' (a choice must be a value this type can produce)`);
+            errors.push(`${key}: "choices" entry ${shownChoice} can never match type '${choiceType}' (a choice must be a value this type can produce)`);
           }
         }
       }
@@ -446,27 +481,25 @@ function validateSchemaRules(schema, warn, patterns = new Map()) {
   // overlapping) — that would silently read one env var for two rules.
   const flatOwners = new Map();
   for (const key of keys) flatOwners.set(key, `"${key}"`);
-  for (const [key, rule] of Object.entries(schema)) {
-    if (!groupShape(rule)) continue;
-    if (typeof rule.prefix !== 'string' || rule.prefix === '') continue; // already reported above
-    for (const ik of Object.keys(rule.schema)) {
-      const fk = rule.prefix + ik;
-      if (flatOwners.has(fk)) {
-        errors.push(`${key}: prefix "${rule.prefix}" makes "${fk}" collide with ${flatOwners.get(fk)}`);
-      } else {
-        flatOwners.set(fk, `the "${key}" group`);
-      }
+  walkSchema(schema, (key, rule, path, fullPrefix) => {
+    if (path.length === 1) return; // flat names and group names were reserved above
+    const group = prefix + path.slice(0, -1).join('.');
+    if (flatOwners.has(key)) {
+      errors.push(`${group}: prefix "${fullPrefix}" makes "${key}" collide with ${flatOwners.get(key)}`);
+    } else {
+      flatOwners.set(key, `the "${group}" group`);
     }
-  }
+  }, undefined, prefix);
   // Issue #228: aliases inside a group are FULL env names, and each group used
   // to be validated with its own fresh alias map — so an alias in one group
   // could name another group's key (or a flat key) and one env var would then
   // silently feed two rules. Run the alias collision check over the FLATTENED
   // schema as well; the per-group recursion above already reports the
   // within-group cases, and the dedupe below keeps every message single.
-  const flatKeys = new Set(Object.keys(flattenSchema(schema).flat));
+  const { flat } = flattenSchema(schema, prefix);
+  const flatKeys = new Set(Object.keys(flat));
   const flatAliasOwners = new Map();
-  for (const [fkey, frule] of Object.entries(flattenSchema(schema).flat)) {
+  for (const [fkey, frule] of Object.entries(flat)) {
     if (frule === null || typeof frule !== 'object' || Array.isArray(frule)
       || !Array.isArray(frule.aliases)
       || frule.aliases.some(a => typeof a !== 'string' || a.trim() === '')) continue; // already reported above
@@ -484,12 +517,11 @@ function validateSchemaRules(schema, warn, patterns = new Map()) {
     // Issue #283: a schema problem is a bug in the schema, not a bad env value.
     // Label it "Invalid schema:" so users debug the right thing; the errors
     // array is unchanged, only the header differs from genuine value errors.
-    const unique = [...new Set(errors)];
-    throw new EnvSaafError(unique, 'Invalid schema:\n' + unique.map(e => `  - ${e}`).join('\n'));
+    throw invalidSchema(errors);
   }
   // Check only the complete flattened schema: a group may reference a key
   // in another group or at the top level. External flags remain supported.
-  for (const [key, rule] of Object.entries(flattenSchema(schema).flat)) {
+  for (const [key, rule] of Object.entries(flat)) {
     if (rule && rule.requiredIf && !flatKeys.has(rule.requiredIf.key)) {
       warn(`env-saaf: ${key}: requiredIf references undeclared key "${rule.requiredIf.key}"; check for a typo or declare the key (external env flags still work)`);
     }
@@ -1094,9 +1126,22 @@ function validateEnvCore(schema, env, options) {
           continue;
         }
       }
-      if (rule.choices && !rule.choices.includes(val)) {
-        errors.push(`${key}: expected one of [${rule.choices.join(', ')}], got "${shown}"`);
-        continue;
+      if (rule.choices) {
+        if (Array.isArray(val)) {
+          // Issue #320: `choices` on an array rule constrains each coerced
+          // item, not the array itself. Name the key, the bad item and its
+          // index so the failure is actionable (as `unique: true` does).
+          const badIndex = val.findIndex(item => !rule.choices.includes(item));
+          if (badIndex !== -1) {
+            const item = val[badIndex];
+            const shownItem = sensitive ? maskValue(safeString(item)) : safeString(item);
+            errors.push(`${key}: expected one of [${rule.choices.join(', ')}], got "${shownItem}" (item ${badIndex})`);
+            continue;
+          }
+        } else if (!rule.choices.includes(val)) {
+          errors.push(`${key}: expected one of [${rule.choices.join(', ')}], got "${shown}"`);
+          continue;
+        }
       }
       // Keep compiled strings off the caller's rules so frozen schemas work
       // and later validations can see changes to the source.
@@ -1210,7 +1255,7 @@ function validateEnv(schema, env = process.env, options = {}) {
   const { out, errors, groupOf } = validateEnvCore(schema, env, options);
   // Issue #228: re-nest grouped keys (DB_HOST -> { DB: { HOST } }).
   const result = groupOf.size ? nestGroups(out, groupOf) : out;
-  if (options.throwOnError === false) return { env: Object.freeze(result), errors };
+  if (options.throwOnError === false) return { env: Object.freeze(result), errors, details: errorDetails(errors) };
   if (errors.length) {
     throw new EnvSaafError(errors, formatErrorMessage(errors, schema, options));
   }
@@ -1709,29 +1754,30 @@ function diffEnv(usedKeys, documentedKeys) {
   };
 }
 
-/** Mask a secret for safe logging: "sk_live_123456" -> "sk***56". Short values are fully masked; an empty string is returned unchanged — there is nothing to hide. */
+/** Mask a string; non-string inputs are returned unchanged. String examples: "sk_live_123456" -> "sk***56". Short values are fully masked; an empty string is returned unchanged — there is nothing to hide. */
 function maskValue(v) {
-  const s = String(v);
+  if (typeof v !== 'string') return v;
+  const s = v;
   if (s.length === 0) return '';
   if (s.length <= 4) return '****';
   return s.slice(0, 2) + '***' + s.slice(-2);
 }
 
-/** Return a copy of an env object with every value masked — safe to print/log.
+/** Return a copy of an env object with string values masked.
  *  Plain objects and arrays are walked recursively (issue #234), so the masked
  *  structure mirrors the input shape; scalar leaves use the maskValue rules.
- *  Non-plain values (Date, RegExp, class instances) stay leaves via maskValue.
+ *  Non-string primitives and non-plain objects stay unchanged.
  *  A repeated reference (e.g. a cycle) is replaced with a fixed placeholder
  *  instead of hanging. The input is never mutated. */
 function maskSecrets(obj) {
   const seen = new Set();
   const walk = (value) => {
     if (value === null || typeof value !== 'object') return maskValue(value);
+    const proto = Object.getPrototypeOf(value);
+    if (!Array.isArray(value) && proto !== Object.prototype && proto !== null) return value;
     if (seen.has(value)) return '[Circular]';
     seen.add(value);
     if (Array.isArray(value)) return value.map(walk);
-    const proto = Object.getPrototypeOf(value);
-    if (proto !== Object.prototype && proto !== null) return maskValue(value);
     const out = {};
     for (const [k, v] of Object.entries(value)) out[k] = walk(v);
     return out;
@@ -1764,14 +1810,32 @@ const ARRAY_ITEM_EXAMPLES = {
   file: ['./a.json', './b.json', './c.json'],
 };
 
-/** Placeholder for an `array` rule: example items of the `of` type, sized to fit minItems/maxItems, joined by `separator`. */
+/** Placeholder for an `array` rule: example items of the `of` type (or the rule's `choices`), sized to fit minItems/maxItems, joined by `separator`. */
 function arrayPlaceholder(rule) {
-  const examples = ARRAY_ITEM_EXAMPLES[rule.of || 'string'] || ARRAY_ITEM_EXAMPLES.string;
-  let count = Math.max(3, rule.minItems || 0);
+  const separator = rule.separator || ',';
+  const hasChoices = Array.isArray(rule.choices) && rule.choices.length > 0;
+  let examples;
+  if (hasChoices) {
+    // Issue #320: use allowed choices so the generated example validates.
+    // A choice containing the separator cannot be represented in a delimited
+    // value, so prefer ones that can. Dedupe keeps `unique: true` examples valid.
+    const strings = rule.choices.map(choice => String(choice));
+    const usable = [...new Set(strings.filter(s => !s.includes(separator)))];
+    examples = usable.length ? usable : [...new Set(strings)];
+  } else {
+    examples = ARRAY_ITEM_EXAMPLES[rule.of || 'string'] || ARRAY_ITEM_EXAMPLES.string;
+  }
+  // Without choices, keep the old three-example placeholder. With choices,
+  // suggest each allowed item once and only cycle when minItems needs more.
+  let count = hasChoices ? examples.length : Math.max(3, rule.minItems || 0);
+  if (hasChoices && rule.minItems !== undefined) count = Math.max(count, rule.minItems);
   if (rule.maxItems !== undefined) count = Math.min(count, Math.max(1, rule.maxItems));
+  // A unique array cannot repeat a choice, so do not ask for more items than
+  // there are distinct choices (the schema itself is contradictory otherwise).
+  if (hasChoices && rule.unique === true) count = Math.min(count, examples.length);
   const items = [];
   for (let i = 0; i < count; i++) items.push(examples[i % examples.length]);
-  return items.join(rule.separator || ',');
+  return items.join(separator);
 }
 
 // A template should not materialize arbitrarily large padding from schema bounds.
@@ -1960,29 +2024,21 @@ function generateExample(schema) {
     const placeholder = rule.default !== undefined
       ? (rule.type === 'array' && Array.isArray(rule.default) ? rule.default.join(rule.separator || ',') : rule.default)
       : looksSecret ? ''
-      : Array.isArray(rule.choices) && rule.choices.length ? rule.choices[0]
+      // Issue #223/#320: build the array placeholder from the `of` item type's
+      // own examples, or from the allowed choices when present, so each
+      // suggested item validates (fallback: string items). The item count
+      // respects minItems/maxItems so the placeholder passes those bounds too
+      // — examples cycle when more than three are needed.
       : rule.type === 'array'
-        // Issue #223: build the array placeholder from the `of` item type's own
-        // examples, so each suggested item validates (fallback: string items).
-        // The item count respects minItems/maxItems so the placeholder passes
-        // those bounds too — examples cycle when more than three are needed.
         ? arrayPlaceholder(rule)
-        : scalarPlaceholder(rule, stringGrowth);
+      : Array.isArray(rule.choices) && rule.choices.length ? rule.choices[0]
+      : scalarPlaceholder(rule, stringGrowth);
       return [comment, `${key}=${placeholder}`];
   };
-  for (const [key, rule] of Object.entries(schema)) {
-    // Issue #228: a group emits its inner keys under their full prefixed env
-    // names, with a group comment above the run — the .env file stays flat.
-    if (groupShape(rule)) {
-      lines.push(`# group ${key} — the keys below are read from env vars prefixed with '${rule.prefix}'`);
-      for (const [innerKey, innerRule] of Object.entries(rule.schema)) {
-        lines.push(...entry(rule.prefix + innerKey, innerRule));
-      }
-      continue;
-    }
-    lines.push(...entry(key, rule));
-    continue;
-  }
+  // The .env file stays flat; each group level documents its complete prefix.
+  walkSchema(schema, (key, rule) => lines.push(...entry(key, rule)), (path, prefix) => {
+    lines.push(`# group ${path.join('.')} — the keys below are read from env vars prefixed with '${prefix}'`);
+  });
   return lines.join('\n') + '\n';
 }
 
@@ -2115,7 +2171,12 @@ function jsonSchemaForRule(key, rule, required) {
   }
   if (Array.isArray(rule.choices)) {
     const choices = [...new Set(rule.choices.filter(isJsonPrimitive))];
-    if (choices.length) property.enum = choices;
+    if (choices.length) {
+      // Issue #320: on an array rule the enum constrains each item. A
+      // top-level enum would mean the whole array must equal a single choice.
+      if (type === 'array') property.items.enum = choices;
+      else property.enum = choices;
+    }
   }
   if (rule.default !== undefined) {
     const value = jsonSchemaDefault(key, rule, type);
@@ -2126,6 +2187,96 @@ function jsonSchemaForRule(key, rule, required) {
   return property;
 }
 
+function jsonSchemaRequiredPath(key, groupOf, match) {
+  const path = groupOf.get(key) || [key];
+  let constraint = { required: [path[path.length - 1]] };
+  if (match) constraint.properties = { [path[path.length - 1]]: match };
+  for (let i = path.length - 2; i >= 0; i--) {
+    constraint = {
+      required: [path[i]],
+      properties: { [path[i]]: { type: 'object', ...constraint } },
+    };
+  }
+  return constraint;
+}
+
+function isArrayIncludes(method) {
+  const includes = Array.prototype.includes;
+  if (method === includes) return true;
+  if (typeof method !== 'function'
+    || Function.prototype.toString.call(method) !== Function.prototype.toString.call(includes)) return false;
+  // A different realm has its own native function. Other built-ins called
+  // includes (String, TypedArray) do not compare a symbol on an array-like object.
+  try {
+    const entry = Symbol();
+    return Reflect.apply(method, { 0: entry, length: 1 }, [entry]) === true;
+  } catch {
+    return false;
+  }
+}
+
+function jsonSchemaMembershipValues(list) {
+  // A proxy can change membership lookups without changing its descriptors.
+  for (let owner = list; owner !== null; owner = Object.getPrototypeOf(owner)) {
+    if (isProxy(owner)) return;
+  }
+  const descriptor = key => {
+    for (let owner = list; owner !== null; owner = Object.getPrototypeOf(owner)) {
+      const property = Object.getOwnPropertyDescriptor(owner, key);
+      if (property) return property;
+    }
+  };
+  // Array#includes visits indices, not the iterator. Don't infer results
+  // from overridden membership or execute accessors during schema export.
+  if (!isArrayIncludes(descriptor('includes')?.value)) return;
+  const values = [];
+  for (let i = 0; i < list.length; i++) {
+    const entry = descriptor(i);
+    if (!entry) continue;
+    if (!Object.prototype.hasOwnProperty.call(entry, 'value')) return;
+    values.push(entry.value);
+  }
+  return values;
+}
+
+function jsonSchemaRequiredIfMatch(source, condition) {
+  const type = source.type ?? 'string';
+  if (source.validate !== undefined || source.transform !== undefined || type === 'date' || type === 'array') return;
+  const membership = Object.prototype.hasOwnProperty.call(condition, 'in') && condition.in !== undefined;
+  const candidates = membership ? jsonSchemaMembershipValues(condition.in) : [condition.equals];
+  if (!candidates) return;
+  // JSON Schema compares structures; runtime object comparisons use identity.
+  if (type === 'json' && candidates.some(value => value !== null && typeof value === 'object')) return;
+  // Non-JSON primitives cannot match canonical values. Keep other list entries
+  // as typed literals, not env spellings such as 'false' or '01'.
+  const valueType = STRING_TYPES.has(type) ? 'string' : type === 'boolean' ? 'boolean' : 'number';
+  const values = [...new Set(candidates.filter(value => isJsonPrimitive(value)
+    && (type === 'json' || typeof value === valueType)))];
+  if (values.length) return membership ? { enum: values } : { const: values[0] };
+}
+
+function addJsonSchemaRequiredIf(schema, result) {
+  const { flat, groupOf } = flattenSchema(schema);
+  const clauses = [];
+  let grouped = false;
+  for (const [key, rule] of Object.entries(flat)) {
+    const condition = rule.requiredIf;
+    // Runtime consults requiredIf only for a missing key with no default.
+    if (!condition || rule.default !== undefined || !Object.prototype.hasOwnProperty.call(flat, condition.key)) continue;
+    const match = jsonSchemaRequiredIfMatch(flat[condition.key], condition);
+    if (!match) continue;
+    // `properties` alone matches absent values. Require every step of the
+    // source path, as well as the full target path when the condition matches.
+    clauses.push({
+      if: jsonSchemaRequiredPath(condition.key, groupOf, match),
+      then: jsonSchemaRequiredPath(key, groupOf),
+    });
+    grouped = grouped || groupOf.has(key) || groupOf.has(condition.key);
+  }
+  if (clauses.length === 1 && !grouped) Object.assign(result, clauses[0]);
+  else if (clauses.length) result.allOf = clauses;
+}
+
 function toJsonSchema(schema) {
   validateSchema(schema);
   const required = [];
@@ -2133,6 +2284,7 @@ function toJsonSchema(schema) {
     [key, jsonSchemaForRule(key, rule, required)]));
   const result = { $schema: 'https://json-schema.org/draft/2020-12/schema', type: 'object', properties };
   if (required.length) result.required = required;
+  addJsonSchemaRequiredIf(schema, result);
   return result;
 }
 
