@@ -47,7 +47,7 @@ Environment inputs are strings. Output below is before an optional `transform`.
 
 | Type | Accepted input | JavaScript output | Additional rule options |
 | --- | --- | --- | --- |
-| `string` | Any non-missing text (default type) | `string` | `trim`, `minLength`, `maxLength`, `pattern` |
+| `string` | Any non-missing text (default type) | `string` | `trim`, `minLength`, `maxLength`, `pattern` (`RegExp` or string) |
 | `number` | Non-empty decimal text, including fractions and exponent notation. Rejects radix prefixes (`0x`, `0b`, `0o`), `NaN` and non-finite values. | `number` | `trim`, `min`, `max` |
 | `int` | Plain integer literal: optional sign + digits, e.g. `42`, `-3`, `007`. Decimal and scientific spellings (`1.0`, `1e3`) are rejected, as are radix prefixes | `number` | `trim`, `min`, `max` |
 | `boolean` | Case-insensitive `true/false`, `1/0`, `yes/no`, `on/off`, `y/n` | `boolean` | None |
@@ -61,7 +61,7 @@ Environment inputs are strings. Output below is before an optional `transform`.
 | `ipv4` | Four decimal octets, each 0 to 255; no leading zeroes | `string` | `trim`, `minLength`, `maxLength`, `pattern` |
 | `semver` | `MAJOR.MINOR.PATCH`, optional prerelease and build suffixes, and one optional lowercase `v` prefix (`v1.2.3`). Leading numeric zeroes and uppercase `V` are rejected. | `string` | `trim`, `minLength`, `maxLength`, `pattern` |
 | `base64` | Standard or URL-safe alphabet, with optional padding. | `string` | `trim`, `minLength`, `maxLength`, `pattern` |
-| `date` | Valid `YYYY-MM-DD` or datetime with `T` and hours/minutes; optional seconds, fraction and `Z` or numeric offset. Accepts valid `Date` defaults. | `Date` | `trim` |
+| `date` | Valid `YYYY-MM-DD` or datetime with `T` and hours/minutes; optional seconds, fraction and `Z` or numeric offset. Accepts valid `Date` defaults. | `Date` | `trim`, `min`, `max` (ISO date strings) |
 | `duration` | Human duration: `500ms`, `30s`, `15m`, `2h`, `1d`, `1w`, compounds like `1h30m`; a bare number is milliseconds | `number` (milliseconds) | `trim`, `min`, `max` |
 | `host` | Hostname (`db.internal`, `localhost`) or IPv4/IPv6 address; no scheme, path or port | `string` | `trim`, `minLength`, `maxLength`, `pattern` |
 | `array` | Delimited list split by `separator` (default `,`) with each item coerced as `of` (default `string`). Empty items are rejected. Accepts array defaults. | Typed array (`T[]`) | `of`, `separator`, `trim`, `protocols` (when `of: 'url'`), `minItems`, `maxItems`, `unique` |
@@ -98,12 +98,12 @@ Without a hook, runtime validation also uses `console.warn`.
 
 ### Non-throwing mode — collect errors instead of throwing
 
-A health check, a CLI, or a server that wants to boot in a degraded mode cannot use an API that throws on the first bad value. Pass `{ throwOnError: false }` and `validateEnv` returns `{ env, errors }` instead: `env` holds every value that validated, and `errors` is the same list `EnvSaafError` would have carried.
+A health check, a CLI, or a server that wants to boot in a degraded mode cannot use an API that throws on the first bad value. Pass `{ throwOnError: false }` and `validateEnv` returns `{ env, errors, details }` instead: `env` holds every value that validated, `errors` is the same list `EnvSaafError` would have carried, and `details` is the same list split into `{ key, message }` objects (see [Structured error details](#structured-error-details)).
 
 ```js
 const { validateEnv } = require('env-saaf');
 
-const { env, errors } = validateEnv(
+const { env, errors, details } = validateEnv(
   {
     PORT:  { type: 'port', required: true },
     DEBUG: { type: 'boolean', default: false },
@@ -114,6 +114,7 @@ const { env, errors } = validateEnv(
 
 if (errors.length) {
   console.warn('config problems:', errors);
+  for (const { key, message } of details) showFieldError(key, message);
   // keep booting: env.DEBUG is still usable, env.PORT is absent
 }
 ```
@@ -140,10 +141,27 @@ try {
 
 - `errors` is a read-only copy of the same raw diagnostics `error.errors` carries. These are the existing messages, so they can include non-sensitive input examples (values of `sensitive: true` keys stay masked, as before). `context` is separate and contains only `{ keys }`, the schema's key names; the environment object and schema rules are never passed in.
 - The string you return becomes `error.message`. `error.errors` is unchanged, and without the option the message is byte-for-byte what it was.
-- A hook that throws, or returns anything other than a string, falls back to the default message. A `formatError` that is not a function is a `TypeError`.
+- If the hook throws, its error propagates out of `validateEnv` / `loadEnv` unchanged — a broken hook is a programming error, so it is never silently replaced by the default message. A hook that returns anything other than a string still falls back to the default message. A `formatError` that is not a function is a `TypeError`.
 - With `{ throwOnError: false }` no error is thrown, so the hook is not called and `errors` in the result stays raw. `loadEnv` always throws, so it forwards the hook for validation failures. Failures before validation, such as an unreadable or unparsable `.env` file, throw their own errors and are outside the hook's scope. Malformed-schema errors are not formatted either.
 
-In TypeScript, `{ throwOnError: false }` (not `formatError`) narrows the return type to `ValidateResult<S>` (`{ env: EnvResult<S>; errors: string[] }`), so `env.PORT` keeps the type inferred from the schema.
+In TypeScript, `{ throwOnError: false }` (not `formatError`) narrows the return type to `ValidateResult<S>` (`{ env: EnvResult<S>; errors: string[]; details: ErrorDetail[] }`), so `env.PORT` keeps the type inferred from the schema.
+
+### Structured error details
+
+For programmatic handling — mapping failures back to form fields, translating messages, grouping by key — both the thrown error and the non-throwing result expose a `details` array of `{ key, message }` objects. It mirrors `errors` one-to-one, in the same order, without changing the printable strings or `error.message`. `key` is the full env name (including the group prefix for grouped keys, e.g. `DB_HOST`), and `message` is the text with the `key: ` prefix removed. Errors that are not tied to a key (such as an unknown option) use `key: ''` and keep the full text as `message`.
+
+```js
+try {
+  validateEnv(schema, process.env);
+} catch (err) {
+  for (const { key, message } of err.details) {
+    // key: 'DB_PORT', message: 'expected a port (0-65535, e.g. 3000), got "abc"'
+    showFieldError(key, message);
+  }
+}
+```
+
+The same field is available without throwing: `const { env, errors, details } = validateEnv(schema, process.env, { throwOnError: false })`. A custom `formatError` changes only `error.message`; `errors` and `details` stay raw.
 
 ### Strict mode — catch typos in variable names
 
@@ -200,12 +218,35 @@ const env = validateEnv(
 ```
 
 - A group is a rule with a `schema` object and no `type`, plus a non-empty `prefix`. Every inner rule is read from `prefix + INNER_NAME`, so errors always name the full env var (`DB_HOST: missing required variable`).
+- Groups can contain other groups at any depth. Their prefixes concatenate, while the result follows the group keys:
+
+  ```js
+  const env = validateEnv({
+    APP: {
+      prefix: 'APP_',
+      schema: {
+        DB: {
+          prefix: 'DB_',
+          schema: {
+            HOST: { type: 'host', required: true },
+            PORT: { type: 'port', default: 5432 },
+          },
+        },
+      },
+    },
+  }, process.env);
+  // reads APP_DB_HOST / APP_DB_PORT
+  // returns { APP: { DB: { HOST: '...', PORT: 5432 } } }
+  ```
+
 - The result nests under the group key: `{ DB: { HOST, PORT } }`. If no inner key is present, the group key is omitted, just like an absent optional flat key.
+- The returned result and each group object are frozen. Rule values keep their existing mutability, including parsed JSON, arrays, and objects supplied by defaults or transforms.
 - `strict`, `aliases`, `requiredIf` and `default` all work inside groups; inside a group, `aliases` and `requiredIf.key` use **full env var names** (e.g. `aliases: ['DATABASE_HOST']`, `requiredIf: { key: 'NODE_ENV', equals: 'production' }`, or another group's `'DB_HOST'`).
-- `generateExample` still emits flat env names (`DB_HOST=...`) with a `# group DB` comment above the group's keys.
+- `generateExample` still emits flat env names (`DB_HOST=...`) with a comment at each group level (`# group APP`, `# group APP.DB`). `toJsonSchema` follows the nested result shape.
 - `loadEnv(..., { assign: true })` writes the flat names back (`DB_HOST=...`), never a nested object.
-- Malformed groups are rejected up front by `validateSchema` (now exported): a missing/empty `prefix`, a non-object or empty `schema`, a `type` on the group, nested groups, extra options on the group, or a prefix that collides with another key (e.g. a declared `DB_HOST` plus a `DB_` group) all throw `EnvSaafError` naming the problem.
+- Malformed groups are rejected up front by `validateSchema` (now exported): a missing/empty `prefix`, a non-object or empty `schema`, a `type` on the group, circular group references, extra options on the group, or a composed prefix that collides with another key (e.g. a declared `APP_DB_HOST` plus nested `APP_` / `DB_` groups) all throw `EnvSaafError` naming the problem. The same sub-schema can be reused in separate groups.
 - In TypeScript, `EnvResult` nests groups too: `env.DB` is `{ HOST: string; PORT: number; ... } | undefined` (the group key is optional; inner keys keep their own required/default optionality). `EnvGroupRule` is exported for typing a standalone group rule.
+
 ### Per-key `validate` — custom validation rules
 
 Some rules are app-specific — a path must be an existing directory, or two keys must differ. Pass a `validate(value, env)` function on the key instead of forking the library:
@@ -252,12 +293,12 @@ The transform runs after coercion, built-in checks (`min`/`max`, `minLength`/`ma
 ```js
 const env = validateEnv({
   ADMIN_EMAIL: { type: 'email', required: true },
-  SLUG:        { type: 'string', pattern: /^[a-z0-9-]+$/ },
+  SLUG:        { type: 'string', pattern: '^[a-z0-9-]+$' },
   API_KEY:     { type: 'string', pattern: /^sk_[A-Za-z0-9]+$/ },
 });
 ```
 
-The `email` check is pragmatic — one `@`, a non-empty local part and domain, and a dot in the domain — not full RFC 5322. `pattern` takes a `RegExp` that a string value must match (`string`, `email`, `url`, `file`, `uuid`, `hex`, `ipv4`, `semver`, `base64`, `host`); it runs after coercion and the `choices` check, a mismatch error names the pattern that failed, and using `pattern` on a non-string type is rejected up front.
+The `email` check is pragmatic: one `@`, a non-empty local part and domain, and a dot in the domain. It does not implement full RFC 5322. `pattern` accepts a `RegExp` or a regular expression source string on string-valued types (`string`, `email`, `url`, `file`, `uuid`, `hex`, `ipv4`, `semver`, `base64`, `host`). A source string has no `/.../` delimiters and is compiled without flags. Use a `RegExp` for flags such as `i`. Invalid sources and uses on non-string types produce a schema error naming the key. Matching runs after coercion and the `choices` check, and a mismatch names the pattern.
 
 ### `int` type and `min`/`max` — whole numbers and ranges
 
@@ -269,6 +310,16 @@ const env = validateEnv({
 ```
 
 `int` is like `number` but only accepts plain integer literals — `42`, `-3` and `007` pass, while `3.5`, `1.0` and `1e3` fail (decimal and scientific spellings are not integer literals, even when the value happens to be whole). `port` follows the same rule. `min` and `max` work on `number`, `int` and `port`; either one can be used alone, and an out-of-range value is rejected with an error naming the allowed range.
+
+### `date` type and `min`/`max` — chronological bounds
+
+```js
+const env = validateEnv({
+  LAUNCH_DATE: { type: 'date', min: '2026-01-01', max: '2026-12-31' },
+});
+```
+
+For `date` rules, `min` and `max` are ISO date (or datetime) strings — or `Date` objects — compared chronologically against the parsed value, so `2026-01-01T00:00:00Z` is exactly on the `2026-01-01` bound. Either bound can be used alone, both ends are inclusive, and an out-of-range value is rejected with an error naming the allowed range (`expected a date on or after 2026-01-01, got "2025-12-31"`). A numeric bound is rejected up front as a schema error, as is a bound that is not a valid date or a `min` above `max`. `generateExample` uses the bound itself when the default `2026-01-31` example falls outside the range, so a generated `.env.example` still passes `check`. JSON Schema has no keyword for comparing date strings, so `toJsonSchema` does not render the bounds.
 
 ### `json` type and `minLength`/`maxLength` — structured values and string lengths
 
@@ -409,7 +460,7 @@ Use `${VAR:-fallback}` to supply a fallback when a value is unset or expands to 
 
 Quoted values may also span several lines (PEM keys, JSON blobs) — parsing continues until the closing quote. A backslash-escaped quote (`\'` inside single quotes, `\"` inside double quotes) stays part of the value, so `B='it\'s'` is `it's`; other backslashes, such as a Windows path, are kept as-is.
 
-A bare line without `=`, or an assignment with an invalid key (such as `app.name`, `MY-KEY` or `MY KEY`), raises a syntax error with its line number, without echoing the value. Keys must match `[A-Za-z_][A-Za-z0-9_]*`. Use `KEY=` for an empty value.
+A bare line without `=`, or an assignment with an invalid key (such as `MY KEY`), raises a syntax error with its line number, without echoing the value. Assignment keys must match `[A-Za-z_][A-Za-z0-9_.-]*`: dots and dashes are allowed after the first character (as in `app.name` and `MY-KEY`), but spaces within a key are not. Use `KEY=` for an empty value.
 
 In async code, use `loadEnvAsync` to read files without blocking on filesystem I/O.
 
@@ -702,6 +753,10 @@ API_KEY=
 
 Keys that look like secrets (`API_KEY`, `DB_PASSWORD`, …) get an empty placeholder — nothing safe to suggest for them. Other keys get a type-based placeholder, and an explicit `default` is used as-is. Keys with `aliases` note the deprecated fallback names (`# type: url, required; also accepts DATABASE_URL (deprecated)`), and keys with `requiredIf` note the condition (`# type: url; required when MODE is 'production'`, or `required when MODE is one of 'staging', 'production'` for the `in` form).
 
+Numeric placeholders (`number`, `int`, `port`, `duration`) are adjusted to fit `min` and `max` when the range allows a value of that type. Integer bounds are rounded inward, ports stay within 0–65535, and durations stay non-negative. A duration keeps the `15m` example when it fits; otherwise its example is written in milliseconds. Explicit defaults, choices and empty secret placeholders keep their existing precedence.
+
+Built-in string placeholders are adjusted to fit `minLength` and `maxLength` without changing their type's format. To keep the template small, each adjusted placeholder can be up to 4,096 characters, with up to 16,384 characters of growth from string adjustments per call. If the bounds cannot fit within those limits, the ordinary type placeholder is used instead. These limits do not truncate supplied defaults or choices.
+
 ### Export JSON Schema from your schema
 
 `toJsonSchema(schema)` returns a [draft 2020-12 JSON Schema](https://json-schema.org/draft/2020-12)
@@ -709,6 +764,7 @@ for documentation, editor tooling, or validation of **coerced values**, not raw 
 It does not read environment variables or run custom callbacks.
 Grouped schemas nest as object schemas, with the inner rules as `properties`
 and their required keys in the group's own `required` list.
+String `pattern` sources are copied verbatim into JSON Schema.
 
 ```js
 const { toJsonSchema } = require('env-saaf');
@@ -729,18 +785,33 @@ date-time strings (the schema also accepts the `date` format). The `json` type
 allows any JSON shape. JSON-compatible `choices` become `enum` values without
 re-coercion. Representable defaults are exported in coerced form as annotations;
 JSON Schema does not fill in missing values. Avoid putting secrets in schema
-defaults or choices that will be shared.
+defaults, choices or condition values that will be shared.
 
-**Not represented:** `transform`, `validate`, `requiredIf`, `aliases`, `sensitive`,
+`requiredIf` becomes [conditional validation](https://json-schema.org/understanding-json-schema/reference/conditionals#if-then-else)
+with `if` / `then`, using `const` for `equals` and `enum` for `in`. Multiple or
+grouped conditions use `allOf`. A condition tests a present, canonical value
+without re-coercing it. For groups, use the full env name in `requiredIf.key`;
+the exported test and requirement use the respective nested JSON paths.
+Resolve aliases and apply defaults before validating if they affect the values
+you supply: an omitted discriminator does not match, even if it has a `default`
+annotation. A target with its own default does not become conditionally required.
+
+Conditions on undeclared env keys, discriminators with custom validation or
+transforms, and `date` or `array` discriminators are not exported. Comparisons
+that depend on object identity or custom membership behavior are also omitted.
+For a `json` discriminator, JSON scalars (including `null`) can match; values
+like `Infinity` cannot match canonical JSON and are ignored in membership lists.
+
+**Not represented:** `transform`, `validate`, `aliases`, `sensitive`,
 input trimming and splitting, regular-expression flags (flagged patterns are omitted),
 and defaults that cannot be converted to JSON without loss or depend on local time.
-File existence and the detailed `base64` and `semver` checks remain runtime-only.
+File existence and the detailed `base64` check remain runtime-only.
 Standard formats are annotations by default, and their rules can differ from
 env-saaf's checks. JSON Schema counts Unicode characters for string lengths;
 env-saaf counts JavaScript UTF-16 code units. Use `validateEnv` or `loadEnv`
 for runtime validation.
 
-### Log config without leaking secrets
+### Mask string config values
 
 ```js
 const { maskSecrets } = require('env-saaf');
@@ -749,7 +820,9 @@ console.log(maskSecrets(process.env)); // values masked: sk***56
 
 An empty value stays empty — `maskValue('')` returns `''`, so an unset secret no longer looks set in logs.
 
-`maskSecrets` also recurses: nested plain objects and arrays keep their shape, and every scalar leaf is masked with the same `maskValue` rules, so a parsed config logs safely (`maskSecrets({ DB: { PASSWORD: 'hunter2' }, TAGS: ['a', 'b'] })` → `{ DB: { PASSWORD: 'hu***r2' }, TAGS: ['****', '****'] }`). Non-plain values (`Date`, class instances) are treated as leaves, a repeated reference such as a cycle is replaced with the fixed placeholder `'[Circular]'` instead of hanging, and the input object is never mutated. In TypeScript the return type mirrors the input shape recursively (`Masked<T>`), with every leaf typed as `string`.
+`maskValue` masks strings only. Empty strings stay empty; numbers, booleans, bigints, symbols, `null`, `undefined`, functions and objects pass through unchanged.
+
+`maskSecrets` recurses into plain objects and arrays, copies their shape and masks string leaves. Other primitives and non-plain objects (`Date`, `RegExp`, class instances) keep their values and identity. A repeated plain-object or array reference, including a cycle, becomes `'[Circular]'`. The input is never mutated. TypeScript's `Masked<T>` preserves non-string leaf types. These helpers have no schema or sensitive-key context: a numeric secret or a secret stored inside a class instance is not masked, so do not treat their output as automatically safe to log.
 
 ## How env-saaf compares to envalid, joi, and zod
 

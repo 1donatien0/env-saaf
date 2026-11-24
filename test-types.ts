@@ -1,7 +1,7 @@
 // env-saaf type tests — sirf `tsc` se check hote hain (`npm test` me shamil).
 // Runtime me kuch nahi chalta: ye file sirf TypeScript inference verify karti hai.
 // Issue #7: validateEnv ka return type schema se infer hona chahiye.
-import { loadEnvAsync, validateEnv, loadEnv, EnvSchema, EnvResult, maskSecrets, Masked, toJsonSchema } from './index';
+import { loadEnvAsync, validateEnv, loadEnv, EnvSchema, EnvResult, maskValue, maskSecrets, Masked, toJsonSchema } from './index';
 
 const env = validateEnv({
   PORT: { type: 'port', required: true },
@@ -69,8 +69,18 @@ const collected = validateEnv(
 const collectedPort: number = collected.env.PORT;
 const collectedDebug: boolean | undefined = collected.env.DEBUG;
 const collectedErrors: string[] = collected.errors;
-// @ts-expect-error — the non-throwing result is { env, errors }, not the env itself
+// Issue #294: structured details mirror errors one-to-one.
+const collectedDetails: { key: string; message: string }[] = collected.details;
+const firstKey: string = collected.details[0].key;
+const firstMessage: string = collected.details[0].message;
+// @ts-expect-error — details keys are strings, not numbers
+const wrongDetailKey: number = collected.details[0].key;
+// @ts-expect-error — the non-throwing result is { env, errors, details }, not the env itself
 const collectedAsEnv: number = collected.PORT;
+
+// Issue #294: thrown errors carry the same details field.
+declare const thrownError: import('./index').EnvSaafError;
+const thrownDetails: import('./index').ErrorDetail[] = thrownError.details;
 
 // The default (throwing) return type is unchanged by the new option.
 const throwingPort: number = validateEnv(
@@ -137,7 +147,16 @@ const validatedHost: string = validated.REPLICA_HOST;
 const validatedFlag: boolean = validated.FLAG;
 const validatedNotes: string | undefined = validated.NOTES;
 
-
+// Issue #286: both pattern forms preserve inferred string result types.
+const patterned = validateEnv({
+  NAME: { pattern: '^[A-Z]+$', required: true },
+  MODE: { type: 'string', pattern: /^prod$/i },
+});
+const patternedName: string = patterned.NAME;
+const patternedMode: string | undefined = patterned.MODE;
+void patternedName; void patternedMode;
+// @ts-expect-error pattern is either a string or a RegExp
+validateEnv({ BAD_PATTERN: { pattern: 123 } });
 
 // Issue #228: group rules nest in the inferred result type.
 import { EnvGroupRule } from './index';
@@ -146,7 +165,7 @@ const grouped = validateEnv({
   DB: {
     prefix: 'DB_',
     schema: {
-      HOST: { type: 'host', required: true },
+      HOST: { type: 'host', required: true, pattern: '^db\\.' },
       PORT: { type: 'port', default: 5432 },
       USER: { type: 'string' },
     },
@@ -168,7 +187,29 @@ void groupedName;
 // a group rule is assignable to EnvSchema via EnvGroupRule
 const groupRule: EnvGroupRule = { prefix: 'X_', schema: { A: { type: 'string' } } };
 void groupRule;
-// Issue #234: maskSecrets keeps the recursive shape and stringifies every leaf.
+
+// Issue #287: inference follows every nested group, retaining optional containers.
+const nestedGroups = validateEnv({ APP: { prefix: 'APP_', schema: {
+  DB: { prefix: 'DB_', schema: {
+    PORT: { type: 'port', default: 5432 },
+    AUTH: { prefix: 'AUTH_', schema: {
+      USER: { type: 'string', required: true },
+      ENABLED: { type: 'boolean' },
+    } },
+  } },
+} } });
+const nestedPort: number | undefined = nestedGroups.APP?.DB?.PORT;
+const nestedUser: string | undefined = nestedGroups.APP?.DB?.AUTH?.USER;
+const nestedEnabled: boolean | undefined = nestedGroups.APP?.DB?.AUTH?.ENABLED;
+void nestedPort; void nestedUser; void nestedEnabled;
+// @ts-expect-error port values remain numbers inside nested groups
+const invalidNestedPort: string | undefined = nestedGroups.APP?.DB?.PORT;
+void invalidNestedPort;
+const nestedRule: EnvGroupRule = { prefix: 'APP_', schema: {
+  DB: { prefix: 'DB_', schema: { PORT: { type: 'port' } } },
+} };
+void nestedRule;
+// Issue #281: maskSecrets keeps shape and non-string leaf types.
 const masked = maskSecrets({
   KEY: 'sk_live_123456',
   DB: { PASSWORD: 'hunter2', PORT: 5432 },
@@ -178,18 +219,26 @@ const masked = maskSecrets({
 });
 const maskedKey: string = masked.KEY;
 const maskedDbPassword: string = masked.DB.PASSWORD;
-const maskedDbPort: string = masked.DB.PORT;
+const maskedDbPort: number = masked.DB.PORT;
 const maskedTags: string[] = masked.TAGS;
 const maskedNestedToken: string = masked.NESTED.LIST[0].TOKEN;
-const maskedWhen: string = masked.WHEN;
+const maskedWhen: Date = masked.WHEN;
 // Masked<T> works standalone too.
-const manual: Masked<{ A: number; B: { C: string[] } }> = { A: '****', B: { C: ['****'] } };
+const manual: Masked<{ A: number; B: { C: string[] } }> = { A: 42, B: { C: ['****'] } };
 
 // Issue #229: the export takes an env-saaf schema and returns typed keywords.
-const jsonSchema = toJsonSchema({ PORT: { type: 'port', default: 0 } });
+const jsonSchema = toJsonSchema({ PORT: { type: 'port', default: 0 }, NAME: { pattern: '^[A-Z]+$' } });
 const schemaType: 'object' = jsonSchema.type;
 const minimumPort: number | undefined = jsonSchema.properties.PORT.minimum;
 const requiredKeys: string[] | undefined = jsonSchema.required;
+const discriminator: string | number | boolean | null | undefined = jsonSchema.if?.properties?.MODE.const;
+const conditionalKeys: string[] | undefined = jsonSchema.then?.required;
+const groupConditionKeys: string[] | undefined = jsonSchema.allOf?.[0].then?.properties?.APP.required;
+toJsonSchema({
+  DATA: { type: 'json' },
+  A: { requiredIf: { key: 'DATA', equals: null } },
+  B: { requiredIf: { key: 'DATA', in: [true, null] } },
+});
 // @ts-expect-error — schema bounds are numbers, not strings
 const badBound: string = jsonSchema.properties.PORT.minimum;
 // @ts-expect-error — accepts env-saaf rules, not a JSON Schema document
@@ -209,3 +258,18 @@ validateEnv({ PORT: { type: 'port' } }, {}, {
 loadEnv({ PORT: { type: 'port' } }, { formatError: (errors) => errors.join('; ') });
 // @ts-expect-error formatError must return a string
 validateEnv({ PORT: { type: 'port' } }, {}, { formatError: () => 1 });
+
+// Non-string inputs retain their types, including optional and mixed values.
+const keptNumber: number = maskValue(42);
+const keptUndefined: undefined = maskValue(undefined);
+const keptDate: Date = maskValue(new Date());
+const mixedInput = {} as { optional?: string; values: [string, number, boolean, null, undefined, bigint]; date: Date; rx: RegExp };
+const mixedMasked = maskSecrets(mixedInput);
+const optionalMasked: string | undefined = mixedMasked.optional;
+const tupleMasked: [string, number, boolean, null, undefined, bigint] = mixedMasked.values;
+const dateMasked: Date = mixedMasked.date;
+const regexpMasked: RegExp = mixedMasked.rx;
+const mixedValue: string | number = maskValue({} as string | number);
+// @ts-expect-error numbers are no longer stringified
+const notString: string = maskValue(42);
+void [keptNumber, keptUndefined, keptDate, optionalMasked, tupleMasked, dateMasked, regexpMasked, mixedValue, notString];

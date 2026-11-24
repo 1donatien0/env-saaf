@@ -2,9 +2,35 @@
 
 ## Unreleased
 
-- Added: generateExample annotates RegExp patterns without changing generated values (fixes #293).
+- Added: generateExample annotates string and RegExp patterns without changing generated values (fixes #293).
+
+- Added: `EnvSaafError.details` and the `{ throwOnError: false }` result expose structured `{ key, message }` entries mirroring `errors` one-to-one, including grouped keys; printable `errors` strings and `message` formatting are unchanged (fixes #294).
+
+- Added: tests validate complete `toJsonSchema` documents against the draft 2020-12 keyword shapes with a hand-rolled, zero-dependency checker, covering all types, groups, choices, defaults, bounds, arrays and `requiredIf` (fixes #296).
+
+- Added: `toJsonSchema` expresses `requiredIf` on canonical values with `if` / `then`, including conditions across groups (fixes #289).
+
+- Added: groups can contain nested groups, with concatenated env prefixes and nested results at each level. Validation, example generation, JSON Schema export, and file loading support the same structure; circular references and composed-prefix collisions are rejected (fixes #287).
+
+- Fixed: CLI `--schema` loading in `check`, `check --json-schema`, `check --watch`, and `example` now supports ES module schemas (`.mjs` and `"type": "module"` `.js`), unwrapping a sole plain-object `default` export while preserving CommonJS schemas (including keys named `default`), named exports, and module load errors (fixes #285).
+
+- Added: `date` rules accept `min` / `max` bounds as ISO date (or datetime) strings — or `Date` objects — compared chronologically against the parsed value, inclusive on both ends; a numeric bound or a `min` above `max` is a schema error, and `generateExample` uses the bound when the default example falls outside the range (fixes #292).
+
+- Fixed: a throwing `formatError` hook no longer vanishes behind the default message — its error now propagates out of `validateEnv` / `loadEnv` / `loadEnvAsync` unchanged, so a bug in the hook is visible instead of silent; a hook returning a non-string still falls back to the default message (fixes #279).
+- Fixed: code scanning recognizes dotted and dashed env keys in quoted bracket reads and destructuring, including optional and Vite reads (fixes #321).
+
+- Fixed: grouped result objects are frozen along with the top-level result in `validateEnv`, `loadEnv`, and `loadEnvAsync`, while rule values keep their existing mutability (fixes #284).
+
+- Added: `toJsonSchema` emits the `semver` validation `pattern` on scalar `semver` rules and `array` rules with `of: 'semver'` (fixes #303).
+
+- Added: toJsonSchema marks sensitive rules as writeOnly, including inside groups (fixes #288).
 
 - Fixed: generateExample uses the first allowed choice instead of a generic placeholder, preserving explicit defaults and empty secret placeholders (fixes #273).
+- Fixed: `validateSchema` now rejects `choices` entries that can never match the declared type (for example `['1', '2']` on an `int` rule, `['true']` on a `boolean` rule, or any `choices` on a `date` rule) instead of accepting the schema and failing every value at runtime; string-typed rules and non-finite numbers, which `toJsonSchema` drops from `enum`, are unaffected (fixes #305).
+
+- Fixed: `choices` on `array` rules now apply to each coerced item instead of the whole array, with errors naming the offending item and its index; `validateSchema` applies the #305 item-type check against `of`, `toJsonSchema` emits `items.enum`, and `generateExample` builds placeholders from allowed choices while respecting `minItems`/`maxItems` (fixes #320).
+
+- Fixed: maskValue masks only strings; maskSecrets preserves non-string leaves while copying plain objects and arrays. TypeScript return types now retain those leaf types (fixes #281).
 
 - Fixed: `int` (and `port`, which builds on it) now only accepts plain integer literals — optional sign + digits — so decimal and scientific spellings such as `1.0`, `1e3` and `1.5e2` are rejected even when they happen to be whole numbers, instead of silently passing (fixes #277). `number` still accepts them.
 
@@ -29,6 +55,8 @@
 
 - Added: `toJsonSchema(schema)` exports a draft 2020-12 JSON Schema for coerced configuration values (fixes #229).
 
+- Added: `pattern` accepts regular expression source strings as well as `RegExp`. Invalid sources report a schema error naming the key, and JSON Schema export preserves string sources verbatim (fixes #286).
+
 - Added: opt-in `formatError(errors, { keys })` option for `validateEnv` and `loadEnv`: the returned string becomes the thrown `EnvSaafError`'s `message` while `error.errors` keeps the raw per-key strings; the hook sees only a read-only copy of the errors and the schema keys, falls back to the default message if it throws or returns a non-string, and is not called with `throwOnError: false` (fixes #231).
 
 - Changed: The `base64` type accepts standard and URL-safe strings with or without padding and preserves the input encoding (fixes #226).
@@ -36,6 +64,8 @@
 - Added: `scanCode` detects static property reads through simple local environment aliases (fixes #252).
 
 - Fixed: `parseEnvFile` reports a line-numbered `SyntaxError` for invalid assignment keys instead of silently dropping them, without exposing their values (fixes #221).
+
+- Added: `parseEnvFile` accepts dots and dashes after the first character of `.env` keys, so `loadEnv` and `init --from-example` can use names like `DB.PORT` and `MY-KEY`. Interpolation syntax is unchanged (fixes #290).
 
 - Fixed: `number`, `int` and `port` reject hexadecimal, binary and octal strings (including array items), while decimal strings and numeric defaults keep working (fixes #219).
 
@@ -94,6 +124,9 @@
 - Fixed: `loadEnv` throws `env-saaf: .env file not found: <path>` when an explicitly passed single `path` does not exist, instead of silently returning an empty result — a typo'd path no longer boots the app with defaults; the implicit default `.env` and list forms (`paths: [...]` or `path` as an array) keep skipping missing files (fixes #158)
 - Fixed: `generateExample` now suggests a placeholder that itself validates for every scalar type — `email` suggests `user@example.com`, `uuid` a canonical UUID, `number` `3.14`, `int` `42`, `boolean` `true`, `json` `{"key":"value"}`, `base64` `aGVsbG8=`, `hex` `deadbeef` — instead of the literal `your_value_here`, so a generated `.env.example` passes `check` out of the box; the already-correct placeholders (`port`, `url`, `date`, `duration`, `host`, `semver`, `ipv4`) are unchanged, and `file` stays the documented exception (`./config.json` is a path the user must create) (fixes #251)
 - Fixed: `validateEnv` and `loadEnv` (and `loadEnvAsync`) now reject unknown options up front with an `EnvSaafError` naming the offending option — a typo like `{ stric: true }` or `{ overide: true }` no longer runs silently as if the option was never passed (same class of bug as #218, one layer up); the check runs even when the variable is absent and even with `{ throwOnError: false }`, and all currently valid options keep working exactly as before (fixes #250)
+
+- Fixed: `generateExample` adjusts numeric placeholders to `min`/`max`, respecting integer, port and duration constraints, so generated values round-trip through their own schema (fixes #274).
+- Fixed: `generateExample` adjusts built-in string placeholders to feasible `minLength`/`maxLength` bounds without losing their type's format (fixes #275).
 
 ## 1.5.0 — 2026-11-20
 
