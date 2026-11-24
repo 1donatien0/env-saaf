@@ -129,12 +129,13 @@ export interface EnvRule {
  * A group rule (issue #228): nests a sub-schema under one env prefix.
  * `{ DB: { prefix: 'DB_', schema: { HOST: { type: 'host' } } } }` reads the
  * env var `DB_HOST` and the result nests it as `{ DB: { HOST: '...' } }`.
- * Groups cannot be nested, and a group may not also set `type`.
+ * Groups may contain groups; their prefixes concatenate and results nest at
+ * each level. A group may not also set `type`.
  * Inside a group, `aliases` and `requiredIf.key` use FULL env var names
  * (e.g. `'OLD_DB_HOST'`, `'NODE_ENV'`, or another group's `'DB_HOST'`).
  */
 export interface EnvGroupRule<S extends EnvSchema = EnvSchema> {
-  /** Env prefix applied to every inner key: inner `HOST` is read from `DB_HOST`. */
+  /** Prefix appended to ancestor prefixes before each inner key. */
   prefix: string;
   /** Inner rules keyed by their unprefixed names. The result nests under the group key. */
   schema: S;
@@ -239,7 +240,7 @@ export interface ValidateResult<S extends EnvSchema> {
 /**
  * Validate the shape of the schema itself (types, option shapes, alias
  * conflicts, and — since #228 — group rules: `prefix`/`schema` shape,
- * nesting, and prefix collisions). Throws an `EnvSaafError` listing every
+ * circular references, and prefix collisions). Throws an `EnvSaafError` listing every
  * problem, naming the key (grouped rules use their full env name, e.g.
  * `DB_HOST`). Independent of any env values, so it can run at startup.
  */
