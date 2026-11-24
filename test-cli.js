@@ -162,6 +162,34 @@ try {
     const parsed = JSON.parse(rj.stdout);
     assert.strictEqual(parsed.ok, false);
     assert.ok(Array.isArray(parsed.invalid) && parsed.invalid.length === 1 && /PORT/.test(parsed.invalid[0]));
+    assert.ok(!('valuesFile' in parsed), 'without --values the JSON shape is unchanged');
+  }
+
+  // --- check --values: validate another environment file (issue #352) -------
+  {
+    const dir = mkProject({
+      'src/app.js': SRC_WITH_USAGE,
+      '.env.example': EXAMPLE_BOTH,
+      'env.schema.js': SCHEMA,
+      '.env.production': 'PORT=8080\nDATABASE_URL=x\n',
+      '.env.staging': 'PORT=nope\nDATABASE_URL=x\n',
+    });
+    const good = run(['check', dir, '--schema', 'env.schema.js', '--values', '.env.production'], dir);
+    assert.strictEqual(good.status, 0, good.stdout + good.stderr);
+    const bad = run(['check', dir, '--schema', 'env.schema.js', '--values', '.env.staging'], dir);
+    assert.strictEqual(bad.status, 1);
+    assert.match(bad.stdout, /INVALID in \.env\.staging: PORT/);
+    const badJson = JSON.parse(run(['check', dir, '--schema', 'env.schema.js', '--values', '.env.staging', '--json'], dir).stdout);
+    assert.strictEqual(badJson.ok, false);
+    assert.strictEqual(badJson.valuesFile, '.env.staging');
+    assert.strictEqual(badJson.invalid.length, 1);
+    assert.match(badJson.invalid[0], /PORT/);
+    const missing = run(['check', dir, '--schema', 'env.schema.js', '--values', 'missing.env'], dir);
+    assert.strictEqual(missing.status, 2);
+    assert.match(missing.stderr, /--values missing\.env not found/);
+    const noSchema = run(['check', dir, '--values', '.env.production'], dir);
+    assert.strictEqual(noSchema.status, 2);
+    assert.match(noSchema.stderr, /--values needs --schema/);
   }
 
   // --- check --json-schema: stdout is the draft 2020-12 JSON Schema for the --schema file (issue #268)

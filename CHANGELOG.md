@@ -7,6 +7,12 @@
   instead of living only as README snippets. Both fail with the env-saaf message
   when a required value is missing (fixes #364).
 
+- Added: `check --schema <file> --values <env-file>` validates another
+  environment file (`.env.production`, `.env.staging`) and reports its
+  `INVALID` entries, with the file named in `--json` (`valuesFile`). A missing
+  values file or `--values` without `--schema` is a usage error (exit 2)
+  (fixes #352).
+
 - Fixed: `validateSchema` rejects `required: true` together with a `default` (the default means the key can never be missing, so `required` was dead config). The `init` starter schema no longer sets both on `PORT` (fixes #340).
 
 - Fixed: duration bound errors name the duration and show milliseconds for numeric bounds, while preserving explicit units in string bounds (fixes #341).

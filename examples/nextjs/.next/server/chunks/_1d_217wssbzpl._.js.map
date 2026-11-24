@@ -1,0 +1,1 @@
+{"version":3,"sources":["../../../instrumentation.ts"],"sourcesContent":["// Runs once when the Node.js server boots, before requests are handled.\nexport async function register() {\n  if (process.env.NEXT_RUNTIME === 'nodejs') {\n    await import('./lib/env');\n  }\n}\n"],"names":["register"],"mappings":"uCACO,eAAeA,IAElB,MAAA,EAAA,CAAA,CAAA,MAEJ"}
