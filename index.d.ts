@@ -291,15 +291,16 @@ export function parseEnvFile(text: string): Record<string, string>;
 export function scanCode(text: string): string[];
 export function scanDir(dir: string): string[];
 export function diffEnv(usedKeys: string[], documentedKeys: string[]): { usedNotDocumented: string[]; documentedNotUsed: string[] };
-export function maskValue(value: unknown): string;
-/** The masked counterpart of `T`: structure is preserved, every leaf is a string. */
+/** Mask strings only; return non-string values unchanged. */
+export function maskValue<T>(value: T): T extends string ? string : T;
+/** The masked counterpart of `T`: strings are masked, other leaves keep their type. */
 export type Masked<T> = T extends readonly unknown[]
   ? { [K in keyof T]: Masked<T[K]> }
   : T extends Date | RegExp | ((...args: never[]) => unknown)
-    ? string
+    ? T
     : T extends object
       ? { [K in keyof T]: Masked<T[K]> }
-      : string;
+      : T extends string ? string : T;
 export function maskSecrets<T extends Record<string, unknown>>(obj: T): { [K in keyof T]: Masked<T[K]> };
 /**
  * Generate `.env.example` text from a schema. Values are placeholders/defaults

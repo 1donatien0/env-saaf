@@ -811,7 +811,7 @@ env-saaf's checks. JSON Schema counts Unicode characters for string lengths;
 env-saaf counts JavaScript UTF-16 code units. Use `validateEnv` or `loadEnv`
 for runtime validation.
 
-### Log config without leaking secrets
+### Mask string config values
 
 ```js
 const { maskSecrets } = require('env-saaf');
@@ -820,7 +820,9 @@ console.log(maskSecrets(process.env)); // values masked: sk***56
 
 An empty value stays empty — `maskValue('')` returns `''`, so an unset secret no longer looks set in logs.
 
-`maskSecrets` also recurses: nested plain objects and arrays keep their shape, and every scalar leaf is masked with the same `maskValue` rules, so a parsed config logs safely (`maskSecrets({ DB: { PASSWORD: 'hunter2' }, TAGS: ['a', 'b'] })` → `{ DB: { PASSWORD: 'hu***r2' }, TAGS: ['****', '****'] }`). Non-plain values (`Date`, class instances) are treated as leaves, a repeated reference such as a cycle is replaced with the fixed placeholder `'[Circular]'` instead of hanging, and the input object is never mutated. In TypeScript the return type mirrors the input shape recursively (`Masked<T>`), with every leaf typed as `string`.
+`maskValue` masks strings only. Empty strings stay empty; numbers, booleans, bigints, symbols, `null`, `undefined`, functions and objects pass through unchanged.
+
+`maskSecrets` recurses into plain objects and arrays, copies their shape and masks string leaves. Other primitives and non-plain objects (`Date`, `RegExp`, class instances) keep their values and identity. A repeated plain-object or array reference, including a cycle, becomes `'[Circular]'`. The input is never mutated. TypeScript's `Masked<T>` preserves non-string leaf types. These helpers have no schema or sensitive-key context: a numeric secret or a secret stored inside a class instance is not masked, so do not treat their output as automatically safe to log.
 
 ## How env-saaf compares to envalid, joi, and zod
 

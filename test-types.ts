@@ -1,7 +1,7 @@
 // env-saaf type tests — sirf `tsc` se check hote hain (`npm test` me shamil).
 // Runtime me kuch nahi chalta: ye file sirf TypeScript inference verify karti hai.
 // Issue #7: validateEnv ka return type schema se infer hona chahiye.
-import { loadEnvAsync, validateEnv, loadEnv, EnvSchema, EnvResult, maskSecrets, Masked, toJsonSchema } from './index';
+import { loadEnvAsync, validateEnv, loadEnv, EnvSchema, EnvResult, maskValue, maskSecrets, Masked, toJsonSchema } from './index';
 
 const env = validateEnv({
   PORT: { type: 'port', required: true },
@@ -209,7 +209,7 @@ const nestedRule: EnvGroupRule = { prefix: 'APP_', schema: {
   DB: { prefix: 'DB_', schema: { PORT: { type: 'port' } } },
 } };
 void nestedRule;
-// Issue #234: maskSecrets keeps the recursive shape and stringifies every leaf.
+// Issue #281: maskSecrets keeps shape and non-string leaf types.
 const masked = maskSecrets({
   KEY: 'sk_live_123456',
   DB: { PASSWORD: 'hunter2', PORT: 5432 },
@@ -219,12 +219,12 @@ const masked = maskSecrets({
 });
 const maskedKey: string = masked.KEY;
 const maskedDbPassword: string = masked.DB.PASSWORD;
-const maskedDbPort: string = masked.DB.PORT;
+const maskedDbPort: number = masked.DB.PORT;
 const maskedTags: string[] = masked.TAGS;
 const maskedNestedToken: string = masked.NESTED.LIST[0].TOKEN;
-const maskedWhen: string = masked.WHEN;
+const maskedWhen: Date = masked.WHEN;
 // Masked<T> works standalone too.
-const manual: Masked<{ A: number; B: { C: string[] } }> = { A: '****', B: { C: ['****'] } };
+const manual: Masked<{ A: number; B: { C: string[] } }> = { A: 42, B: { C: ['****'] } };
 
 // Issue #229: the export takes an env-saaf schema and returns typed keywords.
 const jsonSchema = toJsonSchema({ PORT: { type: 'port', default: 0 }, NAME: { pattern: '^[A-Z]+$' } });
@@ -258,3 +258,18 @@ validateEnv({ PORT: { type: 'port' } }, {}, {
 loadEnv({ PORT: { type: 'port' } }, { formatError: (errors) => errors.join('; ') });
 // @ts-expect-error formatError must return a string
 validateEnv({ PORT: { type: 'port' } }, {}, { formatError: () => 1 });
+
+// Non-string inputs retain their types, including optional and mixed values.
+const keptNumber: number = maskValue(42);
+const keptUndefined: undefined = maskValue(undefined);
+const keptDate: Date = maskValue(new Date());
+const mixedInput = {} as { optional?: string; values: [string, number, boolean, null, undefined, bigint]; date: Date; rx: RegExp };
+const mixedMasked = maskSecrets(mixedInput);
+const optionalMasked: string | undefined = mixedMasked.optional;
+const tupleMasked: [string, number, boolean, null, undefined, bigint] = mixedMasked.values;
+const dateMasked: Date = mixedMasked.date;
+const regexpMasked: RegExp = mixedMasked.rx;
+const mixedValue: string | number = maskValue({} as string | number);
+// @ts-expect-error numbers are no longer stringified
+const notString: string = maskValue(42);
+void [keptNumber, keptUndefined, keptDate, optionalMasked, tupleMasked, dateMasked, regexpMasked, mixedValue, notString];
