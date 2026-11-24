@@ -332,22 +332,25 @@ function validateSchemaRules(schema, warn, patterns = new Map(), prefix = '', an
     // can never match any real input: the string '1' for an `int`, 'true' for
     // a `boolean`. Coerce each choice the way a value is coerced and reject
     // the ones that fail or come back different from what was written.
+    // Issue #320: on an `array` rule choices apply to each coerced item, so
+    // validate them against `of` (the item type) instead of 'array'.
     // String-typed rules are fine. A `date` value is always a freshly parsed
     // Date object, so no choice (Date or string) can ever be equal to it.
     // Non-finite numbers (Infinity, NaN) are left alone: toJsonSchema() drops
     // them from the generated `enum` on purpose, so they stay valid here.
     if (Array.isArray(rule.choices) && rule.choices.length > 0) {
-      if (effectiveType === 'date') {
+      const choiceType = effectiveType === 'array' ? (rule.of || 'string') : effectiveType;
+      if (choiceType === 'date') {
         errors.push(`${key}: "choices" cannot be used with type 'date' (a parsed date is a new Date object, so no choice can ever match)`);
-      } else if (['number', 'int', 'port', 'boolean', 'duration'].includes(effectiveType)) {
+      } else if (['number', 'int', 'port', 'boolean', 'duration'].includes(choiceType)) {
         for (const choice of rule.choices) {
           if (typeof choice === 'number' && !Number.isFinite(choice)) continue;
           let matches = false;
-          try { matches = coerce(key, choice, effectiveType) === choice; }
+          try { matches = coerce(key, choice, choiceType) === choice; }
           catch { /* not a value this type can produce */ }
           if (!matches) {
             const shownChoice = typeof choice === 'string' ? JSON.stringify(choice) : String(choice);
-            errors.push(`${key}: "choices" entry ${shownChoice} can never match type '${effectiveType}' (a choice must be a value this type can produce)`);
+            errors.push(`${key}: "choices" entry ${shownChoice} can never match type '${choiceType}' (a choice must be a value this type can produce)`);
           }
         }
       }
@@ -1084,9 +1087,22 @@ function validateEnvCore(schema, env, options) {
           continue;
         }
       }
-      if (rule.choices && !rule.choices.includes(val)) {
-        errors.push(`${key}: expected one of [${rule.choices.join(', ')}], got "${shown}"`);
-        continue;
+      if (rule.choices) {
+        if (Array.isArray(val)) {
+          // Issue #320: `choices` on an array rule constrains each coerced
+          // item, not the array itself. Name the key, the bad item and its
+          // index so the failure is actionable (as `unique: true` does).
+          const badIndex = val.findIndex(item => !rule.choices.includes(item));
+          if (badIndex !== -1) {
+            const item = val[badIndex];
+            const shownItem = sensitive ? maskValue(safeString(item)) : safeString(item);
+            errors.push(`${key}: expected one of [${rule.choices.join(', ')}], got "${shownItem}" (item ${badIndex})`);
+            continue;
+          }
+        } else if (!rule.choices.includes(val)) {
+          errors.push(`${key}: expected one of [${rule.choices.join(', ')}], got "${shown}"`);
+          continue;
+        }
       }
       // Keep compiled strings off the caller's rules so frozen schemas work
       // and later validations can see changes to the source.
@@ -1754,14 +1770,32 @@ const ARRAY_ITEM_EXAMPLES = {
   file: ['./a.json', './b.json', './c.json'],
 };
 
-/** Placeholder for an `array` rule: example items of the `of` type, sized to fit minItems/maxItems, joined by `separator`. */
+/** Placeholder for an `array` rule: example items of the `of` type (or the rule's `choices`), sized to fit minItems/maxItems, joined by `separator`. */
 function arrayPlaceholder(rule) {
-  const examples = ARRAY_ITEM_EXAMPLES[rule.of || 'string'] || ARRAY_ITEM_EXAMPLES.string;
-  let count = Math.max(3, rule.minItems || 0);
+  const separator = rule.separator || ',';
+  const hasChoices = Array.isArray(rule.choices) && rule.choices.length > 0;
+  let examples;
+  if (hasChoices) {
+    // Issue #320: use allowed choices so the generated example validates.
+    // A choice containing the separator cannot be represented in a delimited
+    // value, so prefer ones that can. Dedupe keeps `unique: true` examples valid.
+    const strings = rule.choices.map(choice => String(choice));
+    const usable = [...new Set(strings.filter(s => !s.includes(separator)))];
+    examples = usable.length ? usable : [...new Set(strings)];
+  } else {
+    examples = ARRAY_ITEM_EXAMPLES[rule.of || 'string'] || ARRAY_ITEM_EXAMPLES.string;
+  }
+  // Without choices, keep the old three-example placeholder. With choices,
+  // suggest each allowed item once and only cycle when minItems needs more.
+  let count = hasChoices ? examples.length : Math.max(3, rule.minItems || 0);
+  if (hasChoices && rule.minItems !== undefined) count = Math.max(count, rule.minItems);
   if (rule.maxItems !== undefined) count = Math.min(count, Math.max(1, rule.maxItems));
+  // A unique array cannot repeat a choice, so do not ask for more items than
+  // there are distinct choices (the schema itself is contradictory otherwise).
+  if (hasChoices && rule.unique === true) count = Math.min(count, examples.length);
   const items = [];
   for (let i = 0; i < count; i++) items.push(examples[i % examples.length]);
-  return items.join(rule.separator || ',');
+  return items.join(separator);
 }
 
 // A template should not materialize arbitrarily large padding from schema bounds.
@@ -1948,14 +1982,15 @@ function generateExample(schema) {
     const placeholder = rule.default !== undefined
       ? (rule.type === 'array' && Array.isArray(rule.default) ? rule.default.join(rule.separator || ',') : rule.default)
       : looksSecret ? ''
-      : Array.isArray(rule.choices) && rule.choices.length ? rule.choices[0]
+      // Issue #223/#320: build the array placeholder from the `of` item type's
+      // own examples, or from the allowed choices when present, so each
+      // suggested item validates (fallback: string items). The item count
+      // respects minItems/maxItems so the placeholder passes those bounds too
+      // — examples cycle when more than three are needed.
       : rule.type === 'array'
-        // Issue #223: build the array placeholder from the `of` item type's own
-        // examples, so each suggested item validates (fallback: string items).
-        // The item count respects minItems/maxItems so the placeholder passes
-        // those bounds too — examples cycle when more than three are needed.
         ? arrayPlaceholder(rule)
-        : scalarPlaceholder(rule, stringGrowth);
+      : Array.isArray(rule.choices) && rule.choices.length ? rule.choices[0]
+      : scalarPlaceholder(rule, stringGrowth);
       return [comment, `${key}=${placeholder}`];
   };
   // The .env file stays flat; each group level documents its complete prefix.
@@ -2094,7 +2129,12 @@ function jsonSchemaForRule(key, rule, required) {
   }
   if (Array.isArray(rule.choices)) {
     const choices = [...new Set(rule.choices.filter(isJsonPrimitive))];
-    if (choices.length) property.enum = choices;
+    if (choices.length) {
+      // Issue #320: on an array rule the enum constrains each item. A
+      // top-level enum would mean the whole array must equal a single choice.
+      if (type === 'array') property.items.enum = choices;
+      else property.enum = choices;
+    }
   }
   if (rule.default !== undefined) {
     const value = jsonSchemaDefault(key, rule, type);
