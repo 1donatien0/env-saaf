@@ -8,6 +8,7 @@
 const fs = require('node:fs');
 const net = require('node:net');
 const path = require('node:path');
+const { isProxy } = require('node:util').types;
 
 class EnvSaafError extends Error {
   constructor(errors, message) {
@@ -95,39 +96,82 @@ function groupShape(rule) {
     && rule.schema !== null && typeof rule.schema === 'object' && !Array.isArray(rule.schema);
 }
 
-// Flatten a (valid) schema into plain rules keyed by full env name, plus a
-// map from flat key back to its group for re-nesting the result.
-function flattenSchema(schema) {
-  const flat = {};
-  const groupOf = new Map();
+function invalidSchema(errors) {
+  const unique = [...new Set(errors)];
+  return new EnvSaafError(unique, 'Invalid schema:\n' + unique.map(e => `  - ${e}`).join('\n'));
+}
+
+// Keep env prefixes separate from result paths: APP_DB_HOST becomes APP.DB.HOST.
+// Only active ancestors are circular; a shared sub-schema can appear in several groups.
+function walkSchema(schema, onRule, onGroup = () => {}, prefix = '', path = [], ancestors = new Set()) {
+  if (ancestors.has(schema)) throw invalidSchema([`${path.join('.')}: group "schema" contains a circular reference`]);
+  ancestors.add(schema);
   for (const [key, rule] of Object.entries(schema)) {
     if (groupShape(rule)) {
-      for (const [innerKey, innerRule] of Object.entries(rule.schema)) {
-        const flatKey = rule.prefix + innerKey;
-        flat[flatKey] = innerRule;
-        groupOf.set(flatKey, { group: key, innerKey });
-      }
+      if (typeof rule.prefix !== 'string' || rule.prefix.trim() === '') continue; // shape validation reports it
+      const groupPath = [...path, key];
+      const groupPrefix = prefix + rule.prefix;
+      onGroup(groupPath, groupPrefix);
+      walkSchema(rule.schema, onRule, onGroup, groupPrefix, groupPath, ancestors);
     } else {
-      flat[key] = rule;
+      onRule(prefix + key, rule, [...path, key], prefix);
     }
   }
-  return { flat, groupOf };
+  ancestors.delete(schema);
+}
+
+// Flatten a (valid) schema into plain rules keyed by full env name, plus a
+// map back to each grouped result path for re-nesting.
+function flattenSchema(schema, prefix = '') {
+  const entries = [];
+  const groupOf = new Map();
+  walkSchema(schema, (key, rule, path) => {
+    entries.push([key, rule]);
+    if (path.length > 1) groupOf.set(key, path);
+  }, undefined, prefix);
+  return { flat: Object.fromEntries(entries), groupOf };
 }
 
 // Re-nest flat results: DB_HOST -> out.DB.HOST. Groups whose keys all
 // validated absent simply do not appear, same as flat optional keys.
 function nestGroups(out, groupOf) {
   const nested = {};
+  const groups = [];
+  const put = (object, key, value) => Object.defineProperty(object, key, {
+    value, enumerable: true, writable: true, configurable: true,
+  });
   for (const [k, v] of Object.entries(out)) {
-    const g = groupOf.get(k);
-    if (g) {
-      if (nested[g.group] === undefined) nested[g.group] = {};
-      nested[g.group][g.innerKey] = v;
-    } else {
-      nested[k] = v;
+    const path = groupOf.get(k) || [k];
+    let current = nested;
+    for (const key of path.slice(0, -1)) {
+      if (!Object.prototype.hasOwnProperty.call(current, key)) {
+        put(current, key, {});
+        groups.push(current[key]);
+      }
+      current = current[key];
     }
+    put(current, path[path.length - 1], v);
   }
+  // Freeze only the containers we created, leaving rule values untouched.
+  for (const group of groups) Object.freeze(group);
   return nested;
+}
+
+function compilePattern(pattern, key, errors, patterns) {
+  if (pattern instanceof RegExp) return pattern;
+  if (typeof pattern !== 'string') {
+    errors.push(`${key}: "pattern" must be a RegExp or string`);
+    return;
+  }
+  const cached = patterns.get(pattern);
+  if (cached !== undefined) return cached;
+  try {
+    const compiled = new RegExp(pattern);
+    patterns.set(pattern, compiled);
+    return compiled;
+  } catch {
+    errors.push(`${key}: "pattern" is not a valid regular expression string`);
+  }
 }
 
 // Validate the shape of the schema itself, independent of any env values.
@@ -138,11 +182,14 @@ function validateSchema(schema) {
   validateSchemaRules(schema, msg => console.warn(msg));
 }
 
-function validateSchemaRules(schema, warn) {
+function validateSchemaRules(schema, warn, patterns = new Map(), prefix = '', ancestors = new Set()) {
+  if (ancestors.has(schema)) throw invalidSchema([`${prefix}: group "schema" contains a circular reference`]);
+  ancestors = new Set(ancestors).add(schema);
   const errors = [];
-  const keys = new Set(Object.keys(schema));
+  const keys = new Set(Object.keys(schema).map(key => prefix + key));
   const aliasOwners = new Map();
-  for (const [key, rule] of Object.entries(schema)) {
+  for (const [name, rule] of Object.entries(schema)) {
+    const key = prefix + name;
     if (rule === null || typeof rule !== 'object' || Array.isArray(rule)) continue;
     // Issue #228: group rule — validate its shape, then its inner rules under
     // their full (prefixed) names so errors read `DB_HOST: ...`, not `HOST`.
@@ -164,17 +211,9 @@ function validateSchemaRules(schema, warn) {
       } else {
         const innerKeys = Object.keys(inner);
         if (innerKeys.length === 0) errors.push(`${key}: group "schema" must not be empty`);
-        for (const ik of innerKeys) {
-          const ir = inner[ik];
-          if (ir !== null && typeof ir === 'object' && !Array.isArray(ir) && ir.schema !== undefined) {
-            errors.push(`${key}: groups cannot be nested (inner "${ik}" is itself a group)`);
-          }
-        }
-        if (typeof rule.prefix === 'string' && rule.prefix !== '') {
-          const sub = {};
-          for (const ik of innerKeys) sub[rule.prefix + ik] = inner[ik];
+        if (typeof rule.prefix === 'string' && rule.prefix.trim() !== '') {
           try {
-            validateSchemaRules(sub, () => {});
+            validateSchemaRules(inner, () => {}, patterns, prefix + rule.prefix, ancestors);
           } catch (e) {
             if (e instanceof EnvSaafError) errors.push(...e.errors);
             else throw e;
@@ -218,28 +257,57 @@ function validateSchemaRules(schema, warn) {
         errors.push(`${key}: "protocols" only applies to type 'url' (cannot be used with type '${effectiveType}')`);
       }
     }
-    if (rule.pattern !== undefined && !(rule.pattern instanceof RegExp)) {
-      errors.push(`${key}: "pattern" must be a RegExp`);
-    }
+    const pattern = rule.pattern;
+    if (pattern !== undefined) compilePattern(pattern, key, errors, patterns);
     if (rule.validate !== undefined && typeof rule.validate !== 'function') {
       errors.push(`${key}: "validate" must be a function`);
     }
     if (rule.transform !== undefined && typeof rule.transform !== 'function') {
       errors.push(`${key}: "transform" must be a function`);
     }
-    for (const opt of ['min', 'max']) {
-      if (rule[opt] !== undefined && (typeof rule[opt] !== 'number' || !Number.isFinite(rule[opt]))) {
-        errors.push(`${key}: "${opt}" must be a number`);
+    // Issue #292: for `date` rules, `min` / `max` are ISO date (or
+    // datetime) strings — or Date objects — compared chronologically
+    // against the parsed value. A number is rejected with a clear message
+    // rather than accepted with unclear meaning, and a bound that is not
+    // a valid date is a schema error.
+    if (effectiveType === 'date') {
+      for (const opt of ['min', 'max']) {
+        if (rule[opt] === undefined) continue;
+        if (typeof rule[opt] === 'number') {
+          errors.push(`${key}: "${opt}" must be an ISO date string for type 'date' (e.g. '2026-01-01'), not a number`);
+        } else {
+          let parsed = null;
+          try { parsed = coerce(key, rule[opt], 'date'); } catch (_) { /* not a date */ }
+          if (!(parsed instanceof Date) || Number.isNaN(parsed.getTime())) {
+            errors.push(`${key}: "${opt}" must be a valid ISO 8601 date for type 'date' (e.g. '2026-01-01')`);
+          }
+        }
       }
-    }
-    // Issue #220: `min` above `max` describes a range that can never match,
-    // so it is a schema bug — reject it up front instead of failing oddly
-    // (or never) when the variable is checked.
-    if (rule.min !== undefined && rule.max !== undefined
-      && typeof rule.min === 'number' && typeof rule.max === 'number'
-      && Number.isFinite(rule.min) && Number.isFinite(rule.max)
-      && rule.min > rule.max) {
-      errors.push(`${key}: "min" must not exceed "max"`);
+      // Issue #220, for dates: `min` above `max` describes a range that
+      // can never match, so it is a schema bug.
+      if (rule.min !== undefined && rule.max !== undefined) {
+        let lo = null, hi = null;
+        try { lo = coerce(key, rule.min, 'date'); } catch (_) {}
+        try { hi = coerce(key, rule.max, 'date'); } catch (_) {}
+        if (lo instanceof Date && hi instanceof Date && lo.getTime() > hi.getTime()) {
+          errors.push(`${key}: "min" must not exceed "max"`);
+        }
+      }
+    } else {
+      for (const opt of ['min', 'max']) {
+        if (rule[opt] !== undefined && (typeof rule[opt] !== 'number' || !Number.isFinite(rule[opt]))) {
+          errors.push(`${key}: "${opt}" must be a number`);
+        }
+      }
+      // Issue #220: `min` above `max` describes a range that can never match,
+      // so it is a schema bug — reject it up front instead of failing oddly
+      // (or never) when the variable is checked.
+      if (rule.min !== undefined && rule.max !== undefined
+        && typeof rule.min === 'number' && typeof rule.max === 'number'
+        && Number.isFinite(rule.min) && Number.isFinite(rule.max)
+        && rule.min > rule.max) {
+        errors.push(`${key}: "min" must not exceed "max"`);
+      }
     }
     for (const opt of ['minLength', 'maxLength']) {
       if (rule[opt] !== undefined && (!Number.isInteger(rule[opt]) || rule[opt] < 0)) {
@@ -259,6 +327,34 @@ function validateSchemaRules(schema, warn) {
     // a schema bug, not a value that fails validation.
     if (rule.choices !== undefined && Array.isArray(rule.choices) && rule.choices.length === 0) {
       errors.push(`${key}: "choices" must be a non-empty array`);
+    }
+    // Issue #305: a choice is compared against the *coerced* value
+    // (`rule.choices.includes(val)`), so a choice written in the wrong shape
+    // can never match any real input: the string '1' for an `int`, 'true' for
+    // a `boolean`. Coerce each choice the way a value is coerced and reject
+    // the ones that fail or come back different from what was written.
+    // Issue #320: on an `array` rule choices apply to each coerced item, so
+    // validate them against `of` (the item type) instead of 'array'.
+    // String-typed rules are fine. A `date` value is always a freshly parsed
+    // Date object, so no choice (Date or string) can ever be equal to it.
+    // Non-finite numbers (Infinity, NaN) are left alone: toJsonSchema() drops
+    // them from the generated `enum` on purpose, so they stay valid here.
+    if (Array.isArray(rule.choices) && rule.choices.length > 0) {
+      const choiceType = effectiveType === 'array' ? (rule.of || 'string') : effectiveType;
+      if (choiceType === 'date') {
+        errors.push(`${key}: "choices" cannot be used with type 'date' (a parsed date is a new Date object, so no choice can ever match)`);
+      } else if (['number', 'int', 'port', 'boolean', 'duration'].includes(choiceType)) {
+        for (const choice of rule.choices) {
+          if (typeof choice === 'number' && !Number.isFinite(choice)) continue;
+          let matches = false;
+          try { matches = coerce(key, choice, choiceType) === choice; }
+          catch { /* not a value this type can produce */ }
+          if (!matches) {
+            const shownChoice = typeof choice === 'string' ? JSON.stringify(choice) : String(choice);
+            errors.push(`${key}: "choices" entry ${shownChoice} can never match type '${choiceType}' (a choice must be a value this type can produce)`);
+          }
+        }
+      }
     }
     // Issue #50: `protocols` is a non-empty array of schemes (e.g. ['https']);
     // a bare string, an empty array or a non-scheme entry is a schema bug.
@@ -347,27 +443,25 @@ function validateSchemaRules(schema, warn) {
   // overlapping) — that would silently read one env var for two rules.
   const flatOwners = new Map();
   for (const key of keys) flatOwners.set(key, `"${key}"`);
-  for (const [key, rule] of Object.entries(schema)) {
-    if (!groupShape(rule)) continue;
-    if (typeof rule.prefix !== 'string' || rule.prefix === '') continue; // already reported above
-    for (const ik of Object.keys(rule.schema)) {
-      const fk = rule.prefix + ik;
-      if (flatOwners.has(fk)) {
-        errors.push(`${key}: prefix "${rule.prefix}" makes "${fk}" collide with ${flatOwners.get(fk)}`);
-      } else {
-        flatOwners.set(fk, `the "${key}" group`);
-      }
+  walkSchema(schema, (key, rule, path, fullPrefix) => {
+    if (path.length === 1) return; // flat names and group names were reserved above
+    const group = prefix + path.slice(0, -1).join('.');
+    if (flatOwners.has(key)) {
+      errors.push(`${group}: prefix "${fullPrefix}" makes "${key}" collide with ${flatOwners.get(key)}`);
+    } else {
+      flatOwners.set(key, `the "${group}" group`);
     }
-  }
+  }, undefined, prefix);
   // Issue #228: aliases inside a group are FULL env names, and each group used
   // to be validated with its own fresh alias map — so an alias in one group
   // could name another group's key (or a flat key) and one env var would then
   // silently feed two rules. Run the alias collision check over the FLATTENED
   // schema as well; the per-group recursion above already reports the
   // within-group cases, and the dedupe below keeps every message single.
-  const flatKeys = new Set(Object.keys(flattenSchema(schema).flat));
+  const { flat } = flattenSchema(schema, prefix);
+  const flatKeys = new Set(Object.keys(flat));
   const flatAliasOwners = new Map();
-  for (const [fkey, frule] of Object.entries(flattenSchema(schema).flat)) {
+  for (const [fkey, frule] of Object.entries(flat)) {
     if (frule === null || typeof frule !== 'object' || Array.isArray(frule)
       || !Array.isArray(frule.aliases)
       || frule.aliases.some(a => typeof a !== 'string' || a.trim() === '')) continue; // already reported above
@@ -381,14 +475,20 @@ function validateSchemaRules(schema, warn) {
       }
     }
   }
-  if (errors.length) throw new EnvSaafError([...new Set(errors)]);
+  if (errors.length) {
+    // Issue #283: a schema problem is a bug in the schema, not a bad env value.
+    // Label it "Invalid schema:" so users debug the right thing; the errors
+    // array is unchanged, only the header differs from genuine value errors.
+    throw invalidSchema(errors);
+  }
   // Check only the complete flattened schema: a group may reference a key
   // in another group or at the top level. External flags remain supported.
-  for (const [key, rule] of Object.entries(flattenSchema(schema).flat)) {
+  for (const [key, rule] of Object.entries(flat)) {
     if (rule && rule.requiredIf && !flatKeys.has(rule.requiredIf.key)) {
       warn(`env-saaf: ${key}: requiredIf references undeclared key "${rule.requiredIf.key}"; check for a typo or declare the key (external env flags still work)`);
     }
   }
+  return patterns;
 }
 
 // Numeric configuration strings are decimal; Number() alone also accepts
@@ -396,6 +496,11 @@ function validateSchemaRules(schema, warn) {
 function decimalNumber(value) {
   return typeof value === 'string' && /^\s*0[xob]/i.test(value) ? NaN : Number(value);
 }
+
+// Semantic version: MAJOR.MINOR.PATCH, no leading zeroes in numeric parts;
+// optional pre-release/build suffixes and one optional lowercase 'v' prefix.
+// Shared by coerce() and toJsonSchema() so runtime and schema checks match.
+const SEMVER_RE = /^v?(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-((?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*)(?:\.(?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*))*))?(?:\+([0-9a-zA-Z-]+(?:\.[0-9a-zA-Z-]+)*))?$/;
 
 function coerce(key, raw, type, trim = true, protocols, sensitive = false, of = 'string', separator = ',') {
   // trim: false (issue #84) keeps the raw value exactly as provided — for
@@ -530,7 +635,7 @@ function coerce(key, raw, type, trim = true, protocols, sensitive = false, of = 
       // emit); an uppercase 'V' or a double 'vv' is rejected. The value
       // is returned unchanged, prefix included.
       const s = String(v);
-      if (!/^v?(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-((?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*)(?:\.(?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*))*))?(?:\+([0-9a-zA-Z-]+(?:\.[0-9a-zA-Z-]+)*))?$/.test(s)) {
+      if (!SEMVER_RE.test(s)) {
         throw new Error(`${key}: expected a valid semantic version (e.g. ${TYPE_EXAMPLES.semver}), got "${shown}"`);
       }
       return s;
@@ -793,7 +898,7 @@ function validateEnvCore(schema, env, options) {
   if (options.onWarn !== undefined && typeof options.onWarn !== 'function') {
     throw new TypeError('env-saaf: "onWarn" option must be a function');
   }
-  validateSchemaRules(schema, options.onWarn || (msg => console.warn(msg)));
+  const patterns = validateSchemaRules(schema, options.onWarn || (msg => console.warn(msg)));
   // Issue #228: groups are validated as groups above, then flattened, so the
   // whole existing pipeline (aliases, defaults, requiredIf, strict) works on
   // full env names unchanged and errors name DB_HOST, not DB.HOST.
@@ -894,6 +999,28 @@ function validateEnvCore(schema, env, options) {
           continue;
         }
       }
+      // Issue #292: min/max bounds for `date` values — ISO date/datetime
+      // strings (or Date objects) from the rule, compared chronologically
+      // against the parsed Date. Inclusive on both ends; a date-time value
+      // compares against a date-only bound by its instant, so
+      // '2026-01-01T00:00:00Z' is on the '2026-01-01' bound. Bounds are
+      // validated up front in validateSchema, so an unparseable bound here
+      // can only come from a schema that skipped validation; it is skipped
+      // rather than crashing the run. Defaults go through the same check
+      // because they are coerced here too.
+      if (val instanceof Date && (rule.min !== undefined || rule.max !== undefined)) {
+        let lo = null, hi = null;
+        try { if (rule.min !== undefined) lo = coerce(key, rule.min, 'date'); } catch (_) {}
+        try { if (rule.max !== undefined) hi = coerce(key, rule.max, 'date'); } catch (_) {}
+        const t = val.getTime();
+        if ((lo !== null && t < lo.getTime()) || (hi !== null && t > hi.getTime())) {
+          const boundText = (b) => (b instanceof Date ? b.toISOString().slice(0, 10) : String(b));
+          const range = lo !== null && hi !== null ? `between ${boundText(rule.min)} and ${boundText(rule.max)}`
+            : lo !== null ? `on or after ${boundText(rule.min)}` : `on or before ${boundText(rule.max)}`;
+          errors.push(`${key}: expected a date ${range}, got "${shown}"`);
+          continue;
+        }
+      }
       // minItems/maxItems: allowed item count for array values (issue #207).
       // Runs right after coercion, before choices/pattern; the error names
       // the count and the bound. Either option works alone, and defaults go
@@ -961,21 +1088,31 @@ function validateEnvCore(schema, env, options) {
           continue;
         }
       }
-      if (rule.choices && !rule.choices.includes(val)) {
-        errors.push(`${key}: expected one of [${rule.choices.join(', ')}], got "${shown}"`);
-        continue;
-      }
-      // pattern: a RegExp a string value must match (slugs, prefixed keys
-      // like `sk_...`). Runs after coercion and the choices check, before
-      // transform; non-string types are rejected up front in validateSchema.
-      // A mismatch names the pattern.
-      if (rule.pattern !== undefined) {
-        if (!(rule.pattern instanceof RegExp)) {
-          errors.push(`${key}: "pattern" must be a RegExp`);
+      if (rule.choices) {
+        if (Array.isArray(val)) {
+          // Issue #320: `choices` on an array rule constrains each coerced
+          // item, not the array itself. Name the key, the bad item and its
+          // index so the failure is actionable (as `unique: true` does).
+          const badIndex = val.findIndex(item => !rule.choices.includes(item));
+          if (badIndex !== -1) {
+            const item = val[badIndex];
+            const shownItem = sensitive ? maskValue(safeString(item)) : safeString(item);
+            errors.push(`${key}: expected one of [${rule.choices.join(', ')}], got "${shownItem}" (item ${badIndex})`);
+            continue;
+          }
+        } else if (!rule.choices.includes(val)) {
+          errors.push(`${key}: expected one of [${rule.choices.join(', ')}], got "${shown}"`);
           continue;
         }
-        if (typeof val === 'string' && !rule.pattern.test(val)) {
-          errors.push(`${key}: expected to match ${rule.pattern}, got "${shown}"`);
+      }
+      // Keep compiled strings off the caller's rules so frozen schemas work
+      // and later validations can see changes to the source.
+      const source = rule.pattern;
+      if (source !== undefined) {
+        const pattern = compilePattern(source, key, errors, patterns);
+        if (pattern === undefined) continue;
+        if (typeof val === 'string' && !pattern.test(val)) {
+          errors.push(`${key}: expected to match ${pattern}, got "${shown}"`);
           continue;
         }
       }
@@ -1057,20 +1194,21 @@ function validateEnvCore(schema, env, options) {
 
 // Issue #231: an opt-in hook may replace the message. It only ever sees an
 // isolated copy of the error strings and the schema keys, never env values
-// or the schema rules, and `error.errors` keeps the raw strings. A hook
-// that throws or returns a non-string falls back to the default message.
+// or the schema rules, and `error.errors` keeps the raw strings. Issue #279:
+// a hook that throws is a programming error, so its error propagates out of
+// validateEnv/loadEnv unchanged instead of vanishing behind the default
+// message — the same way a non-function hook is a TypeError up front. A hook
+// that returns a non-string still falls back to the default message.
 // Shared by validateEnv and loadEnvSteps (which uses the core directly so
 // `assign` writes the FLAT env names) so both honour the hook.
 function formatErrorMessage(errors, schema, options) {
   let message;
   if (options.formatError) {
-    try {
-      const formatted = options.formatError(
-        Object.freeze(errors.slice()),
-        Object.freeze({ keys: Object.freeze(Object.keys(schema)) })
-      );
-      if (typeof formatted === 'string') message = formatted;
-    } catch (_) { /* fall back to the default message */ }
+    const formatted = options.formatError(
+      Object.freeze(errors.slice()),
+      Object.freeze({ keys: Object.freeze(Object.keys(schema)) })
+    );
+    if (typeof formatted === 'string') message = formatted;
   }
   return message;
 }
@@ -1256,7 +1394,7 @@ function parseEnvFile(text) {
   for (let i = 0; i < lines.length; i++) {
     const t = lines[i].trim();
     if (!t || t.startsWith('#')) continue;
-    const m = t.replace(/^export\s+/, '').match(/^([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$/);
+    const m = t.replace(/^export\s+/, '').match(/^([A-Za-z_][A-Za-z0-9_.-]*)\s*=\s*(.*)$/);
     if (!m) {
       // Reject malformed assignments as well as bare lines, without echoing values.
       throw new SyntaxError(`line ${i + 1}: expected KEY=VALUE`);
@@ -1462,25 +1600,25 @@ function scanCode(text) {
   // Each pattern is paired with the head whose span must be real code.
   const patterns = [
     [/process\.env\.([A-Za-z_][A-Za-z0-9_]*)/g, 'process.env'],
-    [/process\.env\[['"]([A-Za-z_][A-Za-z0-9_]*)['"]\]/g, 'process.env'],
-    // Backtick bracket access with a plain identifier — `process.env[`KEY`]`:
+    [/process\.env\[['"]([A-Za-z_][A-Za-z0-9_.-]*)['"]\]/g, 'process.env'],
+    // Backtick bracket access with a static key — `process.env[`KEY`]`:
     // a template with ${} interpolation cannot be known statically and
     // stays unmatched (the identifier charset excludes $ and {).
-    [/process\.env\[`([A-Za-z_][A-Za-z0-9_]*)`\]/g, 'process.env'],
+    [/process\.env\[`([A-Za-z_][A-Za-z0-9_.-]*)`\]/g, 'process.env'],
     // Vite exposes env through import.meta.env (issue #225) — same shapes.
     [/import\.meta\.env\.([A-Za-z_][A-Za-z0-9_]*)/g, 'import.meta.env'],
-    [/import\.meta\.env\[['"]([A-Za-z_][A-Za-z0-9_]*)['"]\]/g, 'import.meta.env'],
-    [/import\.meta\.env\[`([A-Za-z_][A-Za-z0-9_]*)`\]/g, 'import.meta.env'],
+    [/import\.meta\.env\[['"]([A-Za-z_][A-Za-z0-9_.-]*)['"]\]/g, 'import.meta.env'],
+    [/import\.meta\.env\[`([A-Za-z_][A-Za-z0-9_.-]*)`\]/g, 'import.meta.env'],
     // Optional chaining (issue #222): `process.env?.KEY`, `process.env?.['KEY']`,
     // `process.env?.[`KEY`]` — valid and increasingly common reads, same shapes
     // as the plain forms above.
     [/process\.env\?\.([A-Za-z_][A-Za-z0-9_]*)/g, 'process.env'],
-    [/process\.env\?\.\[['"]([A-Za-z_][A-Za-z0-9_]*)['"]\]/g, 'process.env'],
-    [/process\.env\?\.\[`([A-Za-z_][A-Za-z0-9_]*)`\]/g, 'process.env'],
+    [/process\.env\?\.\[['"]([A-Za-z_][A-Za-z0-9_.-]*)['"]\]/g, 'process.env'],
+    [/process\.env\?\.\[`([A-Za-z_][A-Za-z0-9_.-]*)`\]/g, 'process.env'],
     // Optional chaining on import.meta.env (issue #222) as well.
     [/import\.meta\.env\?\.([A-Za-z_][A-Za-z0-9_]*)/g, 'import.meta.env'],
-    [/import\.meta\.env\?\.\[['"]([A-Za-z_][A-Za-z0-9_]*)['"]\]/g, 'import.meta.env'],
-    [/import\.meta\.env\?\.\[`([A-Za-z_][A-Za-z0-9_]*)`\]/g, 'import.meta.env'],
+    [/import\.meta\.env\?\.\[['"]([A-Za-z_][A-Za-z0-9_.-]*)['"]\]/g, 'import.meta.env'],
+    [/import\.meta\.env\?\.\[`([A-Za-z_][A-Za-z0-9_.-]*)`\]/g, 'import.meta.env'],
   ];
   // The read itself must be code: a `process.env.X` in a comment or a string is
   // not a read. Bracket and destructured reads keep their key in a literal, so
@@ -1493,9 +1631,18 @@ function scanCode(text) {
   const codeView = code.split(MASKED).join(' ');
   const destructure = /(?:const|let|var)\s*\{([^}]+)\}\s*=\s*(?:process\.env|import\.meta\.env)/g;
   for (const m of codeView.matchAll(destructure)) {
+    const start = m.index + m[0].indexOf('{') + 1;
+    let offset = 0;
     for (const part of m[1].split(',')) {
       const name = part.split(':')[0].split('=')[0].trim();
       if (/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) found.add(name);
+      // Split the masked view so commas in defaults cannot invent properties.
+      if (part.trim().startsWith(':')) {
+        const original = src.slice(start + offset, start + offset + part.length);
+        const quoted = /^\s*(['"])([A-Za-z_][A-Za-z0-9_.-]*)\1\s*:/.exec(original);
+        if (quoted) found.add(quoted[2]);
+      }
+      offset += part.length + 1;
     }
   }
   const aliases = new Map();
@@ -1524,7 +1671,7 @@ function scanCode(text) {
     }
   }
   if (aliases.size) {
-    const access = /(?<![#$\p{ID_Continue}])([A-Za-z_$][\w$]*)(?:\.([A-Za-z_]\w*)(?![$\p{ID_Continue}])|\[(['"\x60])([A-Za-z_]\w*)\3\])/gu;
+    const access = /(?<![#$\p{ID_Continue}])([A-Za-z_$][\w$]*)(?:\.([A-Za-z_]\w*)(?![$\p{ID_Continue}])|\[(['"\x60])([A-Za-z_][\w.-]*)\3\])/gu;
     for (const m of src.matchAll(access)) {
       const declaredAt = aliases.get(m[1]);
       if (declaredAt === undefined || declaredAt > m.index || !isCode(m.index, m.index + m[1].length)) continue;
@@ -1625,22 +1772,132 @@ const ARRAY_ITEM_EXAMPLES = {
   file: ['./a.json', './b.json', './c.json'],
 };
 
-/** Placeholder for an `array` rule: example items of the `of` type, sized to fit minItems/maxItems, joined by `separator`. */
+/** Placeholder for an `array` rule: example items of the `of` type (or the rule's `choices`), sized to fit minItems/maxItems, joined by `separator`. */
 function arrayPlaceholder(rule) {
-  const examples = ARRAY_ITEM_EXAMPLES[rule.of || 'string'] || ARRAY_ITEM_EXAMPLES.string;
-  let count = Math.max(3, rule.minItems || 0);
+  const separator = rule.separator || ',';
+  const hasChoices = Array.isArray(rule.choices) && rule.choices.length > 0;
+  let examples;
+  if (hasChoices) {
+    // Issue #320: use allowed choices so the generated example validates.
+    // A choice containing the separator cannot be represented in a delimited
+    // value, so prefer ones that can. Dedupe keeps `unique: true` examples valid.
+    const strings = rule.choices.map(choice => String(choice));
+    const usable = [...new Set(strings.filter(s => !s.includes(separator)))];
+    examples = usable.length ? usable : [...new Set(strings)];
+  } else {
+    examples = ARRAY_ITEM_EXAMPLES[rule.of || 'string'] || ARRAY_ITEM_EXAMPLES.string;
+  }
+  // Without choices, keep the old three-example placeholder. With choices,
+  // suggest each allowed item once and only cycle when minItems needs more.
+  let count = hasChoices ? examples.length : Math.max(3, rule.minItems || 0);
+  if (hasChoices && rule.minItems !== undefined) count = Math.max(count, rule.minItems);
   if (rule.maxItems !== undefined) count = Math.min(count, Math.max(1, rule.maxItems));
+  // A unique array cannot repeat a choice, so do not ask for more items than
+  // there are distinct choices (the schema itself is contradictory otherwise).
+  if (hasChoices && rule.unique === true) count = Math.min(count, examples.length);
   const items = [];
   for (let i = 0; i < count; i++) items.push(examples[i % examples.length]);
-  return items.join(rule.separator || ',');
+  return items.join(separator);
+}
+
+// A template should not materialize arbitrarily large padding from schema bounds.
+const MAX_STRING_EXAMPLE_LENGTH = 4 * 1024;
+const STRING_EXAMPLE_GROWTH_BUDGET = 16 * 1024;
+
+function resizeExample(example, length, pad = 'x') {
+  return example.slice(0, length).padEnd(length, pad);
+}
+
+function boundedUrlPlaceholder(example, min, max, protocols) {
+  const schemes = protocols === undefined ? ['https', 'x']
+    : Array.isArray(protocols) ? protocols.filter(p => typeof p === 'string' && /^[a-z][a-z0-9+.-]*:?$/i.test(p))
+      .filter(p => p.length <= max).map(p => p.replace(/:$/, '').toLowerCase()) : [];
+  if (schemes.includes('https') && example.length >= min && example.length <= max) return example;
+  for (const scheme of schemes) {
+    const prefix = `${scheme}:`;
+    const origin = `${prefix}//example.com`;
+    const length = Math.min(max, Math.max(min, origin.length));
+    if (length === origin.length) return origin;
+    if (length > origin.length) return `${origin}/`.padEnd(length, 'x');
+    const hostLength = length - prefix.length - 2;
+    if (hostLength > 0) return `${prefix}//${resizeExample('example', hostLength)}`;
+    if (length < prefix.length) continue;
+    // WHATWG URLs accept short forms such as https:x and opaque URLs such as x:.
+    const short = prefix.padEnd(length, 'x');
+    try { new URL(short); return short; }
+    catch { /* This scheme needs more room. Try the next one. */ }
+  }
+  return example;
+}
+
+function boundedHostPlaceholder(example, length) {
+  // Host also accepts scoped IPv6 addresses, which do not share the hostname limit.
+  if (length > 253) return 'fe80::1%example'.padEnd(length, 'x');
+  let host = '';
+  while (length > 63) {
+    const labelLength = Math.min(63, length - 2);
+    host += resizeExample(example, labelLength) + '.';
+    length -= labelLength + 1;
+  }
+  return host + resizeExample(example, length);
+}
+
+function boundedStringPlaceholder(type, example, rule, limit) {
+  const { minLength, maxLength } = rule;
+  for (const bound of [minLength, maxLength]) {
+    if (bound !== undefined && (!Number.isInteger(bound) || bound < 0)) return example;
+  }
+  let min = minLength ?? 0;
+  let max = Math.min(maxLength ?? Infinity, limit);
+  if (type === 'hex' && rule.length !== undefined) {
+    if (!Number.isInteger(rule.length) || rule.length < min || rule.length > max) return example;
+    min = max = rule.length;
+  }
+  // The effective range must fit the budget before any type-specific padding.
+  if (min > max) return example;
+  if (type === 'url') return boundedUrlPlaceholder(example, min, max, rule.protocols);
+  if (example.length >= min && example.length <= max) return example;
+  if (type === 'base64') {
+    // Padded or not, a base64 value can never be 1 modulo 4 characters long.
+    if (min % 4 === 1) min++;
+    if (max % 4 === 1) max--;
+    if (min > max) return example;
+  }
+  const length = Math.min(max, Math.max(min, example.length));
+  if (length === 0) {
+    // An empty assignment is missing, but a quoted space survives parsing and trims to ''.
+    return type === 'string' && rule.trim !== false ? "' '" : example;
+  }
+  // Only built-in ASCII examples are resized. Author-supplied values are left alone.
+  switch (type) {
+    case 'string': return resizeExample(example, length);
+    case 'hex': return resizeExample(example, length, '0');
+    case 'base64': return 'A'.repeat(length);
+    case 'host': return boundedHostPlaceholder(example, length);
+    case 'email': {
+      const at = example.indexOf('@');
+      const suffix = length > example.length - at ? example.slice(at) : '@x.y';
+      return length > suffix.length ? resizeExample(example.slice(0, at), length - suffix.length) + suffix : example;
+    }
+    case 'ipv4':
+      return ['0.0.0.0', '10.0.0.1', '10.0.0.10', '10.0.0.100', example,
+        '192.168.0.10', '192.168.0.100', '192.168.10.100', '192.168.100.100'][length - 7] ?? example;
+    case 'semver':
+      return length < 6 ? example : length === 6 ? `v${example}` : `${example}+`.padEnd(length, 'x');
+    case 'file':
+      if (length > example.length) return resizeExample('./config', length - 5) + '.json';
+      return length > 2 ? `./${resizeExample('config', length - 2)}` : 'config'.slice(0, length);
+    default: return example; // UUIDs have a fixed length.
+  }
 }
 
 /** Placeholder for a scalar (non-array) rule, per its declared type. Every
  * value is a literal that itself validates against the type (issue #251),
  * so a generated .env.example passes `check` out of the box — except `file`,
  * whose './config.json' path the user must create. */
-function scalarPlaceholder(type) {
-  return type === 'port' ? '3000' : type === 'url' ? 'https://example.com'
+function scalarPlaceholder(rule, stringGrowth) {
+  const type = rule.type === undefined ? 'string' : rule.type;
+  const placeholder = type === 'port' ? '3000' : type === 'url' ? 'https://example.com'
     : type === 'ipv4' ? '192.168.0.1' : type === 'semver' ? '1.0.0'
     : type === 'date' ? '2026-01-31' : type === 'duration' ? '15m' : type === 'host' ? 'localhost'
     : type === 'file' ? './config.json'
@@ -1648,6 +1905,48 @@ function scalarPlaceholder(type) {
     : type === 'number' ? '3.14' : type === 'int' ? '42' : type === 'boolean' ? 'true'
     : type === 'json' ? '{"key":"value"}' : type === 'base64' ? 'aGVsbG8=' : type === 'hex' ? 'deadbeef'
     : 'your_value_here';
+  if (STRING_TYPES.has(type) && (rule.minLength !== undefined || rule.maxLength !== undefined)) {
+    const limit = Math.min(MAX_STRING_EXAMPLE_LENGTH, placeholder.length + stringGrowth.remaining);
+    const bounded = boundedStringPlaceholder(type, placeholder, rule, limit);
+    stringGrowth.remaining -= Math.max(0, bounded.length - placeholder.length);
+    return bounded;
+  }
+  // Issue #292: a date placeholder outside its own min/max would fail its
+  // own check — use the bound itself when the default example is out of
+  // range. An unparseable bound leaves the default example (the schema
+  // check rejects it up front anyway).
+  if (type === 'date') {
+    let example = placeholder;
+    try {
+      const exampleDate = coerce('placeholder', placeholder, 'date');
+      if (typeof rule.min === 'string') {
+        if (exampleDate < coerce('placeholder', rule.min, 'date')) example = rule.min;
+      }
+      if (typeof rule.max === 'string') {
+        if (exampleDate > coerce('placeholder', rule.max, 'date')) example = rule.max;
+      }
+    } catch (_) { /* keep the default example */ }
+    return example;
+  }
+  if (!['number', 'int', 'port', 'duration'].includes(type)) return placeholder;
+
+  let min = Number.isFinite(rule.min) ? rule.min : -Infinity;
+  let max = Number.isFinite(rule.max) ? rule.max : Infinity;
+  if (type === 'port' || type === 'duration') min = Math.max(0, min);
+  if (type === 'port') max = Math.min(65535, max);
+  if (type === 'int' || type === 'port') {
+    min = Math.ceil(min);
+    max = Math.floor(max);
+  }
+  // Some bounds leave no value allowed by the type; no placeholder can fix them.
+  if (min > max) return placeholder;
+
+  const sample = type === 'duration' ? 15 * 60000 : Number(placeholder);
+  const value = Math.min(max, Math.max(min, sample));
+  if (value === sample) return placeholder;
+  if (value === 0) return '0';
+  // int/port and duration reject exponent notation, even for a valid value.
+  return value.toLocaleString('en-US', { useGrouping: false, maximumSignificantDigits: 21 });
 }
 
 /** Generate .env.example text from a schema. Values are placeholders/defaults only — never real secrets. */
@@ -1658,6 +1957,8 @@ function generateExample(schema) {
   // "KEY"). An explicit default still wins — the schema author chose it.
   const SECRET_WORDS = new Set(['SECRET', 'KEY', 'TOKEN', 'PASSWORD', 'PASSWD', 'PRIVATE', 'CREDENTIAL']);
   const lines = ['# Generated by env-saaf — put real values in .env (never commit .env)'];
+  // Budget only growth from synthesized string bounds, not supplied values or normal examples.
+  const stringGrowth = { remaining: STRING_EXAMPLE_GROWTH_BUDGET };
   // One entry's comment + KEY=value lines. `key` is always the FULL env name.
   const entry = (key, rule) => {
     if (rule === null || typeof rule !== 'object' || Array.isArray(rule)) rule = {};
@@ -1683,28 +1984,21 @@ function generateExample(schema) {
     const placeholder = rule.default !== undefined
       ? (rule.type === 'array' && Array.isArray(rule.default) ? rule.default.join(rule.separator || ',') : rule.default)
       : looksSecret ? ''
+      // Issue #223/#320: build the array placeholder from the `of` item type's
+      // own examples, or from the allowed choices when present, so each
+      // suggested item validates (fallback: string items). The item count
+      // respects minItems/maxItems so the placeholder passes those bounds too
+      // — examples cycle when more than three are needed.
       : rule.type === 'array'
-        // Issue #223: build the array placeholder from the `of` item type's own
-        // examples, so each suggested item validates (fallback: string items).
-        // The item count respects minItems/maxItems so the placeholder passes
-        // those bounds too — examples cycle when more than three are needed.
         ? arrayPlaceholder(rule)
-        : scalarPlaceholder(rule.type);
+      : Array.isArray(rule.choices) && rule.choices.length ? rule.choices[0]
+      : scalarPlaceholder(rule, stringGrowth);
       return [comment, `${key}=${placeholder}`];
   };
-  for (const [key, rule] of Object.entries(schema)) {
-    // Issue #228: a group emits its inner keys under their full prefixed env
-    // names, with a group comment above the run — the .env file stays flat.
-    if (groupShape(rule)) {
-      lines.push(`# group ${key} — the keys below are read from env vars prefixed with '${rule.prefix}'`);
-      for (const [innerKey, innerRule] of Object.entries(rule.schema)) {
-        lines.push(...entry(rule.prefix + innerKey, innerRule));
-      }
-      continue;
-    }
-    lines.push(...entry(key, rule));
-    continue;
-  }
+  // The .env file stays flat; each group level documents its complete prefix.
+  walkSchema(schema, (key, rule) => lines.push(...entry(key, rule)), (path, prefix) => {
+    lines.push(`# group ${path.join('.')} — the keys below are read from env vars prefixed with '${prefix}'`);
+  });
   return lines.join('\n') + '\n';
 }
 
@@ -1720,6 +2014,7 @@ function jsonSchemaForScalar(type, protocols) {
     case 'host': return { type: 'string', anyOf: [{ format: 'hostname' }, { format: 'ipv4' }, { format: 'ipv6' }] };
     case 'email': case 'uuid': case 'ipv4': return { type: 'string', format: type };
     case 'hex': return { type: 'string', pattern: '^[0-9a-fA-F]+$' };
+    case 'semver': return { type: 'string', pattern: SEMVER_RE.source };
     case 'url': {
       const property = { type: 'string', format: 'uri' };
       if (protocols) {
@@ -1829,20 +2124,117 @@ function jsonSchemaForRule(key, rule, required) {
     property.minLength = Math.max(rule.length, property.minLength ?? 0);
     property.maxLength = Math.min(rule.length, property.maxLength ?? Infinity);
   }
-  if (rule.pattern && !rule.pattern.flags) {
+  const pattern = rule.pattern;
+  if (typeof pattern === 'string' || (pattern && !pattern.flags)) {
     if (property.pattern) property.allOf = [{ pattern: property.pattern }];
-    property.pattern = rule.pattern.source;
+    property.pattern = typeof pattern === 'string' ? pattern : pattern.source;
   }
   if (Array.isArray(rule.choices)) {
     const choices = [...new Set(rule.choices.filter(isJsonPrimitive))];
-    if (choices.length) property.enum = choices;
+    if (choices.length) {
+      // Issue #320: on an array rule the enum constrains each item. A
+      // top-level enum would mean the whole array must equal a single choice.
+      if (type === 'array') property.items.enum = choices;
+      else property.enum = choices;
+    }
   }
   if (rule.default !== undefined) {
     const value = jsonSchemaDefault(key, rule, type);
     if (value !== undefined) property.default = value;
   }
+  if (rule.sensitive === true) property.writeOnly = true;
   if (rule.required) required.push(key);
   return property;
+}
+
+function jsonSchemaRequiredPath(key, groupOf, match) {
+  const path = groupOf.get(key) || [key];
+  let constraint = { required: [path[path.length - 1]] };
+  if (match) constraint.properties = { [path[path.length - 1]]: match };
+  for (let i = path.length - 2; i >= 0; i--) {
+    constraint = {
+      required: [path[i]],
+      properties: { [path[i]]: { type: 'object', ...constraint } },
+    };
+  }
+  return constraint;
+}
+
+function isArrayIncludes(method) {
+  const includes = Array.prototype.includes;
+  if (method === includes) return true;
+  if (typeof method !== 'function'
+    || Function.prototype.toString.call(method) !== Function.prototype.toString.call(includes)) return false;
+  // A different realm has its own native function. Other built-ins called
+  // includes (String, TypedArray) do not compare a symbol on an array-like object.
+  try {
+    const entry = Symbol();
+    return Reflect.apply(method, { 0: entry, length: 1 }, [entry]) === true;
+  } catch {
+    return false;
+  }
+}
+
+function jsonSchemaMembershipValues(list) {
+  // A proxy can change membership lookups without changing its descriptors.
+  for (let owner = list; owner !== null; owner = Object.getPrototypeOf(owner)) {
+    if (isProxy(owner)) return;
+  }
+  const descriptor = key => {
+    for (let owner = list; owner !== null; owner = Object.getPrototypeOf(owner)) {
+      const property = Object.getOwnPropertyDescriptor(owner, key);
+      if (property) return property;
+    }
+  };
+  // Array#includes visits indices, not the iterator. Don't infer results
+  // from overridden membership or execute accessors during schema export.
+  if (!isArrayIncludes(descriptor('includes')?.value)) return;
+  const values = [];
+  for (let i = 0; i < list.length; i++) {
+    const entry = descriptor(i);
+    if (!entry) continue;
+    if (!Object.prototype.hasOwnProperty.call(entry, 'value')) return;
+    values.push(entry.value);
+  }
+  return values;
+}
+
+function jsonSchemaRequiredIfMatch(source, condition) {
+  const type = source.type ?? 'string';
+  if (source.validate !== undefined || source.transform !== undefined || type === 'date' || type === 'array') return;
+  const membership = Object.prototype.hasOwnProperty.call(condition, 'in') && condition.in !== undefined;
+  const candidates = membership ? jsonSchemaMembershipValues(condition.in) : [condition.equals];
+  if (!candidates) return;
+  // JSON Schema compares structures; runtime object comparisons use identity.
+  if (type === 'json' && candidates.some(value => value !== null && typeof value === 'object')) return;
+  // Non-JSON primitives cannot match canonical values. Keep other list entries
+  // as typed literals, not env spellings such as 'false' or '01'.
+  const valueType = STRING_TYPES.has(type) ? 'string' : type === 'boolean' ? 'boolean' : 'number';
+  const values = [...new Set(candidates.filter(value => isJsonPrimitive(value)
+    && (type === 'json' || typeof value === valueType)))];
+  if (values.length) return membership ? { enum: values } : { const: values[0] };
+}
+
+function addJsonSchemaRequiredIf(schema, result) {
+  const { flat, groupOf } = flattenSchema(schema);
+  const clauses = [];
+  let grouped = false;
+  for (const [key, rule] of Object.entries(flat)) {
+    const condition = rule.requiredIf;
+    // Runtime consults requiredIf only for a missing key with no default.
+    if (!condition || rule.default !== undefined || !Object.prototype.hasOwnProperty.call(flat, condition.key)) continue;
+    const match = jsonSchemaRequiredIfMatch(flat[condition.key], condition);
+    if (!match) continue;
+    // `properties` alone matches absent values. Require every step of the
+    // source path, as well as the full target path when the condition matches.
+    clauses.push({
+      if: jsonSchemaRequiredPath(condition.key, groupOf, match),
+      then: jsonSchemaRequiredPath(key, groupOf),
+    });
+    grouped = grouped || groupOf.has(key) || groupOf.has(condition.key);
+  }
+  if (clauses.length === 1 && !grouped) Object.assign(result, clauses[0]);
+  else if (clauses.length) result.allOf = clauses;
 }
 
 function toJsonSchema(schema) {
@@ -1852,6 +2244,7 @@ function toJsonSchema(schema) {
     [key, jsonSchemaForRule(key, rule, required)]));
   const result = { $schema: 'https://json-schema.org/draft/2020-12/schema', type: 'object', properties };
   if (required.length) result.required = required;
+  addJsonSchemaRequiredIf(schema, result);
   return result;
 }
 

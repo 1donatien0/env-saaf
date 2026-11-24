@@ -401,7 +401,7 @@ Use `${VAR:-fallback}` para fornecer uma alternativa quando um valor não está 
 
 Valores entre aspas também podem se estender por várias linhas (chaves PEM, blocos JSON) — a análise continua até a aspa de fechamento. Uma aspa escapada com barra invertida (`\'` dentro de aspas simples, `\"` dentro de aspas duplas) permanece parte do valor, então `B='it\'s'` é `it's`; outras barras invertidas, como em um caminho do Windows, são mantidas como estão.
 
-Uma linha solta sem `=`, ou uma atribuição com uma chave inválida (como `app.name`, `MY-KEY` ou `MY KEY`), gera um erro de sintaxe com o número da linha, sem ecoar o valor. As chaves precisam corresponder a `[A-Za-z_][A-Za-z0-9_]*`. Use `KEY=` para um valor vazio.
+Uma linha solta sem `=`, ou uma atribuição com uma chave inválida (como `MY KEY`), gera um erro de sintaxe com o número da linha, sem ecoar o valor. As chaves de atribuição precisam corresponder a `[A-Za-z_][A-Za-z0-9_.-]*`: pontos e hífens são permitidos após o primeiro caractere (como em `app.name` e `MY-KEY`), mas espaços dentro da chave não são permitidos. Use `KEY=` para um valor vazio.
 
 Em código assíncrono, use `loadEnvAsync` para ler arquivos sem bloquear com E/S do sistema de arquivos.
 

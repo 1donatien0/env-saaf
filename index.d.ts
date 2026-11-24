@@ -2,8 +2,8 @@ export type EnvScalarType = 'string' | 'number' | 'int' | 'boolean' | 'url' | 'p
 export type EnvType = EnvScalarType | 'array';
 
 export type RequiredIfCondition =
-  | { key: string; equals: string | number | boolean; in?: never }
-  | { key: string; in: Array<string | number | boolean>; equals?: never };
+  | { key: string; equals: string | number | boolean | null; in?: never }
+  | { key: string; in: Array<string | number | boolean | null>; equals?: never };
 
 export interface EnvRule {
   type?: EnvType;
@@ -22,11 +22,14 @@ export interface EnvRule {
   /**
    * Allowed range for numeric values (`number`, `int`, `port`, `duration`).
    * `min` alone or `max` alone both work; out-of-range values are
-   * rejected with an error naming the allowed range.
+   * rejected with an error naming the allowed range. For `date` rules the
+   * bounds are ISO date (or datetime) strings instead, e.g. `min: '2026-01-01'`,
+   * compared chronologically against the parsed value; a number is rejected
+   * up front for `date` rules.
    */
-  min?: number;
+  min?: number | string;
   /** See `min`. */
-  max?: number;
+  max?: number | string;
   /**
    * Allowed length for string values (`string`, `email`, `url`, `file`, `uuid`, `hex`,
    * `ipv4`, `semver`, `base64`, `host`).
@@ -51,13 +54,14 @@ export interface EnvRule {
    */
   protocols?: string[];
   /**
-   * A regular expression a string value (`string`, `email`, `url`, `file`,
-   * `uuid`, `hex`, `ipv4`, `semver`, `base64`, `host`) must match (e.g. a
-   * slug, or a prefixed key like `sk_...`). Checked after coercion and
-   * `choices`, before `transform`; a mismatch error names the pattern.
-   * Rejected up front on non-string rules.
+   * A RegExp or regular expression source string that a string value
+   * (`string`, `email`, `url`, `file`, `uuid`, `hex`, `ipv4`, `semver`,
+   * `base64`, `host`) must match. Checked after coercion and `choices`,
+   * before `transform`; a mismatch error names the pattern.
+   * Strings are compiled without flags. Invalid sources and uses on
+   * non-string rules are rejected during schema validation.
    */
-  pattern?: RegExp;
+  pattern?: RegExp | string;
   /**
    * Custom validation rule run after coercion and built-in checks, before
    * `transform`. Receives the coerced value and the input `env` object.
@@ -125,12 +129,13 @@ export interface EnvRule {
  * A group rule (issue #228): nests a sub-schema under one env prefix.
  * `{ DB: { prefix: 'DB_', schema: { HOST: { type: 'host' } } } }` reads the
  * env var `DB_HOST` and the result nests it as `{ DB: { HOST: '...' } }`.
- * Groups cannot be nested, and a group may not also set `type`.
+ * Groups may contain groups; their prefixes concatenate and results nest at
+ * each level. A group may not also set `type`.
  * Inside a group, `aliases` and `requiredIf.key` use FULL env var names
  * (e.g. `'OLD_DB_HOST'`, `'NODE_ENV'`, or another group's `'DB_HOST'`).
  */
 export interface EnvGroupRule<S extends EnvSchema = EnvSchema> {
-  /** Env prefix applied to every inner key: inner `HOST` is read from `DB_HOST`. */
+  /** Prefix appended to ancestor prefixes before each inner key. */
   prefix: string;
   /** Inner rules keyed by their unprefixed names. The result nests under the group key. */
   schema: S;
@@ -235,7 +240,7 @@ export interface ValidateResult<S extends EnvSchema> {
 /**
  * Validate the shape of the schema itself (types, option shapes, alias
  * conflicts, and — since #228 — group rules: `prefix`/`schema` shape,
- * nesting, and prefix collisions). Throws an `EnvSaafError` listing every
+ * circular references, and prefix collisions). Throws an `EnvSaafError` listing every
  * problem, naming the key (grouped rules use their full env name, e.g.
  * `DB_HOST`). Independent of any env values, so it can run at startup.
  */
@@ -295,13 +300,16 @@ type JsonPrimitive = string | number | boolean | null;
 type JsonValue = JsonPrimitive | JsonValue[] | { [key: string]: JsonValue };
 
 export interface JsonSchemaProperty {
-  type?: 'string' | 'integer' | 'number' | 'boolean' | 'array';
+  type?: 'string' | 'integer' | 'number' | 'boolean' | 'array' | 'object';
+  properties?: Record<string, JsonSchemaProperty>;
+  required?: string[];
   format?: 'uri' | 'email' | 'uuid' | 'ipv4' | 'ipv6' | 'hostname' | 'date' | 'date-time';
   pattern?: string;
   minLength?: number;
   maxLength?: number;
   minimum?: number;
   maximum?: number;
+  const?: JsonPrimitive;
   enum?: JsonPrimitive[];
   default?: JsonValue;
   items?: JsonSchemaProperty;
@@ -310,13 +318,14 @@ export interface JsonSchemaProperty {
   uniqueItems?: boolean;
   anyOf?: JsonSchemaProperty[];
   allOf?: JsonSchemaProperty[];
+  if?: JsonSchemaProperty;
+  then?: JsonSchemaProperty;
 }
 
-export interface JsonSchema {
+export interface JsonSchema extends JsonSchemaProperty {
   $schema: 'https://json-schema.org/draft/2020-12/schema';
   type: 'object';
   properties: Record<string, JsonSchemaProperty>;
-  required?: string[];
 }
 
 /** Describe coerced values as a draft 2020-12 JSON Schema without reading the environment. */

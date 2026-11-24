@@ -1,6 +1,100 @@
 'use strict';
 const assert = require('node:assert');
-const { loadEnv, validateEnv, EnvSaafError, parseEnvFile, scanCode, diffEnv, maskSecrets, maskValue, generateExample, toJsonSchema } = require('./index');
+const { loadEnv, validateEnv, validateSchema, EnvSaafError, parseEnvFile, scanCode, diffEnv, maskSecrets, maskValue, generateExample, toJsonSchema } = require('./index');
+
+// Issue #296: a hand-rolled structural check for the draft 2020-12 keywords
+// env-saaf emits. Keeping the keyword map local means the whole exported
+// document is checked without adding a schema-validator dependency.
+const DRAFT_2020_12 = 'https://json-schema.org/draft/2020-12/schema';
+const JSON_SCHEMA_TYPES = new Set(['null', 'boolean', 'object', 'array', 'number', 'integer', 'string']);
+
+function isJsonValue(value, seen = new Set()) {
+  if (value === null || typeof value === 'boolean' || typeof value === 'string') return true;
+  if (typeof value === 'number') return Number.isFinite(value);
+  if (typeof value !== 'object') return false;
+  if (seen.has(value)) return false;
+  const next = new Set(seen);
+  next.add(value);
+  if (Array.isArray(value)) return value.every(item => isJsonValue(item, next));
+  const proto = Object.getPrototypeOf(value);
+  if (proto !== Object.prototype && proto !== null) return false;
+  return Object.entries(value).every(([, item]) => isJsonValue(item, next));
+}
+
+function assertDraft202012Schema(schema, path = '#', root = true) {
+  assert.ok(schema && typeof schema === 'object' && !Array.isArray(schema), `${path}: expected a schema object`);
+  for (const [keyword, value] of Object.entries(schema)) {
+    const at = `${path}.${keyword}`;
+    switch (keyword) {
+      case '$schema':
+        assert.ok(root, `${at}: $schema is only allowed at the document root`);
+        assert.strictEqual(value, DRAFT_2020_12, `${at}: expected the draft 2020-12 dialect`);
+        break;
+      case 'type': {
+        const types = Array.isArray(value) ? value : [value];
+        assert.ok(types.length > 0, `${at}: expected at least one type`);
+        for (const type of types) assert.ok(JSON_SCHEMA_TYPES.has(type), `${at}: unknown JSON Schema type ${JSON.stringify(type)}`);
+        break;
+      }
+      case 'properties':
+        assert.ok(value && typeof value === 'object' && !Array.isArray(value), `${at}: expected an object`);
+        for (const [key, child] of Object.entries(value)) {
+          assertDraft202012Schema(child, `${path}.properties[${JSON.stringify(key)}]`, false);
+        }
+        break;
+      case 'required':
+        assert.ok(Array.isArray(value) && value.length > 0, `${at}: expected a non-empty array`);
+        assert.ok(value.every(key => typeof key === 'string'), `${at}: expected an array of strings`);
+        assert.strictEqual(new Set(value).size, value.length, `${at}: duplicate entries`);
+        break;
+      case 'items':
+        assertDraft202012Schema(value, `${path}.items`, false);
+        break;
+      case 'enum':
+        assert.ok(Array.isArray(value) && value.length > 0, `${at}: expected a non-empty array`);
+        assert.ok(value.every(item => isJsonValue(item)), `${at}: expected JSON values`);
+        break;
+      case 'const':
+      case 'default':
+        assert.ok(isJsonValue(value), `${at}: expected a JSON value`);
+        break;
+      case 'minimum':
+      case 'maximum':
+        assert.ok(typeof value === 'number' && Number.isFinite(value), `${at}: expected a finite number`);
+        break;
+      case 'minLength':
+      case 'maxLength':
+      case 'minItems':
+      case 'maxItems':
+        assert.ok(Number.isInteger(value) && value >= 0, `${at}: expected a non-negative integer`);
+        break;
+      case 'uniqueItems':
+      case 'writeOnly':
+        assert.strictEqual(typeof value, 'boolean', `${at}: expected a boolean`);
+        break;
+      case 'pattern':
+      case 'format':
+        assert.strictEqual(typeof value, 'string', `${at}: expected a string`);
+        break;
+      case 'allOf':
+      case 'anyOf':
+        assert.ok(Array.isArray(value) && value.length > 0, `${at}: expected a non-empty array`);
+        value.forEach((child, i) => assertDraft202012Schema(child, `${at}[${i}]`, false));
+        break;
+      case 'if':
+      case 'then':
+      case 'else':
+        assertDraft202012Schema(value, at, false);
+        break;
+      default:
+        assert.fail(`${at}: unknown keyword ${JSON.stringify(keyword)}`);
+    }
+  }
+  if (root) {
+    assert.strictEqual(schema.$schema, DRAFT_2020_12, `${path}: missing $schema`);
+    assert.strictEqual(schema.type, 'object', `${path}: root must be an object schema`);
+  }
+}
 
 // Issue #229: JSON Schema export
 {
@@ -25,7 +119,10 @@ const { loadEnv, validateEnv, EnvSaafError, parseEnvFile, scanCode, diffEnv, mas
     uuid: { type: 'string', format: 'uuid' },
     hex: { type: 'string', pattern: '^[0-9a-fA-F]+$' },
     ipv4: { type: 'string', format: 'ipv4' },
-    semver: { type: 'string' },
+    semver: {
+      type: 'string',
+      pattern: '^v?(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)(?:-((?:0|[1-9]\\d*|\\d*[a-zA-Z-][0-9a-zA-Z-]*)(?:\\.(?:0|[1-9]\\d*|\\d*[a-zA-Z-][0-9a-zA-Z-]*))*))?(?:\\+([0-9a-zA-Z-]+(?:\\.[0-9a-zA-Z-]+)*))?$',
+    },
     base64: { type: 'string' },
     date: { type: 'string', anyOf: [{ format: 'date' }, { format: 'date-time' }] },
     file: { type: 'string' },
@@ -192,6 +289,43 @@ const { loadEnv, validateEnv, EnvSaafError, parseEnvFile, scanCode, diffEnv, mas
     properties: { PORT: { type: 'integer', minimum: 0, maximum: 65535 }, NAME: { type: 'string' } },
     required: ['PORT'],
   });
+
+  // Issue #296: check the complete exported documents, not just keyword mappings.
+  {
+    const comprehensive = {
+      NAME: { type: 'string', required: true, minLength: 1 },
+      MODE: { type: 'string', choices: ['dev', 'prod'], default: 'dev', minLength: 2, maxLength: 8, pattern: /^[a-z]+$/ },
+      RETRIES: { type: 'int', min: 0, max: 5, choices: [0, 2], default: '0' },
+      RATIO: { type: 'number', min: -0.5, max: 0, default: '-0.25' },
+      DEBUG: { type: 'boolean', default: 'no' },
+      PAYLOAD: { type: 'json', default: '{"ok":true}' },
+      WHEN: { type: 'date', default: '2026-01-31' },
+      URL: { type: 'url', protocols: ['https'] },
+      TAGS: { type: 'array', of: 'string', choices: ['a', 'b'], minItems: 1, maxItems: 3, unique: true, default: ['a'] },
+      PORTS: { type: 'array', of: 'port', minItems: 0, maxItems: 2, default: '0;443' },
+      SECRET: { type: 'string', sensitive: true },
+      HEX: { type: 'hex', length: 4 },
+      DB: { prefix: 'DB_', schema: { HOST: { type: 'host', required: true }, PORT: { type: 'port', default: 5432 } } },
+      TOKEN: { type: 'string', requiredIf: { key: 'MODE', equals: 'prod' } },
+    };
+    for (const document of [toJsonSchema(rules), options, result, toJsonSchema(comprehensive)]) {
+      assertDraft202012Schema(document);
+    }
+
+    // Prove the checker rejects malformed output rather than rubber-stamping it.
+    const broken = toJsonSchema({ PORT: { type: 'port', required: true } });
+    broken.properties.PORT.minimum = 'x';
+    assert.throws(() => assertDraft202012Schema(broken), /minimum: expected a finite number/);
+    const typo = toJsonSchema({ PORT: { type: 'port' } });
+    typo.properties.PORT.minumum = 0;
+    assert.throws(() => assertDraft202012Schema(typo), /unknown keyword "minumum"/);
+    const badRequired = toJsonSchema({ PORT: { type: 'port', required: true } });
+    badRequired.required = 'PORT';
+    assert.throws(() => assertDraft202012Schema(badRequired), /#\.required: expected a non-empty array/);
+    const missingDraft = toJsonSchema({ PORT: { type: 'port' } });
+    delete missingDraft.$schema;
+    assert.throws(() => assertDraft202012Schema(missingDraft), /missing \$schema/);
+  }
 }
 
 // v0.1.0 core
@@ -261,7 +395,7 @@ assert.deepStrictEqual(diffEnv(['A', 'B'], ['A', 'C']), { usedNotDocumented: ['B
 // Issue #221: assignment-shaped lines with invalid keys must not disappear.
 {
   const secret = 'do-not-echo-this-value';
-  for (const key of ['app.name', 'MY-KEY', 'MY KEY', '9NAME', '', '?', '??']) {
+  for (const key of ['MY KEY', '9NAME', '.NAME', '-NAME', '', '?', '??', 'A?B']) {
     assert.throws(
       () => parseEnvFile(`${key}=${secret}`),
       err => err instanceof SyntaxError && err.message === 'line 1: expected KEY=VALUE',
@@ -289,6 +423,27 @@ assert.deepStrictEqual(diffEnv(['A', 'B'], ['A', 'C']), { usedNotDocumented: ['B
       _NAME9: 'a=b # literal', SINGLE: 'MY KEY=literal',
       MULTI: 'first\napp.name=literal\nMY-KEY=literal\nMY KEY=literal\nlast',
       PLAIN: '1', EMPTY: '',
+    });
+  }
+}
+
+// Issue #290: dotted and dashed dotenv names stay flat.
+{
+  assert.deepStrictEqual(parseEnvFile('DB.PORT=1\nMY-KEY=2\nA.B-C_D=3\n'), {
+    'DB.PORT': '1', 'MY-KEY': '2', 'A.B-C_D': '3',
+  });
+
+  const input = 'export\tapp.name = "first # literal\r\n${_NAME9}" # trailing\r\n'
+    + '_NAME9=second\r\nDB.PORT=1\r\nMY=plain\r\nMY-KEY=2\r\n'
+    + 'REF=${DB.PORT}/${MY-KEY}\r\n';
+  assert.deepStrictEqual(parseEnvFile(input), {
+    'app.name': 'first # literal\nsecond', _NAME9: 'second', 'DB.PORT': '1',
+    MY: 'plain', 'MY-KEY': '2', REF: '${DB.PORT}/plain',
+  });
+
+  for (const key of ['DB.PORT', 'MY-KEY']) {
+    assert.throws(() => parseEnvFile(`${key}=1\n# comment\nexport ${key}=2`), {
+      message: `env-saaf: duplicate key ${key} at line 3 (first defined at line 1)`,
     });
   }
 }
@@ -1438,11 +1593,94 @@ assert.deepStrictEqual(
     () => validateEnv({ E: { type: 'email', pattern: /@example\.com$/ } }, { E: 'a@other.com' }),
     /expected to match/
   );
-  // a non-RegExp pattern is a schema error naming the key
+  // A pattern that is neither a RegExp nor a string names the key.
   assert.throws(
-    () => validateEnv({ S: { type: 'string', pattern: '[a-z]+' } }, { S: 'abc' }),
-    /S: "pattern" must be a RegExp/
+    () => validateEnv({ S: { type: 'string', pattern: 123 } }, { S: 'abc' }),
+    /S: "pattern" must be a RegExp or string/
   );
+}
+
+// Issue #286: string patterns match and reject the same values as RegExp rules.
+{
+  for (const pattern of ['^[A-Z]+$', /^[A-Z]+$/]) {
+    const schema = { S: { type: 'string', pattern } };
+    assert.strictEqual(validateSchema(schema), undefined);
+    assert.strictEqual(validateEnv(schema, { S: 'ABC' }).S, 'ABC');
+    assert.throws(() => validateEnv(schema, { S: 'abc' }), /S: expected to match \/\^\[A-Z\]\+\$\//);
+  }
+  const email = { E: { type: 'email', pattern: '@example\\.com$' } };
+  assert.strictEqual(validateEnv(email, { E: 'a@example.com' }).E, 'a@example.com');
+  assert.throws(() => validateEnv(email, { E: 'a@example.org' }), /E: expected to match/);
+}
+
+// Issue #286: invalid patterns are schema errors even on absent keys.
+{
+  const invalid = { S: { pattern: '([' } };
+  const invalidGroup = { DB: { prefix: 'DB_', schema: { HOST: { pattern: '([' } } } };
+  for (const [schema, key] of [[invalid, 'S'], [invalidGroup, 'DB_HOST']]) {
+    for (const check of [validateSchema, toJsonSchema, s => validateEnv(s, {}, { throwOnError: false })]) {
+      assert.throws(() => check(schema), e => e instanceof EnvSaafError
+        && e.errors.length === 1 && e.errors[0] === `${key}: "pattern" is not a valid regular expression string`);
+    }
+  }
+}
+
+// Issue #286: string sources cannot enable pattern on non-string rule types.
+{
+  assert.throws(() => validateSchema({ N: { type: 'int', pattern: '^4' } }), e => e instanceof EnvSaafError
+    && e.errors.length === 1 && e.errors[0].startsWith('N: "pattern" only applies to string types'));
+}
+
+// Issue #286: frozen grouped schemas can be reused without rewriting the source.
+{
+  const rule = Object.freeze({ type: 'host', pattern: '^db\\.' });
+  const schema = Object.freeze({ DB: Object.freeze({ prefix: 'DB_', schema: Object.freeze({ HOST: rule }) }) });
+  for (const host of ['db.primary', 'db.replica']) {
+    assert.deepStrictEqual(validateEnv(schema, { DB_HOST: host }), { DB: { HOST: host } });
+  }
+  assert.throws(() => validateEnv(schema, { DB_HOST: 'cache.internal' }), /DB_HOST: expected to match/);
+  assert.strictEqual(toJsonSchema(schema).properties.DB.properties.HOST.pattern, '^db\\.');
+  assert.strictEqual(rule.pattern, '^db\\.');
+}
+
+// Issue #286: changes to a mutable rule do not use a stale compiled pattern.
+{
+  const rule = { pattern: '^A+$' };
+  const schema = { SWITCH: { validate: () => { rule.pattern = '^B+$'; } }, S: rule };
+  assert.strictEqual(validateEnv(schema, { S: 'AAA' }).S, 'AAA');
+  rule.pattern = '^C+$';
+  assert.throws(() => validateEnv(schema, { S: 'AAA' }), /S: expected to match/);
+  assert.strictEqual(validateEnv(schema, { S: 'CCC' }).S, 'CCC');
+  assert.strictEqual(validateEnv(schema, { SWITCH: 'on', S: 'BBB' }).S, 'BBB');
+}
+
+// Issue #286: caller-supplied RegExp flags and state are unchanged.
+{
+  const pattern = /a/gi;
+  const schema = { S: { pattern } };
+  assert.strictEqual(validateSchema(schema), undefined);
+  assert.strictEqual(validateEnv(schema, { S: 'A' }).S, 'A');
+  assert.strictEqual(pattern.lastIndex, 1);
+  assert.throws(() => validateEnv(schema, { S: 'A' }), /S: expected to match \/a\/gi/);
+  assert.strictEqual(pattern.lastIndex, 0);
+  assert.deepStrictEqual(toJsonSchema(schema).properties.S, { type: 'string' });
+}
+
+// Issue #286: JSON Schema keeps the input string and any built-in pattern.
+{
+  const schema = {
+    PATH: { pattern: '^east/west$' },
+    ANY: { pattern: '' },
+    HEX: { type: 'hex', pattern: '^fe' },
+    REGEXP: { pattern: /^east\/west$/ },
+  };
+  assert.strictEqual(validateEnv(schema, { ANY: 'value' }).ANY, 'value');
+  assert.deepStrictEqual(toJsonSchema(schema).properties, {
+    PATH: { type: 'string', pattern: '^east/west$' },
+    ANY: { type: 'string', pattern: '' },
+    HEX: { type: 'string', pattern: '^fe', allOf: [{ pattern: '^[0-9a-fA-F]+$' }] },
+    REGEXP: { type: 'string', pattern: '^east\\/west$' },
+  });
 }
 
 // Issue #33: scanCode finds process.env[`KEY`] template-literal access,
@@ -1739,6 +1977,49 @@ assert.deepStrictEqual(
   assert.ok(generateExample({ LAUNCH: { type: 'date', required: true } }).includes('LAUNCH=2026-01-31'));
 }
 
+// Issue #292: `date` type supports `min` / `max` bounds as ISO dates,
+// compared chronologically against the parsed value. Bounds are inclusive.
+{
+  const schema = { D: { type: 'date', min: '2026-01-01', max: '2026-12-31' } };
+  // Inside the range, and exactly on each bound, passes.
+  assert.strictEqual(validateEnv(schema, { D: '2026-06-15' }).D.toISOString().slice(0, 10), '2026-06-15');
+  assert.strictEqual(validateEnv(schema, { D: '2026-01-01' }).D.toISOString().slice(0, 10), '2026-01-01');
+  assert.strictEqual(validateEnv(schema, { D: '2026-12-31' }).D.toISOString().slice(0, 10), '2026-12-31');
+  // Outside either bound fails with an error naming the allowed range.
+  assert.throws(() => validateEnv(schema, { D: '2025-12-31' }), /D: expected a date between 2026-01-01 and 2026-12-31, got "2025-12-31"/);
+  assert.throws(() => validateEnv(schema, { D: '2027-01-01' }), /D: expected a date between 2026-01-01 and 2026-12-31, got "2027-01-01"/);
+  // Either bound works alone.
+  assert.throws(() => validateEnv({ D: { type: 'date', min: '2026-01-01' } }, { D: '2025-12-31' }), /on or after 2026-01-01/);
+  assert.strictEqual(validateEnv({ D: { type: 'date', min: '2026-01-01' } }, { D: '2030-01-01' }).D.toISOString().slice(0, 10), '2030-01-01');
+  assert.throws(() => validateEnv({ D: { type: 'date', max: '2026-12-31' } }, { D: '2027-01-01' }), /on or before 2026-12-31/);
+  // Date-time values compare against date-only bounds by their instant.
+  assert.strictEqual(validateEnv(schema, { D: '2026-01-01T00:00:00Z' }).D.toISOString(), '2026-01-01T00:00:00.000Z');
+  // '2025-12-31T23:00:00-01:00' is exactly the min instant, so it passes;
+  // one second earlier (in UTC) fails.
+  assert.strictEqual(validateEnv(schema, { D: '2025-12-31T23:00:00-01:00' }).D.toISOString(), '2026-01-01T00:00:00.000Z');
+  assert.throws(() => validateEnv(schema, { D: '2025-12-31T22:59:59-01:00' }), /D: expected a date between 2026-01-01 and 2026-12-31/);
+  // Datetime bounds work too.
+  assert.throws(() => validateEnv({ D: { type: 'date', min: '2026-01-01T12:00:00Z' } }, { D: '2026-01-01T10:00:00Z' }),
+    /on or after 2026-01-01T12:00:00Z/);
+  // A Date object as a bound works; a default outside the bounds fails like a value.
+  assert.strictEqual(validateEnv({ D: { type: 'date', min: new Date('2026-01-01T00:00:00Z') } }, { D: '2026-06-01' }).D.toISOString().slice(0, 10), '2026-06-01');
+  assert.throws(() => validateEnv({ D: { type: 'date', min: '2026-01-01', default: '2025-01-01' } }, {}), /on or after 2026-01-01/);
+  // Schema errors: a numeric bound, a nonsense bound, and min above max.
+  assert.throws(() => validateSchema({ D: { type: 'date', min: 20260101 } }), /D: "min" must be an ISO date string for type 'date'/);
+  assert.throws(() => validateSchema({ D: { type: 'date', min: 'next week' } }), /D: "min" must be a valid ISO 8601 date for type 'date'/);
+  assert.throws(() => validateSchema({ D: { type: 'date', min: '2027-01-01', max: '2026-01-01' } }), /D: "min" must not exceed "max"/);
+  assert.throws(() => validateSchema({ D: { type: 'date', max: 0 } }), /D: "max" must be an ISO date string for type 'date'/);
+  // throwOnError:false collects the bound failure with the others.
+  const collected = validateEnv(schema, { D: '2025-01-01' }, { throwOnError: false });
+  assert.strictEqual(collected.errors.length, 1);
+  assert.match(collected.errors[0], /D: expected a date between 2026-01-01 and 2026-12-31/);
+  // generateExample uses the bound when the default example is out of range.
+  assert.ok(generateExample({ D: { type: 'date', min: '2027-01-01' } }).includes('D=2027-01-01'));
+  assert.ok(generateExample({ D: { type: 'date', max: '2026-01-15' } }).includes('D=2026-01-15'));
+  assert.ok(generateExample({ D: { type: 'date', min: '2026-01-01', max: '2026-12-31' } }).includes('D=2026-01-31'));
+  console.log('date min/max tests passed');
+}
+
 // Issue #41: 'duration' type — human durations ('15m', '2h', '1d') become milliseconds.
 {
   const schema = { TIMEOUT: { type: 'duration' } };
@@ -1897,7 +2178,7 @@ assert.deepStrictEqual(
     assert.doesNotMatch(check.stderr, /fake secret value/);
 
     // Issue #221: invalid assignment keys use the same CLI error contract.
-    fs.writeFileSync(path.join(dir, '.env.example'), '# config\napp.name=private-value\n');
+    fs.writeFileSync(path.join(dir, '.env.example'), '# config\nAPP NAME=private-value\n');
     const invalidKey = run('scan', dir, '--json');
     assert.strictEqual(invalidKey.status, 2);
     assert.strictEqual(invalidKey.stderr, '');
@@ -1907,7 +2188,7 @@ assert.deepStrictEqual(
     assert.doesNotMatch(invalidKey.stdout, /private-value/);
 
     fs.writeFileSync(path.join(dir, '.env.example'), 'FOO=\n');
-    fs.writeFileSync(path.join(dir, '.env'), 'FOO=ok\r\nMY-KEY=private-value\r\n');
+    fs.writeFileSync(path.join(dir, '.env'), 'FOO=ok\r\nMY KEY=private-value\r\n');
     const invalidEnv = run('check', dir);
     assert.strictEqual(invalidEnv.status, 2);
     assert.strictEqual(invalidEnv.stdout, '');
@@ -2203,7 +2484,7 @@ assert.deepStrictEqual(
   assert.throws(unknown, /emial/);
 
   // The invalid option is reported before any environment value is read.
-  assert.throws(() => validateEnv({ K: { type: 'string', pattern: 'not-a-regexp' } }, {}), /"pattern" must be a RegExp/);
+  assert.throws(() => validateEnv({ K: { type: 'string', pattern: null } }, {}), /"pattern" must be a RegExp or string/);
   assert.throws(() => validateEnv({ K: { type: 'string', transform: 'nope' } }, {}), /"transform" must be a function/);
   assert.throws(() => validateEnv({ K: { type: 'number', min: 'x' } }, {}), /"min"/);
   assert.throws(() => validateEnv({ K: { type: 'number', max: 'x' } }, {}), /"max"/);
@@ -4433,6 +4714,312 @@ assert.deepStrictEqual(
   );
 }
 
+// Issue #305: a `choices` entry that can never match the declared type is a
+// schema bug, rejected up front instead of failing for every real value.
+{
+  const { validateEnv, validateSchema, EnvSaafError } = require('./index');
+  const never = (key, entry, type) =>
+    `${key}: "choices" entry ${entry} can never match type '${type}' (a choice must be a value this type can produce)`;
+
+  // The three shapes from the issue: int, boolean and date.
+  assert.throws(
+    () => validateEnv({ N: { type: 'int', choices: ['1', '2'] } }, { N: '1' }),
+    err => err instanceof EnvSaafError
+      && err.errors.length === 2
+      && err.errors.includes(never('N', '"1"', 'int'))
+      && err.errors.includes(never('N', '"2"', 'int')),
+  );
+  assert.throws(
+    () => validateEnv({ B: { type: 'boolean', choices: ['true'] } }, { B: 'true' }),
+    err => err instanceof EnvSaafError && err.errors.includes(never('B', '"true"', 'boolean')),
+  );
+  assert.throws(
+    () => validateEnv({ D: { type: 'date', choices: [new Date('2026-01-31T00:00:00.000Z')] } }, { D: '2026-01-31' }),
+    err => err instanceof EnvSaafError
+      && err.errors.includes(`D: "choices" cannot be used with type 'date' (a parsed date is a new Date object, so no choice can ever match)`),
+  );
+  // Other numeric-like types are covered too.
+  assert.throws(
+    () => validateSchema({ P: { type: 'port', choices: ['3000'] } }),
+    err => err instanceof EnvSaafError && err.errors.includes(never('P', '"3000"', 'port')),
+  );
+  assert.throws(
+    () => validateSchema({ T: { type: 'duration', choices: ['5s'] } }),
+    err => err instanceof EnvSaafError && err.errors.includes(never('T', '"5s"', 'duration')),
+  );
+  // Schema errors throw even when the key is absent and even with { throwOnError: false }.
+  assert.throws(
+    () => validateEnv({ N: { type: 'int', choices: ['1'] } }, {}, { throwOnError: false }),
+    err => err instanceof EnvSaafError && err.errors.includes(never('N', '"1"', 'int')),
+  );
+
+  // Matching choices still pass, and the runtime check is unchanged.
+  assert.strictEqual(validateEnv({ N: { type: 'int', choices: [1, 2] } }, { N: '2' }).N, 2);
+  assert.throws(() => validateEnv({ N: { type: 'int', choices: [1, 2] } }, { N: '3' }), /N: expected one of \[1, 2\], got "3"/);
+  assert.strictEqual(validateEnv({ B: { type: 'boolean', choices: [true] } }, { B: 'yes' }).B, true);
+  assert.strictEqual(validateEnv({ S: { type: 'string', choices: ['a', 'b'] } }, { S: 'b' }).S, 'b');
+  assert.strictEqual(validateEnv({ S: { choices: ['x', 'y'] } }, { S: 'x' }).S, 'x');
+  assert.doesNotThrow(() => validateSchema({
+    A: { type: 'number', choices: [1.5, 2] },
+    B: { type: 'port', choices: [8080, 3000] },
+    C: { type: 'duration', choices: [5000] },
+  }));
+  // Non-finite numbers stay valid: toJsonSchema() drops them from the generated `enum`.
+  assert.doesNotThrow(() => validateSchema({ COUNT: { type: 'int', choices: [2, Infinity, 0, NaN] } }));
+}
+
+// Issue #287: groups compose prefixes and nest results at every level.
+{
+  const schema = {
+    MODE: { type: 'string' },
+    APP: { prefix: 'APP_', schema: {
+      DB: { prefix: 'DB_', schema: {
+        HOST: { type: 'host', required: true },
+        PORT: { type: 'port', default: 5432 },
+      } },
+      CACHE: { prefix: 'CACHE_', schema: { TTL: { type: 'int' } } },
+    } },
+  };
+  assert.doesNotThrow(() => validateSchema(schema));
+  const result = validateEnv(schema, { MODE: 'dev', APP_DB_HOST: 'db.internal' }, { strict: true });
+  assert.deepStrictEqual(result, { MODE: 'dev', APP: { DB: { HOST: 'db.internal', PORT: 5432 } } });
+  for (const container of [result, result.APP, result.APP.DB]) assert.ok(Object.isFrozen(container));
+  assert.throws(() => { result.APP.DB.HOST = 'changed'; }, TypeError);
+  assert.ok(!('CACHE' in result.APP));
+  assert.deepStrictEqual(validateEnv({ APP: { prefix: 'APP_', schema: {
+    CACHE: { prefix: 'CACHE_', schema: { TTL: { type: 'int' } } },
+  } } }, {}), {});
+
+  const partial = validateEnv(schema, {}, { throwOnError: false });
+  assert.deepStrictEqual(partial, {
+    env: { APP: { DB: { PORT: 5432 } } }, errors: ['APP_DB_HOST: missing required variable'],
+  });
+  assert.ok(Object.isFrozen(partial.env.APP.DB));
+  assert.throws(() => validateEnv(schema, { APP_DB_HOST: 'db.internal', APP_DB_EXTRA: 'x' }, { strict: true }),
+    err => err instanceof EnvSaafError && err.errors.includes('APP_DB_EXTRA: set but not in schema (strict mode)'));
+  assert.throws(() => validateSchema({ APP: { prefix: 'APP_', schema: {
+    DB: { prefix: 'DB_', schema: { PORT: { type: 'unknown' } } },
+  } } }), err => err instanceof EnvSaafError && err.errors.includes('APP_DB_PORT: unknown type "unknown"'));
+
+  const warnings = [];
+  const references = { APP: { prefix: 'APP_', schema: {
+    DB: { prefix: 'DB_', schema: { HOST: { type: 'host', aliases: ['OLD_DB_HOST'] } } },
+    MAIL: { prefix: 'MAIL_', schema: { HOST: { type: 'host', requiredIf: { key: 'APP_DB_HOST', equals: 'db.internal' } } } },
+  } } };
+  const referenced = validateEnv(references, { OLD_DB_HOST: 'db.internal', APP_MAIL_HOST: 'mail.internal' },
+    { strict: true, onWarn: warning => warnings.push(warning) });
+  assert.deepStrictEqual(referenced, { APP: { DB: { HOST: 'db.internal' }, MAIL: { HOST: 'mail.internal' } } });
+  assert.strictEqual(warnings.length, 1);
+  assert.ok(warnings[0].includes('OLD_DB_HOST is deprecated'));
+  const required = validateEnv(references, { APP_DB_HOST: 'db.internal' }, { throwOnError: false, onWarn: () => {} });
+  assert.deepStrictEqual(required.errors, ['APP_MAIL_HOST: missing required variable']);
+
+  const example = generateExample(schema);
+  assert.ok(example.includes("# group APP — the keys below are read from env vars prefixed with 'APP_'"));
+  assert.ok(example.includes("# group APP.DB — the keys below are read from env vars prefixed with 'APP_DB_'"));
+  assert.ok(example.includes("# group APP.CACHE — the keys below are read from env vars prefixed with 'APP_CACHE_'"));
+  assert.match(example, /^APP_DB_HOST=localhost$/m);
+  assert.match(example, /^APP_DB_PORT=5432$/m);
+  assert.match(example, /^APP_CACHE_TTL=42$/m);
+  assert.ok(example.indexOf('# group APP.DB') < example.indexOf('APP_DB_HOST='));
+  assert.strictEqual(validateEnv(schema, parseEnvFile(example), { strict: true }).APP.DB.PORT, 5432);
+  assert.deepStrictEqual(toJsonSchema(schema), {
+    $schema: 'https://json-schema.org/draft/2020-12/schema', type: 'object', properties: {
+      MODE: { type: 'string' },
+      APP: { type: 'object', properties: {
+        DB: { type: 'object', properties: {
+          HOST: { type: 'string', anyOf: [{ format: 'hostname' }, { format: 'ipv4' }, { format: 'ipv6' }] },
+          PORT: { type: 'integer', minimum: 0, maximum: 65535, default: 5432 },
+        }, required: ['HOST'] },
+        CACHE: { type: 'object', properties: { TTL: { type: 'integer' } } },
+      } },
+    },
+  });
+
+  const defaultValue = { count: 1 };
+  const transformedValue = { count: 2 };
+  const deep = { APP: { prefix: 'APP_', schema: {
+    DB: { prefix: 'DB_', schema: {
+      AUTH: { prefix: 'AUTH_', schema: {
+        USER: { type: 'string', required: true },
+        DATA: { type: 'json', default: defaultValue },
+        EXTRA: { type: 'json', transform: () => transformedValue },
+      } },
+    } },
+  } } };
+  const deepResult = validateEnv(deep, { APP_DB_AUTH_USER: 'alice', APP_DB_AUTH_EXTRA: '{}' });
+  assert.strictEqual(deepResult.APP.DB.AUTH.USER, 'alice');
+  for (const group of [deepResult.APP, deepResult.APP.DB, deepResult.APP.DB.AUTH]) assert.ok(Object.isFrozen(group));
+  assert.strictEqual(deepResult.APP.DB.AUTH.DATA, defaultValue);
+  assert.strictEqual(deepResult.APP.DB.AUTH.EXTRA, transformedValue);
+  deepResult.APP.DB.AUTH.DATA.count++;
+  deepResult.APP.DB.AUTH.EXTRA.count++;
+  assert.strictEqual(defaultValue.count, 2);
+  assert.strictEqual(transformedValue.count, 3);
+  assert.ok(generateExample(deep).includes('# group APP.DB.AUTH'));
+  assert.deepStrictEqual(toJsonSchema(deep).properties.APP.properties.DB.properties.AUTH.required, ['USER']);
+
+  const collides = candidate => assert.throws(() => validateSchema(candidate),
+    err => err instanceof EnvSaafError && err.errors.some(error => error.includes('collide')));
+  collides({ ...schema, APP_DB_HOST: { type: 'string' } });
+  collides({ ...schema, OTHER: { prefix: 'APP_DB_', schema: { HOST: {} } } });
+  collides({ APP: { prefix: 'APP_', schema: {
+    DB: { prefix: 'DB_', schema: { HOST: {} } }, DB_HOST: {},
+  } } });
+  // Group names remain reserved against prefixed keys, as for one-level groups.
+  collides({ ROOT: { prefix: 'APP_', schema: { DB: { prefix: 'DB_', schema: { HOST: {} } } } },
+    APP_DB_HOST: { prefix: 'OTHER_', schema: { KEY: {} } } });
+  assert.throws(() => validateSchema({ ...schema, OTHER: { aliases: ['APP_DB_HOST'] } }),
+    err => err instanceof EnvSaafError && err.errors.includes('OTHER: alias "APP_DB_HOST" conflicts with a declared schema key'));
+  const duplicateAlias = { APP: { prefix: 'APP_', schema: {
+    A: { prefix: 'A_', schema: { VALUE: { aliases: ['OLD_VALUE'] } } },
+    B: { prefix: 'B_', schema: { VALUE: { aliases: ['OLD_VALUE'] } } },
+  } } };
+  assert.throws(() => validateSchema(duplicateAlias),
+    err => err instanceof EnvSaafError && err.errors.some(error => error.includes('alias "OLD_VALUE" is already used')));
+
+  // Sharing a sub-schema is valid; only a reference back to an ancestor is circular.
+  const shared = Object.freeze({ PORT: Object.freeze({ type: 'port', default: 8080 }) });
+  const reused = Object.freeze({
+    APP: Object.freeze({ prefix: 'APP_', schema: Object.freeze({
+      A: Object.freeze({ prefix: 'A_', schema: shared }),
+      B: Object.freeze({ prefix: 'B_', schema: shared }),
+    }) }),
+  });
+  const reusedResult = validateEnv(reused, {});
+  assert.deepStrictEqual(reusedResult, { APP: { A: { PORT: 8080 }, B: { PORT: 8080 } } });
+  assert.notStrictEqual(reusedResult.APP.A, reusedResult.APP.B);
+  const circular = {};
+  circular.APP = { prefix: 'APP_', schema: circular };
+  for (const check of [validateSchema, generateExample, toJsonSchema, candidate => loadEnv(candidate, { paths: [], env: {} })]) {
+    assert.throws(() => check(circular), err => err instanceof EnvSaafError && /circular/.test(err.message));
+  }
+  // Group names are own properties even when Object.prototype has that name.
+  const named = validateEnv({ APP: { prefix: 'APP_', schema: Object.fromEntries(
+    ['__proto__', 'constructor', 'toString'].map((name, index) => [name, {
+      prefix: `N${index}_`, schema: { VALUE: { type: 'string', default: name } },
+    }]),
+  ) } }, {});
+  for (const name of ['__proto__', 'constructor', 'toString']) {
+    assert.ok(Object.prototype.hasOwnProperty.call(named.APP, name));
+    assert.strictEqual(named.APP[name].VALUE, name);
+    assert.ok(Object.isFrozen(named.APP[name]));
+  }
+  assert.strictEqual(Object.getPrototypeOf(named.APP), Object.prototype);
+  assert.ok(!Object.isFrozen(Object.prototype));
+
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const path = require('node:path');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'env-saaf-nested-'));
+  try {
+    const file = path.join(dir, '.env');
+    fs.writeFileSync(file, 'APP_DB_HOST=db.internal\nAPP_DB_PORT=6543\n');
+    const assigned = {};
+    const loaded = loadEnv(schema, { path: file, env: assigned, assign: true });
+    assert.deepStrictEqual(loaded, { APP: { DB: { HOST: 'db.internal', PORT: 6543 } } });
+    assert.deepStrictEqual(assigned, { APP_DB_HOST: 'db.internal', APP_DB_PORT: '6543' });
+    assert.ok(Object.isFrozen(loaded.APP.DB));
+    assert.throws(() => loadEnv(schema, { paths: [path.join(dir, 'missing.env')], env: {} }),
+      /required variables missing: APP_DB_HOST/);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+// Issue #320: `choices` on an `array` rule constrains each coerced item.
+{
+  const never = (key, entry, type) =>
+    `${key}: "choices" entry ${entry} can never match type '${type}' (a choice must be a value this type can produce)`;
+
+  // A value whose items are all allowed passes; a single bad item names the
+  // key, the offending item and its index.
+  assert.deepStrictEqual(
+    validateEnv({ A: { type: 'array', of: 'string', choices: ['a', 'b'] } }, { A: 'a,b,a' }),
+    { A: ['a', 'b', 'a'] },
+  );
+  assert.throws(
+    () => validateEnv({ A: { type: 'array', of: 'string', choices: ['a', 'b'] } }, { A: 'a,c' }),
+    err => err instanceof EnvSaafError
+      && err.errors.includes('A: expected one of [a, b], got "c" (item 1)'),
+  );
+
+  // Items are coerced before the choices check, just like scalar rules.
+  assert.deepStrictEqual(
+    validateEnv({ N: { type: 'array', of: 'int', choices: [1, 2] } }, { N: '01,2' }),
+    { N: [1, 2] },
+  );
+  assert.deepStrictEqual(
+    validateEnv({ B: { type: 'array', of: 'boolean', choices: [true] } }, { B: 'yes,true' }),
+    { B: [true, true] },
+  );
+  assert.throws(
+    () => validateEnv({ N: { type: 'array', of: 'int', choices: [1, 2] } }, { N: '1,3' }),
+    err => err instanceof EnvSaafError && /N: expected one of \[1, 2\], got "3"/.test(err.errors[0]),
+  );
+  // Defaults go through the same per-item check.
+  assert.deepStrictEqual(
+    validateEnv({ A: { type: 'array', choices: ['a', 'b'], default: ['b', 'a'] } }, {}),
+    { A: ['b', 'a'] },
+  );
+  assert.throws(
+    () => validateEnv({ A: { type: 'array', choices: ['a', 'b'], default: ['b', 'z'] } }, {}),
+    err => err instanceof EnvSaafError && err.errors.some(m => m.includes('got "z"')),
+  );
+
+  // Schema validation applies #305 to the item type.
+  assert.throws(
+    () => validateSchema({ N: { type: 'array', of: 'int', choices: ['1', '2'] } }),
+    err => err instanceof EnvSaafError
+      && err.errors.includes(never('N', '"1"', 'int'))
+      && err.errors.includes(never('N', '"2"', 'int')),
+  );
+  assert.throws(
+    () => validateSchema({ B: { type: 'array', of: 'boolean', choices: ['true'] } }),
+    err => err instanceof EnvSaafError && err.errors.includes(never('B', '"true"', 'boolean')),
+  );
+  assert.throws(
+    () => validateSchema({ D: { type: 'array', of: 'date', choices: ['2026-01-31'] } }),
+    err => err instanceof EnvSaafError
+      && err.errors.includes(`D: "choices" cannot be used with type 'date' (a parsed date is a new Date object, so no choice can ever match)`),
+  );
+  assert.doesNotThrow(() => validateSchema({
+    A: { type: 'array', choices: ['a', 'b'] },
+    N: { type: 'array', of: 'int', choices: [1, 2] },
+    U: { type: 'array', of: 'url', choices: ['https://example.com'] },
+  }));
+
+  // toJsonSchema puts the enum on items, not on the array itself.
+  assert.deepStrictEqual(
+    toJsonSchema({ A: { type: 'array', of: 'string', choices: ['a', 'b'] } }).properties.A,
+    { type: 'array', items: { type: 'string', minLength: 1, enum: ['a', 'b'] } },
+  );
+  assert.deepStrictEqual(
+    toJsonSchema({ N: { type: 'array', of: 'int', choices: [1, 2] } }).properties.N,
+    { type: 'array', items: { type: 'integer', enum: [1, 2] } },
+  );
+  // Scalar behaviour is unchanged.
+  assert.deepStrictEqual(
+    toJsonSchema({ S: { choices: ['a', 'b'] } }).properties.S,
+    { type: 'string', enum: ['a', 'b'] },
+  );
+
+  // generateExample emits allowed items that validate against the same schema.
+  const schema = { A: { type: 'array', of: 'string', choices: ['a', 'b'], required: true } };
+  const example = generateExample(schema);
+  assert.match(example, /^A=a,b$/m);
+  assert.deepStrictEqual(validateEnv(schema, parseEnvFile(example)), { A: ['a', 'b'] });
+  const typed = { N: { type: 'array', of: 'int', choices: [2, 4] } };
+  const typedExample = generateExample(typed);
+  assert.match(typedExample, /^N=2,4$/m);
+  assert.deepStrictEqual(validateEnv(typed, parseEnvFile(typedExample)), { N: [2, 4] });
+  // minItems/maxItems, separator, unique and explicit defaults are respected.
+  assert.match(generateExample({ A: { type: 'array', choices: ['a', 'b', 'c'], minItems: 4, maxItems: 5 } }), /^A=a,b,c,a$/m);
+  assert.match(generateExample({ A: { type: 'array', separator: ';', choices: ['x;y', 'ok'] } }), /^A=ok$/m);
+  assert.match(generateExample({ A: { type: 'array', unique: true, choices: ['a', 'b'] } }), /^A=a,b$/m);
+  assert.match(generateExample({ A: { type: 'array', choices: ['a', 'b'], default: ['b'] } }), /^A=b$/m);
+}
+
 // feat: grouped (nested) schemas with a key prefix (fixes #228)
 {
   const fs = require('node:fs');
@@ -4450,6 +5037,10 @@ assert.deepStrictEqual(
   };
   const out = validateEnv(schema, { DB_HOST: 'db.internal' });
   assert.deepStrictEqual(out, { DB: { HOST: 'db.internal', PORT: 5432 } });
+  assert.ok(Object.isFrozen(out));
+  assert.ok(Object.isFrozen(out.DB));
+  assert.throws(() => { out.DB.HOST = 'changed.internal'; }, TypeError);
+  assert.strictEqual(out.DB.HOST, 'db.internal');
   assert.deepStrictEqual(validateEnv(schema, { DB_HOST: 'db.internal', DB_PORT: '6543' }), { DB: { HOST: 'db.internal', PORT: 6543 } });
   assert.throws(
     () => validateEnv(schema, {}),
@@ -4468,6 +5059,10 @@ assert.deepStrictEqual(
   const soft = validateEnv(schema, {}, { throwOnError: false });
   assert.deepStrictEqual(soft.env, { DB: { PORT: 5432 } }); // defaults still apply in soft mode
   assert.deepStrictEqual(soft.errors, ['DB_HOST: missing required variable']);
+  assert.ok(Object.isFrozen(soft.env));
+  assert.ok(Object.isFrozen(soft.env.DB));
+  assert.throws(() => { soft.env.DB.PORT = 1; }, TypeError);
+  assert.strictEqual(soft.env.DB.PORT, 5432);
 
   // strict mode knows the flattened names: DB_HOST is fine, DB_OTHER is not.
   validateEnv(schema, { DB_HOST: 'db.internal', DB_PORT: '1' }, { strict: true, onWarn: () => {} });
@@ -4508,6 +5103,43 @@ assert.deepStrictEqual(
   const withTransform = { S: { prefix: 'S_', schema: { NAME: { type: 'string', transform: v => v.toUpperCase() } } } };
   assert.deepStrictEqual(validateEnv(withTransform, { S_NAME: 'abc' }), { S: { NAME: 'ABC' } });
 
+  // Issue #284: freeze the result containers, without freezing rule values
+  // or taking ownership of objects supplied by defaults and transforms.
+  const defaultValue = { nested: { count: 1 } };
+  const transformedValue = { nested: { count: 1 } };
+  const values = validateEnv({
+    PLAIN: { type: 'json' },
+    DB: { prefix: 'DB_', schema: {
+      JSON: { type: 'json' },
+      ITEMS: { type: 'array' },
+      DEFAULT: { type: 'json', default: defaultValue },
+      TRANSFORMED: { type: 'json', transform: () => transformedValue },
+    } },
+    CACHE: { prefix: 'CACHE_', schema: { PORT: { type: 'port', default: 6379 } } },
+    OPTIONAL: { prefix: 'OPTIONAL_', schema: { VALUE: { type: 'string' } } },
+  }, {
+    PLAIN: '{"nested":{"count":1}}',
+    DB_JSON: '{"nested":{"count":1}}',
+    DB_ITEMS: 'one,two',
+    DB_TRANSFORMED: '{}',
+  });
+  assert.ok(Object.isFrozen(values));
+  assert.ok(Object.isFrozen(values.DB));
+  assert.ok(Object.isFrozen(values.CACHE));
+  assert.ok(!('OPTIONAL' in values));
+  assert.strictEqual(values.DB.DEFAULT, defaultValue);
+  assert.strictEqual(values.DB.TRANSFORMED, transformedValue);
+  for (const value of [values.PLAIN, values.DB.JSON, values.DB.DEFAULT, values.DB.TRANSFORMED]) {
+    assert.ok(!Object.isFrozen(value));
+    assert.ok(!Object.isFrozen(value.nested));
+    value.extra = true;
+    value.nested.count = 2;
+    assert.strictEqual(value.extra, true);
+    assert.strictEqual(value.nested.count, 2);
+  }
+  values.DB.ITEMS.push('three');
+  assert.deepStrictEqual(values.DB.ITEMS, ['one', 'two', 'three']);
+
   // generateExample emits FLAT env names for a group, with a group comment.
   const example = generateExample({
     APP_NAME: { type: 'string', required: true },
@@ -4526,6 +5158,10 @@ assert.deepStrictEqual(
     fs.writeFileSync(file, 'DB_HOST=db.internal\nDB_PORT=6543\n');
     const loaded = loadEnv(schema, { path: file, env: {} });
     assert.deepStrictEqual(loaded, { DB: { HOST: 'db.internal', PORT: 6543 } });
+    assert.ok(Object.isFrozen(loaded));
+    assert.ok(Object.isFrozen(loaded.DB));
+    assert.throws(() => { loaded.DB.PORT = 1; }, TypeError);
+    assert.strictEqual(loaded.DB.PORT, 6543);
     const target = {};
     loadEnv(schema, { path: file, env: target, assign: true });
     assert.strictEqual(target.DB_HOST, 'db.internal');
@@ -4551,7 +5187,7 @@ assert.deepStrictEqual(
   bad({ G: { prefix: 'G_', schema: {} } }, 'group "schema" must not be empty');                // empty group
   bad({ G: { prefix: 'G_', schema: { A: {} }, type: 'string' } }, 'cannot also set "type"');  // type + schema
   bad({ G: { prefix: 'G_', schema: { A: {} }, required: true } }, 'group rules only support'); // extra option on group
-  bad({ G: { prefix: 'G_', schema: { A: { schema: {} } } } }, 'groups cannot be nested');     // nested group
+  bad({ G: { prefix: 'G_', schema: { A: { schema: {} } } } }, 'needs a non-empty string "prefix"'); // malformed nested group
   bad({ G: { prefix: 'G_', schema: { A: { type: 'nope' } } } }, 'G_A: unknown type');         // inner rule error uses full name
   bad({ DB_HOST: { type: 'string' }, G: { prefix: 'DB_', schema: { HOST: {} } } }, 'collide'); // prefix collision with a declared key
   bad({ A: { prefix: 'X_', schema: { K: {} } }, B: { prefix: 'X_', schema: { K: {} } } }, 'collide'); // two groups collide
@@ -4728,6 +5364,312 @@ assert.deepStrictEqual(
   // `file` stays the documented exception: no placeholder can guarantee the
   // path exists, so its example is a path the user must create.
   assert.ok(generateExample({ F: { type: 'file' } }).includes('F=./config.json'));
+}
+
+// Issue #273: choices supply valid examples after defaults and secret handling.
+{
+  const schema = {
+    S: { type: 'string', choices: ['alpha', 'beta'] },
+    N: { type: 'number', choices: [1, 2] },
+    Z: { type: 'int', choices: [0, 1] },
+    B: { type: 'boolean', choices: [false, true] },
+    GROUP: { prefix: 'APP_', schema: { MODE: { choices: ['dev', 'prod'] } } },
+  };
+  const example = generateExample(schema);
+  for (const line of ['S=alpha', 'N=1', 'Z=0', 'B=false', 'APP_MODE=dev']) {
+    assert.ok(example.includes(line + '\n'), example);
+  }
+  assert.deepStrictEqual(validateEnv(schema, parseEnvFile(example)), {
+    S: 'alpha', N: 1, Z: 0, B: false, GROUP: { MODE: 'dev' },
+  });
+  const priority = generateExample({
+    MODE: { choices: ['alpha', 'beta'], default: 'beta' },
+    API_KEY: { choices: ['alpha', 'beta'] },
+    SESSION: { sensitive: true, choices: ['alpha', 'beta'] },
+    TOKEN: { choices: ['alpha', 'beta'], default: 'beta' },
+  });
+  for (const line of ['MODE=beta', 'API_KEY=', 'SESSION=', 'TOKEN=beta']) {
+    assert.ok(priority.includes(line + '\n'), priority);
+  }
+}
+
+// Issue #274: generated numeric placeholders satisfy their own schema bounds.
+{
+  const cases = [
+    ['number', {}, 3.14],
+    ['number', { min: 100 }, 100],
+    ['number', { max: 2 }, 2],
+    ['number', { min: 100, max: 200 }, 100],
+    ['number', { min: -10, max: -1 }, -1],
+    ['number', { min: 0, max: 0 }, 0],
+    ['number', { min: 2, max: 4 }, 3.14],
+    ['number', { min: -2.5, max: -2 }, -2],
+    ['int', {}, 42],
+    ['int', { min: 1000 }, 1000],
+    ['int', { max: 20 }, 20],
+    ['int', { min: 1000, max: 2000 }, 1000],
+    ['int', { min: -10, max: -1 }, -1],
+    ['int', { min: 0, max: 0 }, 0],
+    ['int', { min: 40, max: 50 }, 42],
+    ['int', { min: 100.2 }, 101],
+    ['int', { max: 20.8 }, 20],
+    ['int', { min: -5.8, max: -3.2 }, -4],
+    ['int', { min: 1e21, max: 1e21 }, 1e21],
+    ['int', { min: -1e22, max: -1e21 }, -1e21],
+    ['port', {}, 3000],
+    ['port', { min: 4000 }, 4000],
+    ['port', { max: 1024 }, 1024],
+    ['port', { min: 8000, max: 9000 }, 8000],
+    ['port', { min: 0, max: 0 }, 0],
+    ['port', { min: 2999, max: 3001 }, 3000],
+    ['port', { min: 4000.2 }, 4001],
+    ['port', { max: 80.8 }, 80],
+    ['port', { min: -10, max: 10 }, 10],
+    ['port', { min: 65535, max: 70000 }, 65535],
+    ['duration', {}, 900000],
+    ['duration', { min: 3600000 }, 3600000],
+    ['duration', { max: 500 }, 500],
+    ['duration', { min: 10, max: 20 }, 20],
+    ['duration', { min: 0, max: 0 }, 0],
+    ['duration', { max: -0 }, 0],
+    ['duration', { min: 600000, max: 1000000 }, 900000],
+    ['duration', { max: 0.5 }, 0.5],
+    ['duration', { max: 1e-7 }, 1e-7],
+    ['duration', { min: 1e21, max: 1e21 }, 1e21],
+    ['duration', { min: -100, max: 100 }, 100],
+    ['duration', { min: 1.2345678901234567e-8, max: 1.2345678901234567e-8 }, 1.2345678901234567e-8],
+  ];
+  for (const [type, bounds, expected] of cases) {
+    const schema = Object.freeze({ VALUE: Object.freeze({ type, ...bounds }) });
+    const example = generateExample(schema);
+    const result = validateEnv(schema, parseEnvFile(example));
+    assert.strictEqual(result.VALUE, expected, `${type} ${JSON.stringify(bounds)}: ${example}`);
+  }
+
+  const grouped = { WORKER: { prefix: 'WORKER_', schema: {
+    COUNT: { type: 'int', min: 2, max: 8 },
+    TIMEOUT: { type: 'duration', max: 500 },
+  } } };
+  assert.deepStrictEqual(validateEnv(grouped, parseEnvFile(generateExample(grouped))), {
+    WORKER: { COUNT: 8, TIMEOUT: 500 },
+  });
+
+  const priority = parseEnvFile(generateExample({
+    DEFAULT: { type: 'number', min: 100, default: 150 },
+    CHOICE: { type: 'int', min: 100, choices: [200, 300] },
+    API_TOKEN: { type: 'int', min: 100 },
+    SESSION: { type: 'duration', min: 100, sensitive: true },
+  }));
+  assert.deepStrictEqual(priority, { DEFAULT: '150', CHOICE: '200', API_TOKEN: '', SESSION: '' });
+
+  for (const type of ['number', 'int', 'port', 'duration']) {
+    for (const bound of ['min', 'max']) {
+      for (const value of [NaN, Infinity, -Infinity]) {
+        const schema = { VALUE: { type, [bound]: value } };
+        const example = generateExample(schema);
+        assert.strictEqual(example, generateExample({ VALUE: { type } }));
+        assert.throws(() => validateEnv(schema, parseEnvFile(example)), /must be a number/);
+      }
+    }
+  }
+  console.log(`numeric example bounds: ${cases.length} round trips passed`);
+}
+
+// Issue #275: string placeholders round-trip through their own length bounds.
+{
+  const cases = [
+    ['string', { minLength: 20 }, 20],
+    ['string', { maxLength: 3 }, 3],
+    ['string', { minLength: 5, maxLength: 5 }, 5],
+    ['string', { maxLength: 0 }, 0],
+    [undefined, { minLength: 18, maxLength: 20 }, 18],
+  ];
+  for (const [type, bounds, length] of cases) {
+    const schema = { VALUE: { type, required: true, ...bounds } };
+    const example = generateExample(schema);
+    assert.strictEqual(validateEnv(schema, parseEnvFile(example)).VALUE.length, length, example);
+  }
+}
+
+// Issue #275: bounded email examples still have a local part and a domain.
+{
+  const cases = [
+    [{ minLength: 30 }, 30],
+    [{ maxLength: 13 }, 13],
+    [{ maxLength: 5 }, 5],
+    [{ minLength: 8, maxLength: 8 }, 8],
+    [{ minLength: 16, maxLength: 16 }, 16],
+  ];
+  for (const [bounds, length] of cases) {
+    const schema = { VALUE: { type: 'email', required: true, ...bounds } };
+    const example = generateExample(schema);
+    assert.strictEqual(validateEnv(schema, parseEnvFile(example)).VALUE.length, length, example);
+  }
+}
+
+// Issue #275: other bounded string-like values retain their type's format.
+{
+  const cases = [
+    ['url', { minLength: 24 }, 24],
+    ['url', { maxLength: 8, protocols: ['HTTPS:'] }, 8],
+    ['url', { minLength: 2, maxLength: 2 }, 2],
+    ['url', { maxLength: 5, protocols: ['https', 'X:'] }, 5],
+    ['url', { minLength: 19, maxLength: 19, protocols: ['HTTP:'] }, 19],
+    ['hex', { maxLength: 3 }, 3],
+    ['hex', { minLength: 3, maxLength: 12, length: 10 }, 10],
+    ['ipv4', { maxLength: 7 }, 7],
+    ['ipv4', { minLength: 15, maxLength: 15 }, 15],
+    ['semver', { minLength: 6, maxLength: 6 }, 6],
+    ['semver', { minLength: 11 }, 11],
+    ['base64', { minLength: 9 }, 10],
+    ['base64', { maxLength: 5 }, 4],
+    ['base64', { maxLength: 2 }, 2],
+    ['uuid', { minLength: 36, maxLength: 36 }, 36],
+    ['host', { maxLength: 1 }, 1],
+    ['host', { minLength: 64 }, 64],
+    ['host', { minLength: 254 }, 254],
+  ];
+  for (const [type, bounds, length] of cases) {
+    const schema = { VALUE: { type, required: true, ...bounds } };
+    const example = generateExample(schema);
+    assert.strictEqual(validateEnv(schema, parseEnvFile(example)).VALUE.length, length, example);
+  }
+
+  // File values require a real file. Generation only supplies a path.
+  const files = parseEnvFile(generateExample({
+    SHORT: { type: 'file', maxLength: 1 }, LONG: { type: 'file', minLength: 20 },
+  }));
+  assert.match(files.SHORT, /^[a-z]$/);
+  assert.match(files.LONG, /^\.\/[^/]+\.json$/);
+  assert.strictEqual(files.LONG.length, 20);
+}
+
+// Issue #275: unachievable bounds do not mangle the type or throw on generation.
+{
+  const impossible = [
+    ['string', { maxLength: 0, trim: false }],
+    ['string', { minLength: Number.MAX_SAFE_INTEGER }],
+    ['email', { maxLength: 4 }],
+    ['uuid', { maxLength: 35 }],
+    ['ipv4', { minLength: 16 }],
+    ['semver', { maxLength: 4 }],
+    ['base64', { minLength: 9, maxLength: 9 }],
+    ['url', { maxLength: 6, protocols: ['https'] }],
+    ['hex', { length: 5, minLength: 6 }],
+  ];
+  for (const [type, bounds] of impossible) {
+    const schema = { VALUE: { type, ...bounds } };
+    const example = generateExample(schema);
+    assert.strictEqual(example, generateExample({ VALUE: { type } }));
+    assert.throws(() => validateEnv(schema, parseEnvFile(example)), /expected a string/);
+  }
+  const reversed = { VALUE: { minLength: 4, maxLength: 3 } };
+  assert.throws(() => validateEnv(reversed, {}), /must not exceed/);
+  for (const bounds of [{ minLength: 2.5 }, { maxLength: null }, { minLength: 4, maxLength: 3 }, { minLength: -1, maxLength: 3 }]) {
+    assert.strictEqual(generateExample({ VALUE: bounds }), generateExample({ VALUE: {} }));
+  }
+}
+
+// Issue #275: oversized synthesized values keep the ordinary type example.
+{
+  const cases = [
+    ['string', { minLength: 4097 }],
+    ['url', { minLength: 4097 }],
+    ['base64', { minLength: 4097 }],
+    ['hex', { minLength: 0, length: 4097 }],
+  ];
+  for (const [type, bounds] of cases) {
+    const unbounded = parseEnvFile(generateExample({ VALUE: { type } })).VALUE;
+    const value = parseEnvFile(generateExample({ VALUE: { type, ...bounds } })).VALUE;
+    assert.strictEqual(value === unbounded, true, `${type}: expected the ordinary example, got ${value.length} characters`);
+  }
+  const exact = { VALUE: { type: 'hex', minLength: 0, length: 4096 } };
+  const env = parseEnvFile(generateExample(exact));
+  assert.strictEqual(validateEnv(exact, env).VALUE.length, 4096);
+}
+
+// Issue #275: growing examples shares a budget across groups and scalar types.
+{
+  const schema = {
+    FIRST: { minLength: 4096 },
+    SECOND: { type: 'base64', minLength: 4096 },
+    APP: { prefix: 'APP_', schema: {
+      SECOND: { type: 'hex', minLength: 0, length: 4096 },
+      THIRD: { type: 'email', minLength: 4096 },
+    } },
+    // The four large examples add 16,337 characters in total. Exactly 47 remain.
+    LAST: { minLength: 62 },
+    SPILL: { minLength: 16 },
+    SHORT: { maxLength: 3 },
+  };
+  const env = parseEnvFile(generateExample(schema));
+  for (const key of ['FIRST', 'SECOND', 'APP_SECOND', 'APP_THIRD']) assert.strictEqual(env[key].length, 4096);
+  assert.strictEqual(env.LAST.length, 62);
+  assert.strictEqual(env.SPILL, 'your_value_here');
+  assert.strictEqual(env.SHORT.length, 3);
+  assert.strictEqual(parseEnvFile(generateExample({ SPILL: schema.SPILL })).SPILL.length, 16);
+}
+
+// Issue #275: only usable protocol names can shape a generated URL.
+{
+  for (const protocols of [true, [], [true], ['bad!']]) {
+    const schema = { VALUE: { type: 'url', minLength: 25, protocols } };
+    assert.strictEqual(parseEnvFile(generateExample(schema)).VALUE, 'https://example.com');
+    assert.throws(() => validateEnv(schema, {}), /"protocols" must be a non-empty array of schemes/);
+  }
+  const mixed = { VALUE: { type: 'url', minLength: 25, protocols: ['bad!', true, 'HTTP:'] } };
+  const value = parseEnvFile(generateExample(mixed)).VALUE;
+  assert.strictEqual(new URL(value).protocol, 'http:');
+  assert.strictEqual(value.length, 25);
+  const exact = { VALUE: { type: 'url', minLength: 19, maxLength: 19, protocols: ['http', 'https'] } };
+  assert.strictEqual(parseEnvFile(generateExample(exact)).VALUE, 'https://example.com');
+  const shortest = { VALUE: { type: 'url', maxLength: 2, protocols: ['X:'] } };
+  assert.strictEqual(validateEnv(shortest, parseEnvFile(generateExample(shortest))).VALUE, 'x:');
+}
+
+// Issue #275: length adjustment applies only to synthesized placeholders.
+{
+  const schema = {
+    APP: { prefix: 'APP_', schema: { NAME: { maxLength: 3, required: true } } },
+    DEFAULTED: { default: 'é🙂', minLength: 3, maxLength: 3 },
+    CHOSEN: { choices: ['🙂', 'ok'], minLength: 2, maxLength: 2 },
+    API_KEY: { minLength: 20, choices: ['not printed'] },
+    SESSION: { minLength: 20, sensitive: true },
+    TOKEN: { minLength: 3, default: 'abc' },
+  };
+  const generated = parseEnvFile(generateExample(schema));
+  assert.strictEqual(generated.API_KEY, '');
+  assert.strictEqual(generated.SESSION, '');
+  const result = validateEnv(schema, generated);
+  assert.strictEqual(result.APP.NAME.length, 3);
+  assert.strictEqual(result.DEFAULTED, 'é🙂');
+  assert.strictEqual(result.CHOSEN, '🙂');
+  assert.strictEqual(result.TOKEN, 'abc');
+
+  const tooLong = { FIRST: { maxLength: 1, choices: ['🙂', 'x'] }, DEFAULTED: { maxLength: 1, default: '🙂' } };
+  const authored = parseEnvFile(generateExample(tooLong));
+  assert.deepStrictEqual(authored, { FIRST: '🙂', DEFAULTED: '🙂' });
+  assert.deepStrictEqual(validateEnv(tooLong, authored, { throwOnError: false }).errors.map(e => e.split(':')[0]),
+    ['FIRST', 'DEFAULTED']);
+
+  let calls = 0;
+  const custom = { VALUE: {
+    minLength: 20, pattern: /^Z+$/,
+    validate() { calls++; }, transform(value) { calls++; return value; },
+  } };
+  assert.strictEqual(parseEnvFile(generateExample(custom)).VALUE.length, 20);
+  assert.strictEqual(calls, 0);
+  assert.strictEqual(parseEnvFile(generateExample({ VALUE: { minLength: 1, maxLength: 20 } })).VALUE, 'your_value_here');
+
+  const supplied = 'a'.repeat(4097);
+  const authoredOverBudget = parseEnvFile(generateExample({
+    DEFAULTED: { minLength: 4097, default: supplied },
+    CHOSEN: { minLength: 4097, choices: [supplied, 'x'] },
+    GENERATED: { minLength: 20 },
+  }));
+  assert.strictEqual(authoredOverBudget.DEFAULTED, supplied);
+  assert.strictEqual(authoredOverBudget.CHOSEN, supplied);
+  assert.strictEqual(authoredOverBudget.GENERATED.length, 20);
 }
 
 // Issue #281: only strings are masked; other values keep their type/identity.
@@ -5057,6 +5999,61 @@ const watchModeErrorPathTest = (async () => {
   console.log('watch-mode error-path tests passed');
 })();
 
+// Issue #285: watch mode picks up edits and syntax errors in an ESM (.mjs) --schema file.
+const watchModeEsmSchemaTest = (async () => {
+  const { spawn } = require('node:child_process');
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const path = require('node:path');
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'env-saaf-watch-esm-'));
+  try {
+    fs.writeFileSync(path.join(dir, 'app.js'), 'console.log(process.env.PORT);\n');
+    fs.writeFileSync(path.join(dir, '.env.example'), 'PORT=\n');
+    fs.writeFileSync(path.join(dir, '.env'), 'PORT=3000\n');
+    fs.writeFileSync(path.join(dir, 'env.schema.mjs'), 'export default { PORT: { type: "int", min: 1, max: 65535 } };\n');
+    const childEnv = { PATH: process.env.PATH || '' };
+    if (process.platform === 'win32') { if (process.env.SYSTEMROOT) childEnv.SYSTEMROOT = process.env.SYSTEMROOT; }
+    else if (process.env.HOME) childEnv.HOME = process.env.HOME;
+    const child = spawn(process.execPath, [path.join(__dirname, 'cli.js'), 'check', dir, '--schema', 'env.schema.mjs', '--watch'], { cwd: dir, env: childEnv });
+    let out = '';
+    child.stdout.on('data', (d) => { out += d; });
+    child.stderr.on('data', (d) => { out += d; });
+    let exited = null;
+    child.on('exit', (code) => { exited = code; });
+    const waitFor = async (pred, what, timeoutMs = 8000) => {
+      const start = Date.now();
+      while (!(typeof pred === 'function' ? pred() : pred.test(out))) {
+        if (Date.now() - start > timeoutMs) throw new Error(`timed out waiting for ${what}; output so far:\n${out}`);
+        await sleep(50);
+      }
+    };
+    const runCount = () => (out.match(/check finished, exit/g) || []).length;
+
+    await waitFor(() => /all clean/.test(out) && /check finished, exit 0/.test(out), 'initial clean run with .mjs schema');
+    assert.strictEqual(runCount(), 1);
+
+    // Editing the .mjs schema reloads the new export default without stale module caching.
+    fs.writeFileSync(path.join(dir, 'env.schema.mjs'), 'export default { PORT: { type: "int", min: 1, max: 100 } };\n');
+    await waitFor(() => /INVALID: PORT/.test(out) && /check finished, exit 1/.test(out) && runCount() >= 2, 're-run after .mjs schema edit');
+
+    // A broken .mjs edit mid-watch reports exit 2 and keeps watching; fixing it recovers.
+    fs.writeFileSync(path.join(dir, 'env.schema.mjs'), 'export default {{{\n');
+    await waitFor(() => /cannot load schema env\.schema\.mjs/.test(out) && /check finished, exit 2/.test(out) && runCount() >= 3, 'broken .mjs edit reports exit 2');
+    await sleep(300);
+    assert.strictEqual(exited, null, 'watcher must survive a broken .mjs schema');
+
+    fs.writeFileSync(path.join(dir, 'env.schema.mjs'), 'export default { PORT: { type: "port", required: true } };\n');
+    await waitFor(() => /check finished, exit 0/.test(out) && runCount() >= 4, 'recovery after fixing .mjs schema');
+
+    const exitCode = await new Promise((resolve) => { child.on('exit', resolve); child.kill('SIGINT'); });
+    assert.strictEqual(exitCode, 0, 'SIGINT in watch mode exits 0');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+  console.log('watch-mode ESM schema tests passed');
+})();
+
 const loadEnvAsyncTest = (async () => {
   const fs = require('node:fs');
   const path = require('node:path');
@@ -5076,6 +6073,28 @@ const loadEnvAsyncTest = (async () => {
     assert.deepStrictEqual(await loadEnvAsync(schema, { paths: [missing, first, last], env: {} }),
       { PORT: 4000, DATA: { demo: true } });
     assert.deepStrictEqual(await loadEnvAsync({}, { paths: [missing], env: {} }), {});
+    const groupedFile = path.join(dir, 'grouped.env');
+    fs.writeFileSync(groupedFile, 'DB_HOST=db.internal\nDB_PORT=5432\n');
+    const grouped = await loadEnvAsync({
+      DB: { prefix: 'DB_', schema: {
+        HOST: { type: 'host', required: true },
+        PORT: { type: 'port', required: true },
+      } },
+    }, { path: groupedFile, env: {} });
+    assert.deepStrictEqual(grouped, { DB: { HOST: 'db.internal', PORT: 5432 } });
+    assert.ok(Object.isFrozen(grouped));
+    assert.ok(Object.isFrozen(grouped.DB));
+    assert.throws(() => { grouped.DB.HOST = 'changed.internal'; }, TypeError);
+    assert.strictEqual(grouped.DB.HOST, 'db.internal');
+    fs.writeFileSync(groupedFile, 'APP_DB_HOST=db.internal\n');
+    const nestedTarget = {};
+    const nested = await loadEnvAsync({ APP: { prefix: 'APP_', schema: {
+      DB: { prefix: 'DB_', schema: { HOST: { type: 'host', required: true } } },
+    } } }, { path: groupedFile, env: nestedTarget, assign: true });
+    assert.deepStrictEqual(nested, { APP: { DB: { HOST: 'db.internal' } } });
+    assert.deepStrictEqual(nestedTarget, { APP_DB_HOST: 'db.internal' });
+    assert.ok(Object.isFrozen(nested.APP));
+    assert.ok(Object.isFrozen(nested.APP.DB));
     const defaultRead = fs.promises.readFile;
     try {
       fs.promises.readFile = async (file, encoding) => {
@@ -5188,8 +6207,8 @@ const loadEnvAsyncTest = (async () => {
   assert.strictEqual(plain.message, 'Invalid environment variables:\n' + plain.errors.map(x => `  - ${x}`).join('\n'));
   assert.throws(() => validateEnv(schema, bad, { formatError: () => '' }), (e) => e.message === '');
 
-  // Throwing or non-string hooks fall back to the default message.
-  for (const hook of [() => { throw new Error('boom'); }, () => 42, () => undefined, () => null, () => ({})]) {
+  // Non-string hooks fall back to the default message.
+  for (const hook of [() => 42, () => undefined, () => null, () => ({})]) {
     assert.throws(() => validateEnv(schema, bad, { formatError: hook }), (e) => { assert.strictEqual(e.message, plain.message); assert.deepStrictEqual(e.errors, plain.errors); return true; });
   }
 
@@ -5208,9 +6227,9 @@ const loadEnvAsyncTest = (async () => {
     assert.throws(() => validateEnv(schema, { PORT: '3000' }, { formatError: bad2 }), /formatError/);
   }
 
-  // Schema errors are bugs in code, not env problems: default message, hook unused.
+  // Schema errors are bugs in code, not env problems: schema header, hook unused.
   assert.throws(() => validateEnv({ A: { type: 'nope' } }, {}, { formatError: () => { calls++; return 'x'; } }),
-    (e) => { assert.ok(e instanceof EnvSaafError); assert.ok(e.message.startsWith('Invalid environment variables:')); return true; });
+    (e) => { assert.ok(e instanceof EnvSaafError); assert.ok(e.message.startsWith('Invalid schema:')); return true; });
   assert.strictEqual(calls, 0);
 
   // loadEnv threads the option through (it always throws, so throwOnError:false is ignored).
@@ -5226,6 +6245,61 @@ const loadEnvAsyncTest = (async () => {
     require('node:fs').rmSync(tmp, { recursive: true, force: true });
   }
   console.log('formatError tests passed');
+}
+
+// Issue #279: a throwing `formatError` hook is a programming error — its
+// error propagates out of validateEnv / loadEnv unchanged, instead of
+// vanishing behind the default message.
+const formatErrorThrowingHookTest = (async () => {
+  const { loadEnvAsync } = require('./index');
+  const schema = { A: { type: 'string', required: true } };
+  const hookError = new Error('hook boom');
+  assert.throws(() => validateEnv(schema, {}, { formatError: () => { throw hookError; } }),
+    (e) => { assert.strictEqual(e, hookError); return true; });
+  // Same through loadEnv, which forwards the hook for validation failures.
+  const tmp = require('node:fs').mkdtempSync(require('node:path').join(require('node:os').tmpdir(), 'env-saaf-279-'));
+  const envFile = require('node:path').join(tmp, 'empty.env');
+  try {
+    require('node:fs').writeFileSync(envFile, '');
+    assert.throws(() => loadEnv(schema, { path: envFile, env: {}, formatError: () => { throw hookError; } }),
+      (e) => { assert.strictEqual(e, hookError); return true; });
+    // And through loadEnvAsync, which shares the same steps.
+    await assert.rejects(loadEnvAsync(schema, { path: envFile, env: {}, formatError: () => { throw hookError; } }),
+      (e) => { assert.strictEqual(e, hookError); return true; });
+  } finally {
+    require('node:fs').rmSync(tmp, { recursive: true, force: true });
+  }
+  console.log('formatError throwing-hook tests passed');
+})();
+
+// Issue #283: schema mistakes are reported as "Invalid schema:", not
+// "Invalid environment variables:". A bad rule is a bug in the schema, so the
+// header must point the developer at the schema instead of blaming the env.
+{
+  // Direct validateSchema: a bad type yields the schema header.
+  assert.throws(() => validateSchema({ A: { type: 'nope' } }), (e) => {
+    assert.ok(e instanceof EnvSaafError);
+    assert.strictEqual(e.message.split('\n')[0], 'Invalid schema:');
+    assert.ok(!e.message.startsWith('Invalid environment variables:'));
+    return true;
+  });
+
+  // validateEnv: schema errors keep the schema header and never run formatError.
+  let schemaHookCalls = 0;
+  assert.throws(() => validateEnv({ A: { type: 'nope' } }, {}, { formatError: () => { schemaHookCalls++; return 'x'; } }), (e) => {
+    assert.ok(e instanceof EnvSaafError);
+    assert.strictEqual(e.message.split('\n')[0], 'Invalid schema:');
+    return true;
+  });
+  assert.strictEqual(schemaHookCalls, 0);
+
+  // Genuine value errors still use the env header (no regression).
+  assert.throws(() => validateEnv({ PORT: { type: 'port', required: true } }, { PORT: 'abc' }), (e) => {
+    assert.ok(e instanceof EnvSaafError);
+    assert.strictEqual(e.message.split('\n')[0], 'Invalid environment variables:');
+    return true;
+  });
+  console.log('schema-error header tests passed');
 }
 
 // Issue #276: non-string values in a hand-built env object. `null` counts
@@ -5267,10 +6341,6 @@ const loadEnvAsyncTest = (async () => {
   assert.strictEqual(validateEnv({ U: { type: 'url', protocols: ['https'] } }, { U: 'https://a.com' }).U, 'https://a.com');
   assert.strictEqual(validateEnv({ S: { type: 'string', min: 1 } }, { S: 'x' }).S, 'x');
 }
-
-Promise.all([watchModeTest, watchModeErrorPathTest, loadEnvAsyncTest])
-  .then(() => console.log('env-saaf v1.5.0: all tests passed'))
-  .catch((err) => { console.error(err); process.exit(1); });
 
 // Issue #295: unknown requiredIf keys warn without disabling external flags.
 {
@@ -5324,3 +6394,401 @@ Promise.all([watchModeTest, watchModeErrorPathTest, loadEnvAsyncTest])
   assert.strictEqual(result.KEY, 'value');
   assert.strictEqual(warnings.length, 1);
 }
+
+// Issue #288: sensitive rules retain their annotation in exported JSON Schema.
+{
+  const schema = {
+    SESSION: { type: 'string', sensitive: true, required: true },
+    COUNT: { type: 'int', sensitive: true },
+    TAGS: { type: 'array', sensitive: true },
+    PLAIN: { type: 'string' },
+    FALSE: { type: 'string', sensitive: false },
+    DB: { prefix: 'DB_', schema: {
+      PASSWORD: { type: 'string', sensitive: true },
+      HOST: { type: 'host' },
+    } },
+  };
+  const exported = toJsonSchema(schema);
+  assert.deepStrictEqual(exported.properties.SESSION, { type: 'string', writeOnly: true });
+  assert.strictEqual(exported.properties.COUNT.writeOnly, true);
+  assert.strictEqual(exported.properties.TAGS.writeOnly, true);
+  assert.deepStrictEqual(exported.properties.DB.properties.PASSWORD, { type: 'string', writeOnly: true });
+  assert.deepStrictEqual(exported.properties.PLAIN, { type: 'string' });
+  assert.deepStrictEqual(exported.properties.FALSE, { type: 'string' });
+  assert.ok(!Object.prototype.hasOwnProperty.call(exported.properties.DB, 'writeOnly'));
+  assert.ok(!Object.prototype.hasOwnProperty.call(exported.properties.DB.properties.HOST, 'writeOnly'));
+  assert.deepStrictEqual(exported.required, ['SESSION']);
+  const ordinary = { S: { type: 'string' }, N: { type: 'int' } };
+  assert.strictEqual(JSON.stringify(toJsonSchema(ordinary)), JSON.stringify({
+    $schema: 'https://json-schema.org/draft/2020-12/schema', type: 'object',
+    properties: { S: { type: 'string' }, N: { type: 'integer' } },
+  }));
+}
+
+// Issue #303: toJsonSchema expresses `semver` as a pattern on scalar rules and array items.
+{
+  const scalar = toJsonSchema({ V: { type: 'semver' } });
+  const arr = toJsonSchema({ VERSIONS: { type: 'array', of: 'semver' } });
+  assert.deepStrictEqual(JSON.parse(JSON.stringify(scalar)), scalar);
+  assert.strictEqual(scalar.properties.V.type, 'string');
+  assert.strictEqual(typeof scalar.properties.V.pattern, 'string');
+  assert.deepStrictEqual(arr.properties.VERSIONS, {
+    type: 'array',
+    items: { type: 'string', pattern: scalar.properties.V.pattern },
+  });
+
+  const schemaPattern = new RegExp(scalar.properties.V.pattern);
+  const schemaPatternUnicode = new RegExp(scalar.properties.V.pattern, 'u');
+  const itemPattern = new RegExp(arr.properties.VERSIONS.items.pattern, 'u');
+  const validSemvers = [
+    '1.2.3', 'v1.2.3', '1.2.3-beta.1+build.5',
+    '0.0.0', '0.0.1+build.5', 'v1.2.3-rc.1', 'v1.2.3+build',
+    '1.2.3-0', '1.2.3-01a', '1.2.3-alpha.0.1',
+    '1.2.3+001.sha-5114f85', '10.20.30-alpha-1.2+exp.sha.5114f85',
+  ];
+  const invalidSemvers = [
+    '1.2', 'banana', '01.2.3',
+    '1.02.3', '1.2.03', 'v1.2', 'vv1.2.3', 'V1.2.3', 'v',
+    '1.2.3.4', '1.2.x', '1.2.3-', '1.2.3+', '1.2.3-01',
+    '1.2.3-alpha..1', '1.2.3+build..1', ' 1.2.3', '1.2.3 ', '1.2.3\n',
+  ];
+  for (const sample of validSemvers) {
+    assert.strictEqual(schemaPattern.test(sample), true, `expected pattern to accept ${JSON.stringify(sample)}`);
+    assert.strictEqual(schemaPatternUnicode.test(sample), true, `expected unicode pattern to accept ${JSON.stringify(sample)}`);
+    assert.strictEqual(itemPattern.test(sample), true, `expected array item pattern to accept ${JSON.stringify(sample)}`);
+    assert.deepStrictEqual(
+      validateEnv({ V: { type: 'semver', trim: false } }, { V: sample }, { throwOnError: false }),
+      { env: { V: sample }, errors: [] }
+    );
+    assert.deepStrictEqual(
+      validateEnv({ VERSIONS: { type: 'array', of: 'semver', trim: false } }, { VERSIONS: [sample] }, { throwOnError: false }),
+      { env: { VERSIONS: [sample] }, errors: [] }
+    );
+  }
+  for (const sample of invalidSemvers) {
+    assert.strictEqual(schemaPattern.test(sample), false, `expected pattern to reject ${JSON.stringify(sample)}`);
+    assert.strictEqual(schemaPatternUnicode.test(sample), false, `expected unicode pattern to reject ${JSON.stringify(sample)}`);
+    assert.strictEqual(itemPattern.test(sample), false, `expected array item pattern to reject ${JSON.stringify(sample)}`);
+    assert.strictEqual(
+      validateEnv({ V: { type: 'semver', trim: false } }, { V: sample }, { throwOnError: false }).errors.length,
+      1,
+      `expected runtime validateEnv to reject ${JSON.stringify(sample)}`
+    );
+    assert.strictEqual(
+      validateEnv({ VERSIONS: { type: 'array', of: 'semver', trim: false } }, { VERSIONS: [sample] }, { throwOnError: false }).errors.length,
+      1,
+      `expected runtime array validateEnv to reject ${JSON.stringify(sample)}`
+    );
+  }
+
+  // User-supplied pattern composes via allOf (same as hex/url), flagged pattern leaves semver pattern intact,
+  // defaults and grouped schemas keep the semver pattern, and unrelated string types stay unconstrained.
+  const composed = toJsonSchema({
+    MAJOR1: { type: 'semver', pattern: /^v?1\./, default: 'v1.2.3' },
+    FLAGGED: { type: 'semver', pattern: /^v?1\./i },
+    LIST: { type: 'array', of: 'semver', default: '1.0.0,v2.0.0' },
+    APP: { prefix: 'APP_', schema: { VERSION: { type: 'semver', required: true } } },
+    PLAIN: { type: 'string' },
+    B64: { type: 'base64' },
+  });
+  assert.deepStrictEqual(composed.properties.MAJOR1, {
+    type: 'string',
+    pattern: '^v?1\\.',
+    allOf: [{ pattern: scalar.properties.V.pattern }],
+    default: 'v1.2.3',
+  });
+  assert.deepStrictEqual(composed.properties.FLAGGED, {
+    type: 'string',
+    pattern: scalar.properties.V.pattern,
+  });
+  assert.deepStrictEqual(composed.properties.LIST, {
+    type: 'array',
+    items: { type: 'string', pattern: scalar.properties.V.pattern },
+    default: ['1.0.0', 'v2.0.0'],
+  });
+  assert.deepStrictEqual(composed.properties.APP, {
+    type: 'object',
+    properties: { VERSION: { type: 'string', pattern: scalar.properties.V.pattern } },
+    required: ['VERSION'],
+  });
+  assert.deepStrictEqual(composed.properties.PLAIN, { type: 'string' });
+  assert.deepStrictEqual(composed.properties.B64, { type: 'string' });
+}
+
+// Issue #321: quoted keys share the env-file key grammar.
+for (const head of ['process.env', 'import.meta.env']) {
+  for (const key of ['DB.PORT', 'MY-KEY', 'PLAIN_KEY']) {
+    for (const quote of ["'", '"', '`']) {
+      assert.deepStrictEqual(scanCode(`${head}[${quote}${key}${quote}]`), [key]);
+      assert.deepStrictEqual(scanCode(`${head}?.[${quote}${key}${quote}]`), [key]);
+    }
+    for (const quote of ["'", '"']) {
+      assert.deepStrictEqual(scanCode(`const { ${quote}${key}${quote}: value } = ${head};`), [key]);
+    }
+  }
+  assert.deepStrictEqual(scanCode(`// ${head}['DB.PORT']`), []);
+  assert.deepStrictEqual(scanCode(`const s = "${head}['DB.PORT']";`), []);
+  assert.deepStrictEqual(scanCode(`${head}['9BAD.KEY']; ${head}[\`DB.\${KEY}\`];`), []);
+  assert.deepStrictEqual(scanCode(`const { A = "x,'FAKE.KEY': z" } = ${head};`), ['A']);
+}
+
+assert.deepStrictEqual(scanCode("const env = process.env; env['DB.PORT']; env[`MY-KEY`];"), ['DB.PORT', 'MY-KEY']);
+
+// Issue #289: a flat equals condition requires a present discriminator.
+{
+  const schema = {
+    TOKEN: { requiredIf: { key: 'MODE', equals: 'production', in: undefined } },
+    MODE: { type: 'string' },
+  };
+  assert.deepStrictEqual(validateEnv(schema, {}, { throwOnError: false }), { env: {}, errors: [] });
+  assert.deepStrictEqual(validateEnv(schema, { MODE: ' production ' }, { throwOnError: false }), {
+    env: { MODE: 'production' }, errors: ['TOKEN: missing required variable'],
+  });
+  assert.deepStrictEqual(toJsonSchema(schema), {
+    $schema: 'https://json-schema.org/draft/2020-12/schema',
+    type: 'object',
+    properties: { TOKEN: { type: 'string' }, MODE: { type: 'string' } },
+    if: { required: ['MODE'], properties: { MODE: { const: 'production' } } },
+    then: { required: ['TOKEN'] },
+  });
+}
+
+// Issue #289: independent clauses use strict typed equality and membership.
+{
+  const schema = {
+    NAME: { required: true },
+    FLAG: { type: 'boolean' },
+    COUNT: { type: 'int' },
+    DATA: { type: 'json' },
+    CERT: { requiredIf: { key: 'FLAG', equals: false } },
+    NOTE: { requiredIf: { key: 'COUNT', in: [0, 2, 2, '2'] } },
+    TEXT: { requiredIf: { key: 'COUNT', equals: '2' } },
+    EXTRA: { requiredIf: { key: 'DATA', equals: null } },
+  };
+  const result = toJsonSchema(schema);
+  assert.deepStrictEqual(result.required, ['NAME']);
+  assert.deepStrictEqual(result.allOf, [
+    { if: { required: ['FLAG'], properties: { FLAG: { const: false } } }, then: { required: ['CERT'] } },
+    { if: { required: ['COUNT'], properties: { COUNT: { enum: [0, 2] } } }, then: { required: ['NOTE'] } },
+    { if: { required: ['DATA'], properties: { DATA: { const: null } } }, then: { required: ['EXTRA'] } },
+  ]);
+}
+
+// Issue #289: full env names resolve to the correct source and target paths.
+{
+  const schema = {
+    SWITCH: {},
+    APP: { prefix: 'CFG_', schema: {
+      MODE: {},
+      HOST: { required: true },
+      AUTH: { requiredIf: { key: 'SWITCH', equals: 'on' } },
+      CODE: { type: 'hex', pattern: /^ff/, requiredIf: { key: 'CFG_MODE', equals: 'on' } },
+    } },
+    MAIL: { prefix: 'EMAIL_', schema: {
+      TOKEN: { requiredIf: { key: 'CFG_MODE', in: ['on', 'test'] } },
+    } },
+    NOTICE: { requiredIf: { key: 'CFG_MODE', equals: 'on' } },
+  };
+  const result = toJsonSchema(schema);
+  const appOn = {
+    required: ['APP'], properties: {
+      APP: { type: 'object', required: ['MODE'], properties: { MODE: { const: 'on' } } },
+    },
+  };
+  assert.deepStrictEqual(result.allOf, [
+    {
+      if: { required: ['SWITCH'], properties: { SWITCH: { const: 'on' } } },
+      then: { required: ['APP'], properties: { APP: { type: 'object', required: ['AUTH'] } } },
+    },
+    { if: appOn, then: { required: ['APP'], properties: { APP: { type: 'object', required: ['CODE'] } } } },
+    {
+      if: { required: ['APP'], properties: {
+        APP: { type: 'object', required: ['MODE'], properties: { MODE: { enum: ['on', 'test'] } } },
+      } },
+      then: { required: ['MAIL'], properties: { MAIL: { type: 'object', required: ['TOKEN'] } } },
+    },
+    { if: appOn, then: { required: ['NOTICE'] } },
+  ]);
+  assert.strictEqual(result.required, undefined);
+  assert.deepStrictEqual(result.properties.APP.required, ['HOST']);
+  assert.deepStrictEqual(result.properties.APP.properties.CODE, {
+    type: 'string', pattern: '^ff', allOf: [{ pattern: '^[0-9a-fA-F]+$' }],
+  });
+  const single = toJsonSchema({
+    SWITCH: {}, APP: { prefix: 'CFG_', schema: { AUTH: schema.APP.schema.AUTH } },
+  });
+  assert.deepStrictEqual(single.allOf, [result.allOf[0]]);
+}
+
+// Issue #289: aliases and defaults are resolved before matching canonical values.
+{
+  const condition = { key: 'MODE', equals: true };
+  const schema = {
+    MODE: { type: 'boolean', aliases: ['OLD_MODE'], default: 'yes' },
+    TOKEN: { aliases: ['OLD_TOKEN'], default: undefined, requiredIf: condition },
+    PORT: { type: 'int', default: 0, requiredIf: condition },
+  };
+  const options = { throwOnError: false, onWarn: () => {} };
+  assert.deepStrictEqual(validateEnv(schema, {}, options), {
+    env: { MODE: true, PORT: 0 }, errors: ['TOKEN: missing required variable'],
+  });
+  assert.deepStrictEqual(validateEnv(schema, { OLD_MODE: 'on', OLD_TOKEN: 'value' }, options), {
+    env: { MODE: true, TOKEN: 'value', PORT: 0 }, errors: [],
+  });
+  const result = toJsonSchema(schema);
+  assert.deepStrictEqual(result.if, { required: ['MODE'], properties: { MODE: { const: true } } });
+  assert.deepStrictEqual(result.then, { required: ['TOKEN'] });
+  assert.deepStrictEqual(result.properties, {
+    MODE: { type: 'boolean', default: true }, TOKEN: { type: 'string' }, PORT: { type: 'integer', default: 0 },
+  });
+}
+
+// Issue #289: runtime-only or lossy comparisons do not become schema requirements.
+{
+  let calls = 0;
+  const callback = () => { calls++; return 'changed'; };
+  const reference = { active: true };
+  const result = toJsonSchema({
+    MODE: {},
+    TRANSFORMED: { transform: callback },
+    CHECKED: { validate: callback },
+    DATA: { type: 'json' },
+    DATE: { type: 'date' },
+    LIST: { type: 'array' },
+    GOOD: { requiredIf: { key: 'MODE', equals: 'prod' } },
+    EXTERNAL: { requiredIf: { key: 'OUTSIDE', equals: 'prod' } },
+    CHANGED: { requiredIf: { key: 'TRANSFORMED', equals: 'prod' } },
+    CHECK: { requiredIf: { key: 'CHECKED', equals: 'prod' } },
+    REF: { requiredIf: { key: 'DATA', equals: reference } },
+    MIXED: { requiredIf: { key: 'DATA', in: [true, reference] } },
+    NON_FINITE: { requiredIf: { key: 'DATA', in: [Infinity] } },
+    SPARSE: { requiredIf: { key: 'DATA', in: Array(1) } },
+    SERIALIZED_DATE: { requiredIf: { key: 'DATE', equals: '2026-01-31' } },
+    ARRAY_ITEM: { requiredIf: { key: 'LIST', equals: 'first' } },
+  });
+  assert.deepStrictEqual(result.if, { required: ['MODE'], properties: { MODE: { const: 'prod' } } });
+  assert.deepStrictEqual(result.then, { required: ['GOOD'] });
+  assert.strictEqual(result.allOf, undefined);
+  assert.strictEqual(calls, 0);
+}
+
+// Issue #289: non-JSON numbers do not hide representable JSON membership values.
+{
+  const schema = {
+    DATA: { type: 'json' },
+    TOKEN: { requiredIf: { key: 'DATA', in: [true, Infinity, NaN, null] } },
+  };
+  for (const [raw, coerced] of [['true', true], ['null', null]]) {
+    assert.deepStrictEqual(validateEnv(schema, { DATA: raw }, { throwOnError: false }), {
+      env: { DATA: coerced }, errors: ['TOKEN: missing required variable'],
+    });
+  }
+  const result = toJsonSchema(schema);
+  assert.deepStrictEqual(result.if, { required: ['DATA'], properties: { DATA: { enum: [true, null] } } });
+  assert.deepStrictEqual(result.then, { required: ['TOKEN'] });
+}
+
+// Issue #289: membership uses indexed values, not iteration or custom callbacks.
+{
+  const indexed = ['prod'];
+  indexed[Symbol.iterator] = function* () { yield 'dev'; };
+  const overridden = ['prod'];
+  overridden.includes = value => value === 'test';
+  const borrowed = ['prod'];
+  borrowed.includes = String.prototype.includes;
+  let reads = 0;
+  const accessor = ['prod'];
+  Object.defineProperty(accessor, 0, { get: () => { reads++; return 'prod'; } });
+  const schema = {
+    MODE: {},
+    TOKEN: { requiredIf: { key: 'MODE', in: indexed } },
+    CUSTOM: { requiredIf: { key: 'MODE', in: overridden } },
+    BORROWED: { requiredIf: { key: 'MODE', in: borrowed } },
+    ACCESSOR: { requiredIf: { key: 'MODE', in: accessor } },
+  };
+  assert.deepStrictEqual(validateEnv(schema, { MODE: 'dev' }, { throwOnError: false }).errors, []);
+  assert.deepStrictEqual(validateEnv(schema, { MODE: 'prod' }, { throwOnError: false }).errors, [
+    'TOKEN: missing required variable', 'BORROWED: missing required variable', 'ACCESSOR: missing required variable',
+  ]);
+  const before = reads;
+  const result = toJsonSchema(schema);
+  assert.deepStrictEqual(result.if, { required: ['MODE'], properties: { MODE: { enum: ['prod'] } } });
+  assert.deepStrictEqual(result.then, { required: ['TOKEN'] });
+  assert.strictEqual(result.allOf, undefined);
+  assert.strictEqual(reads, before);
+}
+
+// Issue #289: plain membership arrays may come from another JavaScript realm.
+{
+  const members = require('node:vm').runInNewContext("['prod']");
+  const schema = { MODE: {}, TOKEN: { requiredIf: { key: 'MODE', in: members } } };
+  assert.deepStrictEqual(validateEnv(schema, { MODE: 'prod' }, { throwOnError: false }).errors,
+    ['TOKEN: missing required variable']);
+  const result = toJsonSchema(schema);
+  assert.deepStrictEqual(result.if, { required: ['MODE'], properties: { MODE: { enum: ['prod'] } } });
+  assert.deepStrictEqual(result.then, { required: ['TOKEN'] });
+}
+
+// Issue #289: omit proxy-backed membership without dropping ordinary lists.
+{
+  const handler = {
+    get(target, key, receiver) {
+      if (key === 'includes') return value => value === 'stage';
+      return Reflect.get(target, key, receiver);
+    },
+  };
+  const proxy = new Proxy(['prod'], handler);
+  const inherited = Object.setPrototypeOf(['prod'], new Proxy(Array.prototype, handler));
+  for (const members of [proxy, inherited]) {
+    const schema = {
+      MODE: {},
+      OPAQUE: { requiredIf: { key: 'MODE', in: members } },
+      TOKEN: { requiredIf: { key: 'MODE', in: ['prod'] } },
+    };
+    const options = { throwOnError: false };
+    assert.deepStrictEqual(validateEnv(schema, { MODE: 'stage' }, options).errors, ['OPAQUE: missing required variable']);
+    assert.deepStrictEqual(validateEnv(schema, { MODE: 'prod' }, options).errors, ['TOKEN: missing required variable']);
+    const result = toJsonSchema(schema);
+    assert.deepStrictEqual(result.if, { required: ['MODE'], properties: { MODE: { enum: ['prod'] } } });
+    assert.deepStrictEqual(result.then, { required: ['TOKEN'] });
+    assert.strictEqual(result.allOf, undefined);
+  }
+}
+
+// Issue #289: nested groups export nested if/then paths for requiredIf.
+{
+  const schema = {
+    APP: { prefix: 'APP_', schema: {
+      DB: { prefix: 'DB_', schema: {
+        MODE: {},
+        AUTH: { requiredIf: { key: 'APP_DB_MODE', equals: 'tls' } },
+      } },
+      MAIL: { prefix: 'MAIL_', schema: {
+        TOKEN: { requiredIf: { key: 'APP_DB_MODE', in: ['tls', 'mtls'] } },
+      } },
+    } },
+    AUDIT: { requiredIf: { key: 'APP_DB_MODE', equals: 'tls' } },
+  };
+  assert.deepStrictEqual(validateEnv(schema, { APP_DB_MODE: 'tls' }, { throwOnError: false }).errors, [
+    'APP_DB_AUTH: missing required variable',
+    'APP_MAIL_TOKEN: missing required variable',
+    'AUDIT: missing required variable',
+  ]);
+  const result = toJsonSchema(schema);
+  const wrap = (path, leaf) => path.reduceRight((inner, name) => ({
+    required: [name], properties: { [name]: { type: 'object', ...inner } },
+  }), leaf);
+  const dbTls = wrap(['APP', 'DB'], { required: ['MODE'], properties: { MODE: { const: 'tls' } } });
+  assert.deepStrictEqual(result.allOf, [
+    { if: dbTls, then: wrap(['APP', 'DB'], { required: ['AUTH'] }) },
+    {
+      if: wrap(['APP', 'DB'], { required: ['MODE'], properties: { MODE: { enum: ['tls', 'mtls'] } } }),
+      then: wrap(['APP', 'MAIL'], { required: ['TOKEN'] }),
+    },
+    { if: dbTls, then: { required: ['AUDIT'] } },
+  ]);
+}
+
+Promise.all([watchModeTest, watchModeErrorPathTest, watchModeEsmSchemaTest, loadEnvAsyncTest, formatErrorThrowingHookTest])
+  .then(() => console.log('env-saaf v1.5.0: all tests passed'))
+  .catch((err) => { console.error(err); process.exit(1); });
