@@ -23,6 +23,13 @@
   `skipLibCheck`; `EnvResult` passed a group member to `EnvValue`, whose
   constraint only allows a rule.
 
+- Added: seeded generative tests for `scanCode` (`test-scan-fuzz.js`, part of
+  `npm test`): 300 snippets built from real reads (dot, bracket, template,
+  optional chaining, destructuring, `import.meta.env`, reads inside a
+  template's `${}`) and decoys (comments, strings, template text, regex
+  literals), asserting every planted key is reported, no decoy is, and the
+  output is sorted and de-duplicated (fixes #366).
+
 - Fixed: `parseEnvFile` now expands `\n` and `\r` escape sequences in double-quoted values (dotenv parity), so a PEM key written as `"-----BEGIN-----\n..."` loads with real newlines; `\\` stays a single backslash and single-quoted values are unchanged (fixes #333).
 
 - Added: duration rules accept human duration strings for inclusive `min` / `max` bounds, including compound durations. Invalid or reversed bounds fail schema validation; numeric bounds keep their existing behavior. Generated examples and JSON Schema use the parsed bounds (fixes #322).
