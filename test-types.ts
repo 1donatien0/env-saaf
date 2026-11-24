@@ -177,6 +177,28 @@ void groupedName;
 // a group rule is assignable to EnvSchema via EnvGroupRule
 const groupRule: EnvGroupRule = { prefix: 'X_', schema: { A: { type: 'string' } } };
 void groupRule;
+
+// Issue #287: inference follows every nested group, retaining optional containers.
+const nestedGroups = validateEnv({ APP: { prefix: 'APP_', schema: {
+  DB: { prefix: 'DB_', schema: {
+    PORT: { type: 'port', default: 5432 },
+    AUTH: { prefix: 'AUTH_', schema: {
+      USER: { type: 'string', required: true },
+      ENABLED: { type: 'boolean' },
+    } },
+  } },
+} } });
+const nestedPort: number | undefined = nestedGroups.APP?.DB?.PORT;
+const nestedUser: string | undefined = nestedGroups.APP?.DB?.AUTH?.USER;
+const nestedEnabled: boolean | undefined = nestedGroups.APP?.DB?.AUTH?.ENABLED;
+void nestedPort; void nestedUser; void nestedEnabled;
+// @ts-expect-error port values remain numbers inside nested groups
+const invalidNestedPort: string | undefined = nestedGroups.APP?.DB?.PORT;
+void invalidNestedPort;
+const nestedRule: EnvGroupRule = { prefix: 'APP_', schema: {
+  DB: { prefix: 'DB_', schema: { PORT: { type: 'port' } } },
+} };
+void nestedRule;
 // Issue #234: maskSecrets keeps the recursive shape and stringifies every leaf.
 const masked = maskSecrets({
   KEY: 'sk_live_123456',
