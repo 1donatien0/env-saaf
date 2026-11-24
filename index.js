@@ -435,6 +435,11 @@ function validateSchemaRules(schema, warn, patterns = new Map(), prefix = '', an
     if (rule.required && rule.requiredIf !== undefined) {
       errors.push(`${key}: "required" and "requiredIf" cannot be used together (use one or the other)`);
     }
+    // Issue #340: a key with a `default` can never be missing, so `required`
+    // would never fire. `requiredIf` + `default` is left alone on purpose.
+    if (rule.required && rule.default !== undefined) {
+      errors.push(`${key}: "required" and "default" cannot be used together (remove one of them)`);
+    }
     if (rule.of !== undefined && (typeof rule.of !== 'string' || !KNOWN_TYPES.has(rule.of) || rule.of === 'array')) {
       errors.push(`${key}: "of" must be a valid item type (e.g. 'string', 'number', 'url')`);
     }

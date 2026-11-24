@@ -192,7 +192,7 @@ module.exports = {
   // true/false (also yes/no, on/off, 1/0)
   DEBUG: { type: 'boolean', default: false },
   // TCP port 0-65535
-  PORT: { type: 'port', default: 3000, required: true },
+  PORT: { type: 'port', default: 3000 },
   // full URL with a scheme
   API_URL: { type: 'url', required: true },
   // email address

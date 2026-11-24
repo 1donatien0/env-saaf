@@ -263,18 +263,20 @@ function assertDraft202012Schema(schema, path = '#', root = true) {
   const flagged = /ok/gi;
   flagged.lastIndex = 2;
   const source = Object.freeze({
-    ['__proto__']: Object.freeze({ type: 'json', default: data, required: true }),
+    ['__proto__']: Object.freeze({ type: 'json', default: data }),
     constructor: { type: 'date', default: '2026-01-31' },
     toString: { type: 'date', default: new Date('2026-02-01T02:00:00+02:00') },
     toJSON: { type: 'json', default: '[false, null, 0]' },
-    'slash/~': { type: 'file', default: './not-a-real-file.example', required: true },
+    'slash/~': { type: 'file', default: './not-a-real-file.example' },
+    valueOf: { type: 'string', required: true },
+    'hash/#': { type: 'file', required: true },
     '': { default: '', required: false },
     FLAGS: { pattern: flagged, validate: callback, transform: callback, aliases: ['OLD'], requiredIf: { key: 'SWITCH', equals: 'enabled' } },
   });
   const result = toJsonSchema(source);
   assert.deepStrictEqual(JSON.parse(JSON.stringify(result)), result);
   assert.deepStrictEqual(Object.keys(result.properties), Object.keys(source));
-  assert.deepStrictEqual(result.required, ['__proto__', 'slash/~']);
+  assert.deepStrictEqual(result.required, ['valueOf', 'hash/#']);
   assert.deepStrictEqual(result.properties.__proto__.default, data);
   assert.notStrictEqual(result.properties.__proto__.default, data);
   assert.notStrictEqual(result.properties.__proto__.default.__proto__, data.__proto__);
@@ -3648,6 +3650,36 @@ assert.deepStrictEqual(
   );
 }
 
+// Issue #340: `required: true` with a `default` is dead config — the default
+// means the key is never missing — so the schema is rejected up front.
+{
+  const message = 'PORT: "required" and "default" cannot be used together (remove one of them)';
+  assert.throws(
+    () => validateSchema({ PORT: { type: 'port', required: true, default: 3000 } }),
+    err => err instanceof EnvSaafError && err.errors.length === 1 && err.errors[0] === message,
+  );
+  // Falsy defaults count too, and it is a schema error even with throwOnError: false.
+  assert.throws(
+    () => validateEnv({ DEBUG: { type: 'boolean', required: true, default: false } }, {}, { throwOnError: false }),
+    err => err instanceof EnvSaafError
+      && err.errors[0] === 'DEBUG: "required" and "default" cannot be used together (remove one of them)',
+  );
+  // Inside a group the error names the full env var.
+  assert.throws(
+    () => validateEnv({ DB: { prefix: 'DB_', schema: { HOST: { type: 'host', required: true, default: 'localhost' } } } }, {}),
+    err => err instanceof EnvSaafError
+      && err.errors.includes('DB_HOST: "required" and "default" cannot be used together (remove one of them)'),
+  );
+  // Only one of the two, `required: false`, or `requiredIf` + `default` are still fine.
+  assert.doesNotThrow(() => validateSchema({
+    A: { type: 'port', required: true },
+    B: { type: 'port', default: 3000 },
+    C: { type: 'port', required: false, default: 3000 },
+    MODE: { type: 'string', default: 'dev' },
+    D: { type: 'url', default: 'https://example.com', requiredIf: { key: 'MODE', equals: 'production' } },
+  }));
+}
+
 // Issue #46: `array` type — split a delimited string into a typed array.
 {
   // 1. Default `of: 'string'` and explicit `of: 'string'`, trimming items by default.
@@ -4208,7 +4240,7 @@ assert.deepStrictEqual(
   const defaulted = validateEnv(
     {
       HOST: { type: 'string', default: 'localhost' },
-      PORT: { type: 'port', required: true, default: 3000 },
+      PORT: { type: 'port', default: 3000 },
     },
     { HOST: '', PORT: '' },
   );

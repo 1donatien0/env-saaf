@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Fixed: `validateSchema` rejects `required: true` together with a `default` (the default means the key can never be missing, so `required` was dead config). The `init` starter schema no longer sets both on `PORT` (fixes #340).
+
 - Fixed: duration bound errors name the duration and show milliseconds for numeric bounds, while preserving explicit units in string bounds (fixes #341).
 
 - Docs: document CLI exit codes and JSON results for `check`, `scan`, `example` and `init` (fixes #360).
