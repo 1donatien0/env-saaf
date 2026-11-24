@@ -147,6 +147,37 @@ try {
     assert.deepStrictEqual(JSON.parse(run(['scan', dir, '--json'], dir).stdout), { ok: true, vars: ['ONLY'] });
   }
 
+  // --- issue #356: init --from-example infers the unambiguous shapes ---------
+  {
+    const example = [
+      'SESSION_TTL=30m',
+      'RELEASE=1.4.2',
+      'TRACE_ID=550e8400-e29b-41d4-a716-446655440000',
+      'START_DATE=2026-01-31',
+      'FEATURE_FLAGS={"beta":true}',
+      'BUILD_HASH=deadbeefcafebabe',
+      'PLAIN=cafe',
+      '',
+    ].join('\n');
+    const keys = ['SESSION_TTL', 'RELEASE', 'TRACE_ID', 'START_DATE', 'FEATURE_FLAGS', 'BUILD_HASH', 'PLAIN'];
+    const dir = mkProject({
+      '.env.example': example,
+      'src/app.js': 'console.log(' + keys.map(k => `process.env.${k}`).join(', ') + ');\n',
+    });
+    const r = run(['init', dir, '--from-example'], dir);
+    assert.strictEqual(r.status, 0, r.stdout + r.stderr);
+    const schemaText = fs.readFileSync(path.join(dir, 'env.schema.js'), 'utf8');
+    for (const [key, type] of [
+      ['SESSION_TTL', 'duration'], ['RELEASE', 'semver'], ['TRACE_ID', 'uuid'],
+      ['START_DATE', 'date'], ['FEATURE_FLAGS', 'json'], ['BUILD_HASH', 'hex'], ['PLAIN', 'string'],
+    ]) {
+      assert.ok(schemaText.includes(`${key}: { type: '${type}' }`), `${key} should infer as ${type}`);
+    }
+    // The inferred schema validates the samples it came from.
+    const c = run(['check', dir, '--file', '.env.example', '--schema', 'env.schema.js'], dir);
+    assert.strictEqual(c.status, 0, c.stdout + c.stderr);
+  }
+
   // --- check --schema: an invalid value in the real .env fails the check ----
   {
     const dir = mkProject({

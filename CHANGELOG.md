@@ -7,6 +7,11 @@
   instead of living only as README snippets. Both fail with the env-saaf message
   when a required value is missing (fixes #364).
 
+- Added: `init --from-example` infers `uuid`, `date`, `duration`, `semver`,
+  `json` and `hex` from unambiguous sample values, each confirmed with the real
+  validator, so the generated starter schema needs less hand-editing
+  (fixes #356). Existing inferences are unchanged.
+
 - Fixed: `validateSchema` rejects `required: true` together with a `default` (the default means the key can never be missing, so `required` was dead config). The `init` starter schema no longer sets both on `PORT` (fixes #340).
 
 - Fixed: duration bound errors name the duration and show milliseconds for numeric bounds, while preserving explicit units in string bounds (fixes #341).
