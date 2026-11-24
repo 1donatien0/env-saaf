@@ -22,11 +22,14 @@ export interface EnvRule {
   /**
    * Allowed range for numeric values (`number`, `int`, `port`, `duration`).
    * `min` alone or `max` alone both work; out-of-range values are
-   * rejected with an error naming the allowed range.
+   * rejected with an error naming the allowed range. For `date` rules the
+   * bounds are ISO date (or datetime) strings instead, e.g. `min: '2026-01-01'`,
+   * compared chronologically against the parsed value; a number is rejected
+   * up front for `date` rules.
    */
-  min?: number;
+  min?: number | string;
   /** See `min`. */
-  max?: number;
+  max?: number | string;
   /**
    * Allowed length for string values (`string`, `email`, `url`, `file`, `uuid`, `hex`,
    * `ipv4`, `semver`, `base64`, `host`).
