@@ -824,6 +824,119 @@ An empty value stays empty — `maskValue('')` returns `''`, so an unset secret 
 
 `maskSecrets` recurses into plain objects and arrays, copies their shape and masks string leaves. Other primitives and non-plain objects (`Date`, `RegExp`, class instances) keep their values and identity. A repeated plain-object or array reference, including a cycle, becomes `'[Circular]'`. The input is never mutated. TypeScript's `Masked<T>` preserves non-string leaf types. These helpers have no schema or sensitive-key context: a numeric secret or a secret stored inside a class instance is not masked, so do not treat their output as automatically safe to log.
 
+## Troubleshooting
+
+Each message below is quoted as the current version prints it. Triggering the error is the quickest way to see the whole message: `validateEnv` prints nothing on success, so the text in a failed run is exactly what a search engine will index.
+
+### `unknown option "..."`
+
+```
+Invalid schema:
+  - PORT: unknown option "requried"
+```
+
+A misspelled option in a rule. The message names the key and the option as written; the [types reference](#types-reference) lists the options each type accepts, and the paragraph after the table lists the ones every type shares (`required`, `requiredIf`, `default`, `validate`, `transform`, `sensitive`, `aliases`, plus `choices` and `trim` where they apply).
+
+The same message shape appears for a misspelled call option:
+
+```
+Invalid environment variables:
+  - unknown option "throwOnErr" (validateEnv accepts: throwOnError, strict, onWarn, formatError)
+```
+
+Fix the spelling. `validateSchema(schema)` runs the same check without an environment, so a typo fails in a test rather than at boot.
+
+### `unknown type "..."`
+
+```
+Invalid schema:
+  - PORT: unknown type "prot"
+```
+
+The `type` is not one the library knows. Kinds are listed in the [types reference](#types-reference) (`string`, `number`, `int`, `boolean`, `url`, `port`, `duration`, `date`, `json`, `array`, `email`, `uuid`, `hex`, `ipv4`, `semver`, `base64`, `host`, `file`). `number` and `int` differ: `int` rejects `3.5`.
+
+### `default: unknown option "PORT"`
+
+```
+Invalid schema:
+  - default: unknown option "PORT"
+```
+
+A schema file whose `export default` was not unwrapped, so the schema object became a key named `default` whose value is the real schema. This happens when the whole module namespace is passed to `validateEnv`:
+
+```js
+import * as schema from './env.schema.mjs';   // { default: { PORT: ... } }
+validateEnv(schema, process.env);             // -> default: unknown option "PORT"
+```
+
+Import the default export instead, or unwrap it:
+
+```js
+import schema from './env.schema.mjs';
+validateEnv(schema, process.env);
+```
+
+The CLI's `--schema` already unwraps a single `default` export when it loads the file, so this only affects code that imports the schema itself. A CommonJS schema (`module.exports = { ... }`) works as-is; in a `"type": "module"` project name it `*.cjs` if the CLI must `require()` it.
+
+### Strict mode reports variables your deployment has but the schema does not
+
+```
+Invalid environment variables:
+  - EXTRA: set but not in schema (strict mode)
+```
+
+With `{ strict: true }`, any key present in the environment that the schema does not declare is an error, which is the point: a typo in a variable name cannot silently fall back to a default. When the variable is real but not used by this app (a platform-injected `HOSTNAME`, a CI variable, a shared `.env`), declare it rather than turning strict mode off:
+
+```js
+const env = validateEnv(
+  {
+    PORT: { type: 'port', default: 3000 },
+    // Used by the platform, not by this app; declared so strict mode stays on.
+    HOSTNAME: { type: 'string' },
+  },
+  process.env,
+  { strict: true },
+);
+```
+
+If a whole prefix is outside your control, read the environment into an explicit object and pass that instead of `process.env`.
+
+### `parseEnvFile expects .env text, not a file path`
+
+```
+parseEnvFile expects .env text, not a file path — did you mean loadEnv(schema, { path: '.env' })?
+```
+
+`parseEnvFile` parses a string; it never reads a file. When you already have the text (a test fixture, a secret store, a downloaded blob) keep it, but if the value came from `fs.readFileSync`, pass `utf8` and the result, or let `loadEnv` read the file for you:
+
+```js
+// Before: the path is parsed as .env text and the call fails.
+parseEnvFile('.env');
+
+// The file's contents:
+parseEnvFile(fs.readFileSync('.env', 'utf8'));
+
+// Or read and validate in one step:
+const env = loadEnv({ PORT: { type: 'port', required: true } }, { path: '.env' });
+```
+
+### `expected KEY=VALUE` and `duplicate key`
+
+```
+line 2: expected KEY=VALUE
+```
+
+```
+env-saaf: duplicate key A at line 2 (first defined at line 1)
+```
+
+Both come from the `.env` parser and carry the line number.
+
+- A line without `=` is not an assignment. Comments start with `#`; blank lines are ignored. If the text is YAML, JSON or a shell script, parse it with that format's reader and pass the resulting object to `validateEnv`.
+- A duplicate key is an error rather than last-one-wins, because two entries for the same variable usually mean a merge went wrong and the value that wins depends on the parser. Keep one entry per key; to layer files, pass a list (`{ paths: ['.env', '.env.local'] }`) where a later file may override an earlier one on purpose.
+
+Both errors name the line, so `nl -ba .env` shows the offending row.
+
 ## How env-saaf compares to envalid, joi, and zod
 
 | | `env-saaf` | `envalid` | `joi` | `zod` |
