@@ -403,7 +403,7 @@ API_URL=https://${HOST}/api
 
 Quoted values कई lines में भी फैल सकती हैं (PEM keys, JSON blobs) — parsing closing quote तक जारी रहती है। Backslash-escaped quote (single quotes के अंदर `\'`, double quotes के अंदर `\"`) value का हिस्सा ही रहता है, इसलिए `B='it\'s'` होता है `it's`; दूसरे backslashes, जैसे किसी Windows path में, वैसे ही रहते हैं।
 
-बिना `=` वाली bare line, या invalid key वाला assignment (जैसे `app.name`, `MY-KEY` या `MY KEY`), अपनी line number के साथ syntax error उठाता है, value को echo किए बिना। Keys को `[A-Za-z_][A-Za-z0-9_]*` से match करना होता है। खाली value के लिए `KEY=` इस्तेमाल करें।
+बिना `=` वाली bare line, या invalid key वाला assignment (जैसे `MY KEY`), अपनी line number के साथ syntax error उठाता है, value को echo किए बिना। Assignment की keys को `[A-Za-z_][A-Za-z0-9_.-]*` से match करना होता है: पहले character के बाद dot और dash मान्य हैं (जैसे `app.name` और `MY-KEY`), लेकिन key के अंदर space मान्य नहीं है। खाली value के लिए `KEY=` इस्तेमाल करें।
 
 Async code में, filesystem I/O पर block किए बिना files पढ़ने के लिए `loadEnvAsync` इस्तेमाल करें।
 

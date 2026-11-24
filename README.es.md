@@ -401,7 +401,7 @@ Usa `${VAR:-fallback}` para proporcionar un valor alternativo cuando un valor no
 
 Los valores entre comillas también pueden abarcar varias líneas (claves PEM, bloques JSON): el análisis continúa hasta la comilla de cierre. Una comilla escapada con barra invertida (`\'` dentro de comillas simples, `\"` dentro de comillas dobles) se queda como parte del valor, así que `B='it\'s'` es `it's`; las demás barras invertidas, como las de una ruta de Windows, se conservan tal cual.
 
-Una línea sin más y sin `=`, o una asignación con una clave no válida (como `app.name`, `MY-KEY` o `MY KEY`), produce un error de sintaxis con su número de línea, sin repetir el valor. Las claves deben coincidir con `[A-Za-z_][A-Za-z0-9_]*`. Usa `KEY=` para un valor vacío.
+Una línea sin más y sin `=`, o una asignación con una clave no válida (como `MY KEY`), produce un error de sintaxis con su número de línea, sin repetir el valor. Las claves de asignación deben coincidir con `[A-Za-z_][A-Za-z0-9_.-]*`: se admiten puntos y guiones después del primer carácter (como en `app.name` y `MY-KEY`), pero no espacios dentro de la clave. Usa `KEY=` para un valor vacío.
 
 En código asíncrono, usa `loadEnvAsync` para leer archivos sin bloquear en la E/S del sistema de archivos.
 

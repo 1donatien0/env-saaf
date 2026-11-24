@@ -264,7 +264,7 @@ assert.deepStrictEqual(diffEnv(['A', 'B'], ['A', 'C']), { usedNotDocumented: ['B
 // Issue #221: assignment-shaped lines with invalid keys must not disappear.
 {
   const secret = 'do-not-echo-this-value';
-  for (const key of ['app.name', 'MY-KEY', 'MY KEY', '9NAME', '', '?', '??']) {
+  for (const key of ['MY KEY', '9NAME', '.NAME', '-NAME', '', '?', '??', 'A?B']) {
     assert.throws(
       () => parseEnvFile(`${key}=${secret}`),
       err => err instanceof SyntaxError && err.message === 'line 1: expected KEY=VALUE',
@@ -292,6 +292,27 @@ assert.deepStrictEqual(diffEnv(['A', 'B'], ['A', 'C']), { usedNotDocumented: ['B
       _NAME9: 'a=b # literal', SINGLE: 'MY KEY=literal',
       MULTI: 'first\napp.name=literal\nMY-KEY=literal\nMY KEY=literal\nlast',
       PLAIN: '1', EMPTY: '',
+    });
+  }
+}
+
+// Issue #290: dotted and dashed dotenv names stay flat.
+{
+  assert.deepStrictEqual(parseEnvFile('DB.PORT=1\nMY-KEY=2\nA.B-C_D=3\n'), {
+    'DB.PORT': '1', 'MY-KEY': '2', 'A.B-C_D': '3',
+  });
+
+  const input = 'export\tapp.name = "first # literal\r\n${_NAME9}" # trailing\r\n'
+    + '_NAME9=second\r\nDB.PORT=1\r\nMY=plain\r\nMY-KEY=2\r\n'
+    + 'REF=${DB.PORT}/${MY-KEY}\r\n';
+  assert.deepStrictEqual(parseEnvFile(input), {
+    'app.name': 'first # literal\nsecond', _NAME9: 'second', 'DB.PORT': '1',
+    MY: 'plain', 'MY-KEY': '2', REF: '${DB.PORT}/plain',
+  });
+
+  for (const key of ['DB.PORT', 'MY-KEY']) {
+    assert.throws(() => parseEnvFile(`${key}=1\n# comment\nexport ${key}=2`), {
+      message: `env-saaf: duplicate key ${key} at line 3 (first defined at line 1)`,
     });
   }
 }
@@ -1983,7 +2004,7 @@ assert.deepStrictEqual(
     assert.doesNotMatch(check.stderr, /fake secret value/);
 
     // Issue #221: invalid assignment keys use the same CLI error contract.
-    fs.writeFileSync(path.join(dir, '.env.example'), '# config\napp.name=private-value\n');
+    fs.writeFileSync(path.join(dir, '.env.example'), '# config\nAPP NAME=private-value\n');
     const invalidKey = run('scan', dir, '--json');
     assert.strictEqual(invalidKey.status, 2);
     assert.strictEqual(invalidKey.stderr, '');
@@ -1993,7 +2014,7 @@ assert.deepStrictEqual(
     assert.doesNotMatch(invalidKey.stdout, /private-value/);
 
     fs.writeFileSync(path.join(dir, '.env.example'), 'FOO=\n');
-    fs.writeFileSync(path.join(dir, '.env'), 'FOO=ok\r\nMY-KEY=private-value\r\n');
+    fs.writeFileSync(path.join(dir, '.env'), 'FOO=ok\r\nMY KEY=private-value\r\n');
     const invalidEnv = run('check', dir);
     assert.strictEqual(invalidEnv.status, 2);
     assert.strictEqual(invalidEnv.stdout, '');
