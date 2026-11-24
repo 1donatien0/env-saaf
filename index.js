@@ -249,19 +249,49 @@ function validateSchemaRules(schema, warn, patterns = new Map()) {
     if (rule.transform !== undefined && typeof rule.transform !== 'function') {
       errors.push(`${key}: "transform" must be a function`);
     }
-    for (const opt of ['min', 'max']) {
-      if (rule[opt] !== undefined && (typeof rule[opt] !== 'number' || !Number.isFinite(rule[opt]))) {
-        errors.push(`${key}: "${opt}" must be a number`);
+    // Issue #292: for `date` rules, `min` / `max` are ISO date (or
+    // datetime) strings — or Date objects — compared chronologically
+    // against the parsed value. A number is rejected with a clear message
+    // rather than accepted with unclear meaning, and a bound that is not
+    // a valid date is a schema error.
+    if (effectiveType === 'date') {
+      for (const opt of ['min', 'max']) {
+        if (rule[opt] === undefined) continue;
+        if (typeof rule[opt] === 'number') {
+          errors.push(`${key}: "${opt}" must be an ISO date string for type 'date' (e.g. '2026-01-01'), not a number`);
+        } else {
+          let parsed = null;
+          try { parsed = coerce(key, rule[opt], 'date'); } catch (_) { /* not a date */ }
+          if (!(parsed instanceof Date) || Number.isNaN(parsed.getTime())) {
+            errors.push(`${key}: "${opt}" must be a valid ISO 8601 date for type 'date' (e.g. '2026-01-01')`);
+          }
+        }
       }
-    }
-    // Issue #220: `min` above `max` describes a range that can never match,
-    // so it is a schema bug — reject it up front instead of failing oddly
-    // (or never) when the variable is checked.
-    if (rule.min !== undefined && rule.max !== undefined
-      && typeof rule.min === 'number' && typeof rule.max === 'number'
-      && Number.isFinite(rule.min) && Number.isFinite(rule.max)
-      && rule.min > rule.max) {
-      errors.push(`${key}: "min" must not exceed "max"`);
+      // Issue #220, for dates: `min` above `max` describes a range that
+      // can never match, so it is a schema bug.
+      if (rule.min !== undefined && rule.max !== undefined) {
+        let lo = null, hi = null;
+        try { lo = coerce(key, rule.min, 'date'); } catch (_) {}
+        try { hi = coerce(key, rule.max, 'date'); } catch (_) {}
+        if (lo instanceof Date && hi instanceof Date && lo.getTime() > hi.getTime()) {
+          errors.push(`${key}: "min" must not exceed "max"`);
+        }
+      }
+    } else {
+      for (const opt of ['min', 'max']) {
+        if (rule[opt] !== undefined && (typeof rule[opt] !== 'number' || !Number.isFinite(rule[opt]))) {
+          errors.push(`${key}: "${opt}" must be a number`);
+        }
+      }
+      // Issue #220: `min` above `max` describes a range that can never match,
+      // so it is a schema bug — reject it up front instead of failing oddly
+      // (or never) when the variable is checked.
+      if (rule.min !== undefined && rule.max !== undefined
+        && typeof rule.min === 'number' && typeof rule.max === 'number'
+        && Number.isFinite(rule.min) && Number.isFinite(rule.max)
+        && rule.min > rule.max) {
+        errors.push(`${key}: "min" must not exceed "max"`);
+      }
     }
     for (const opt of ['minLength', 'maxLength']) {
       if (rule[opt] !== undefined && (!Number.isInteger(rule[opt]) || rule[opt] < 0)) {
@@ -950,6 +980,28 @@ function validateEnvCore(schema, env, options) {
           const range = rule.min !== undefined && rule.max !== undefined ? `${rule.min}–${rule.max}`
             : rule.min !== undefined ? `at least ${rule.min}` : `at most ${rule.max}`;
           errors.push(`${key}: expected a number ${range}, got "${shown}"`);
+          continue;
+        }
+      }
+      // Issue #292: min/max bounds for `date` values — ISO date/datetime
+      // strings (or Date objects) from the rule, compared chronologically
+      // against the parsed Date. Inclusive on both ends; a date-time value
+      // compares against a date-only bound by its instant, so
+      // '2026-01-01T00:00:00Z' is on the '2026-01-01' bound. Bounds are
+      // validated up front in validateSchema, so an unparseable bound here
+      // can only come from a schema that skipped validation; it is skipped
+      // rather than crashing the run. Defaults go through the same check
+      // because they are coerced here too.
+      if (val instanceof Date && (rule.min !== undefined || rule.max !== undefined)) {
+        let lo = null, hi = null;
+        try { if (rule.min !== undefined) lo = coerce(key, rule.min, 'date'); } catch (_) {}
+        try { if (rule.max !== undefined) hi = coerce(key, rule.max, 'date'); } catch (_) {}
+        const t = val.getTime();
+        if ((lo !== null && t < lo.getTime()) || (hi !== null && t > hi.getTime())) {
+          const boundText = (b) => (b instanceof Date ? b.toISOString().slice(0, 10) : String(b));
+          const range = lo !== null && hi !== null ? `between ${boundText(rule.min)} and ${boundText(rule.max)}`
+            : lo !== null ? `on or after ${boundText(rule.min)}` : `on or before ${boundText(rule.max)}`;
+          errors.push(`${key}: expected a date ${range}, got "${shown}"`);
           continue;
         }
       }
@@ -1801,6 +1853,23 @@ function scalarPlaceholder(rule, stringGrowth) {
     const bounded = boundedStringPlaceholder(type, placeholder, rule, limit);
     stringGrowth.remaining -= Math.max(0, bounded.length - placeholder.length);
     return bounded;
+  }
+  // Issue #292: a date placeholder outside its own min/max would fail its
+  // own check — use the bound itself when the default example is out of
+  // range. An unparseable bound leaves the default example (the schema
+  // check rejects it up front anyway).
+  if (type === 'date') {
+    let example = placeholder;
+    try {
+      const exampleDate = coerce('placeholder', placeholder, 'date');
+      if (typeof rule.min === 'string') {
+        if (exampleDate < coerce('placeholder', rule.min, 'date')) example = rule.min;
+      }
+      if (typeof rule.max === 'string') {
+        if (exampleDate > coerce('placeholder', rule.max, 'date')) example = rule.max;
+      }
+    } catch (_) { /* keep the default example */ }
+    return example;
   }
   if (!['number', 'int', 'port', 'duration'].includes(type)) return placeholder;
 

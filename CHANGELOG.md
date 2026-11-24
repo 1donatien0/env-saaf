@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Added: `date` rules accept `min` / `max` bounds as ISO date (or datetime) strings — or `Date` objects — compared chronologically against the parsed value, inclusive on both ends; a numeric bound or a `min` above `max` is a schema error, and `generateExample` uses the bound when the default example falls outside the range (fixes #292).
+
 - Fixed: a throwing `formatError` hook no longer vanishes behind the default message — its error now propagates out of `validateEnv` / `loadEnv` / `loadEnvAsync` unchanged, so a bug in the hook is visible instead of silent; a hook returning a non-string still falls back to the default message (fixes #279).
 
 - Fixed: grouped result objects are frozen along with the top-level result in `validateEnv`, `loadEnv`, and `loadEnvAsync`, while rule values keep their existing mutability (fixes #284).

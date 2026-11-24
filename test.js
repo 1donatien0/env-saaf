@@ -1846,6 +1846,49 @@ assert.deepStrictEqual(
   assert.ok(generateExample({ LAUNCH: { type: 'date', required: true } }).includes('LAUNCH=2026-01-31'));
 }
 
+// Issue #292: `date` type supports `min` / `max` bounds as ISO dates,
+// compared chronologically against the parsed value. Bounds are inclusive.
+{
+  const schema = { D: { type: 'date', min: '2026-01-01', max: '2026-12-31' } };
+  // Inside the range, and exactly on each bound, passes.
+  assert.strictEqual(validateEnv(schema, { D: '2026-06-15' }).D.toISOString().slice(0, 10), '2026-06-15');
+  assert.strictEqual(validateEnv(schema, { D: '2026-01-01' }).D.toISOString().slice(0, 10), '2026-01-01');
+  assert.strictEqual(validateEnv(schema, { D: '2026-12-31' }).D.toISOString().slice(0, 10), '2026-12-31');
+  // Outside either bound fails with an error naming the allowed range.
+  assert.throws(() => validateEnv(schema, { D: '2025-12-31' }), /D: expected a date between 2026-01-01 and 2026-12-31, got "2025-12-31"/);
+  assert.throws(() => validateEnv(schema, { D: '2027-01-01' }), /D: expected a date between 2026-01-01 and 2026-12-31, got "2027-01-01"/);
+  // Either bound works alone.
+  assert.throws(() => validateEnv({ D: { type: 'date', min: '2026-01-01' } }, { D: '2025-12-31' }), /on or after 2026-01-01/);
+  assert.strictEqual(validateEnv({ D: { type: 'date', min: '2026-01-01' } }, { D: '2030-01-01' }).D.toISOString().slice(0, 10), '2030-01-01');
+  assert.throws(() => validateEnv({ D: { type: 'date', max: '2026-12-31' } }, { D: '2027-01-01' }), /on or before 2026-12-31/);
+  // Date-time values compare against date-only bounds by their instant.
+  assert.strictEqual(validateEnv(schema, { D: '2026-01-01T00:00:00Z' }).D.toISOString(), '2026-01-01T00:00:00.000Z');
+  // '2025-12-31T23:00:00-01:00' is exactly the min instant, so it passes;
+  // one second earlier (in UTC) fails.
+  assert.strictEqual(validateEnv(schema, { D: '2025-12-31T23:00:00-01:00' }).D.toISOString(), '2026-01-01T00:00:00.000Z');
+  assert.throws(() => validateEnv(schema, { D: '2025-12-31T22:59:59-01:00' }), /D: expected a date between 2026-01-01 and 2026-12-31/);
+  // Datetime bounds work too.
+  assert.throws(() => validateEnv({ D: { type: 'date', min: '2026-01-01T12:00:00Z' } }, { D: '2026-01-01T10:00:00Z' }),
+    /on or after 2026-01-01T12:00:00Z/);
+  // A Date object as a bound works; a default outside the bounds fails like a value.
+  assert.strictEqual(validateEnv({ D: { type: 'date', min: new Date('2026-01-01T00:00:00Z') } }, { D: '2026-06-01' }).D.toISOString().slice(0, 10), '2026-06-01');
+  assert.throws(() => validateEnv({ D: { type: 'date', min: '2026-01-01', default: '2025-01-01' } }, {}), /on or after 2026-01-01/);
+  // Schema errors: a numeric bound, a nonsense bound, and min above max.
+  assert.throws(() => validateSchema({ D: { type: 'date', min: 20260101 } }), /D: "min" must be an ISO date string for type 'date'/);
+  assert.throws(() => validateSchema({ D: { type: 'date', min: 'next week' } }), /D: "min" must be a valid ISO 8601 date for type 'date'/);
+  assert.throws(() => validateSchema({ D: { type: 'date', min: '2027-01-01', max: '2026-01-01' } }), /D: "min" must not exceed "max"/);
+  assert.throws(() => validateSchema({ D: { type: 'date', max: 0 } }), /D: "max" must be an ISO date string for type 'date'/);
+  // throwOnError:false collects the bound failure with the others.
+  const collected = validateEnv(schema, { D: '2025-01-01' }, { throwOnError: false });
+  assert.strictEqual(collected.errors.length, 1);
+  assert.match(collected.errors[0], /D: expected a date between 2026-01-01 and 2026-12-31/);
+  // generateExample uses the bound when the default example is out of range.
+  assert.ok(generateExample({ D: { type: 'date', min: '2027-01-01' } }).includes('D=2027-01-01'));
+  assert.ok(generateExample({ D: { type: 'date', max: '2026-01-15' } }).includes('D=2026-01-15'));
+  assert.ok(generateExample({ D: { type: 'date', min: '2026-01-01', max: '2026-12-31' } }).includes('D=2026-01-31'));
+  console.log('date min/max tests passed');
+}
+
 // Issue #41: 'duration' type — human durations ('15m', '2h', '1d') become milliseconds.
 {
   const schema = { TIMEOUT: { type: 'duration' } };

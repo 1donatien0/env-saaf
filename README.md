@@ -61,7 +61,7 @@ Environment inputs are strings. Output below is before an optional `transform`.
 | `ipv4` | Four decimal octets, each 0 to 255; no leading zeroes | `string` | `trim`, `minLength`, `maxLength`, `pattern` |
 | `semver` | `MAJOR.MINOR.PATCH`, optional prerelease and build suffixes, and one optional lowercase `v` prefix (`v1.2.3`). Leading numeric zeroes and uppercase `V` are rejected. | `string` | `trim`, `minLength`, `maxLength`, `pattern` |
 | `base64` | Standard or URL-safe alphabet, with optional padding. | `string` | `trim`, `minLength`, `maxLength`, `pattern` |
-| `date` | Valid `YYYY-MM-DD` or datetime with `T` and hours/minutes; optional seconds, fraction and `Z` or numeric offset. Accepts valid `Date` defaults. | `Date` | `trim` |
+| `date` | Valid `YYYY-MM-DD` or datetime with `T` and hours/minutes; optional seconds, fraction and `Z` or numeric offset. Accepts valid `Date` defaults. | `Date` | `trim`, `min`, `max` (ISO date strings) |
 | `duration` | Human duration: `500ms`, `30s`, `15m`, `2h`, `1d`, `1w`, compounds like `1h30m`; a bare number is milliseconds | `number` (milliseconds) | `trim`, `min`, `max` |
 | `host` | Hostname (`db.internal`, `localhost`) or IPv4/IPv6 address; no scheme, path or port | `string` | `trim`, `minLength`, `maxLength`, `pattern` |
 | `array` | Delimited list split by `separator` (default `,`) with each item coerced as `of` (default `string`). Empty items are rejected. Accepts array defaults. | Typed array (`T[]`) | `of`, `separator`, `trim`, `protocols` (when `of: 'url'`), `minItems`, `maxItems`, `unique` |
@@ -270,6 +270,16 @@ const env = validateEnv({
 ```
 
 `int` is like `number` but only accepts plain integer literals — `42`, `-3` and `007` pass, while `3.5`, `1.0` and `1e3` fail (decimal and scientific spellings are not integer literals, even when the value happens to be whole). `port` follows the same rule. `min` and `max` work on `number`, `int` and `port`; either one can be used alone, and an out-of-range value is rejected with an error naming the allowed range.
+
+### `date` type and `min`/`max` — chronological bounds
+
+```js
+const env = validateEnv({
+  LAUNCH_DATE: { type: 'date', min: '2026-01-01', max: '2026-12-31' },
+});
+```
+
+For `date` rules, `min` and `max` are ISO date (or datetime) strings — or `Date` objects — compared chronologically against the parsed value, so `2026-01-01T00:00:00Z` is exactly on the `2026-01-01` bound. Either bound can be used alone, both ends are inclusive, and an out-of-range value is rejected with an error naming the allowed range (`expected a date on or after 2026-01-01, got "2025-12-31"`). A numeric bound is rejected up front as a schema error, as is a bound that is not a valid date or a `min` above `max`. `generateExample` uses the bound itself when the default `2026-01-31` example falls outside the range, so a generated `.env.example` still passes `check`. JSON Schema has no keyword for comparing date strings, so `toJsonSchema` does not render the bounds.
 
 ### `json` type and `minLength`/`maxLength` — structured values and string lengths
 
