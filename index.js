@@ -1390,6 +1390,28 @@ function* loadEnvSteps(schema, options) {
   return Object.freeze(groupOf.size ? nestGroups(out, groupOf) : out);
 }
 
+/**
+ * Expand backslash escapes in the inner text of a double-quoted value
+ * (issue #333, dotenv parity): `\n` becomes a real newline, `\r` a carriage
+ * return, `\\` a single backslash, and `\"` a quote. Any other backslash
+ * stays literal, so `C:\path` is unchanged and `\\n` (an escaped backslash
+ * followed by `n`) stays the literal two characters `\n`.
+ */
+function expandDoubleQuotedEscapes(inner) {
+  let out = '';
+  for (let i = 0; i < inner.length; i++) {
+    const ch = inner[i];
+    if (ch !== '\\' || i + 1 >= inner.length) { out += ch; continue; }
+    const next = inner[i + 1];
+    if (next === 'n') { out += '\n'; i++; }
+    else if (next === 'r') { out += '\r'; i++; }
+    else if (next === '\\') { out += '\\'; i++; }
+    else if (next === '"') { out += '"'; i++; }
+    else out += ch;
+  }
+  return out;
+}
+
 /** Parse .env text -> { KEY: value }. Handles quotes, `export `, comments,
  * multiline quoted values, and ${VAR} interpolation. */
 /**
@@ -1460,10 +1482,13 @@ function parseEnvFile(text) {
         end = closingQuoteIndex(val, q);
       }
       // A backslash-escaped quote is part of the value, not the end of it
-      // (B='it\'s' -> it's; D="it\"s" -> it"s). Both quote styles behave the
-      // same way; other backslashes are left untouched (C:\path stays literal).
-      const escapedQuote = String.fromCharCode(92) + q;
-      val = end === -1 ? val.slice(1) : val.slice(1, end).split(escapedQuote).join(q);
+      // (B='it\'s' -> it's; D="it\"s" -> it"s). Single-quoted values stay
+      // literal apart from that. Double-quoted values also expand \n and
+      // \r (issue #333, dotenv parity); other backslashes are left
+      // untouched (C:\path stays literal), and \\n stays literal too.
+      const inner = end === -1 ? val.slice(1) : val.slice(1, end);
+      val = quote === 'double' ? expandDoubleQuotedEscapes(inner)
+        : inner.split(String.fromCharCode(92) + q).join(q);
     } else {
       // Unquoted value: a '#' at the start of the value or after whitespace begins an inline comment
       // (PORT=3000 # my port -> 3000; a '#frag' inside a URL without a preceding space is safe)

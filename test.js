@@ -1428,6 +1428,28 @@ assert.deepStrictEqual(
   parseEnvFile("KEY='line1\nline2' # trailing\nNEXT=ok\n"),
   { KEY: 'line1\nline2', NEXT: 'ok' });
 
+// Issue #333: parseEnvFile — double-quoted values expand \n and \r
+// (dotenv parity); single-quoted values stay literal, and an escaped
+// backslash keeps the next character literal.
+assert.deepStrictEqual(
+  parseEnvFile('KEY="line1\\nline2"\n'),
+  { KEY: 'line1\nline2' });
+assert.deepStrictEqual(
+  parseEnvFile('KEY="a\\rb"\n'),
+  { KEY: 'a\rb' });
+assert.deepStrictEqual(
+  parseEnvFile("KEY='a\\nb'\n"),
+  { KEY: 'a\\nb' });
+assert.deepStrictEqual(
+  parseEnvFile('KEY="a\\\\nb"\n'),
+  { KEY: 'a\\nb' });
+assert.deepStrictEqual(
+  parseEnvFile('KEY="-----BEGIN-----\\nabc123\\n-----END-----"\nNEXT=ok\n'),
+  { KEY: '-----BEGIN-----\nabc123\n-----END-----', NEXT: 'ok' });
+assert.deepStrictEqual(
+  parseEnvFile('KEY="C:\\\\path"\n'),
+  { KEY: 'C:\\path' });
+
 // Issue #22: parseEnvFile — ${VAR} interpolation in double-quoted and
 // unquoted values; the file's own values win over process.env; nested
 // references expand; single-quoted and \${...} escapes stay literal;

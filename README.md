@@ -458,7 +458,7 @@ API_URL=https://${HOST}/api
 
 Use `${VAR:-fallback}` to supply a fallback when a value is unset or expands to an empty string. Use `${VAR-fallback}` to supply it only when the name is unset. For example, `API_URL=https://${HOST:-localhost}/api` uses `localhost` when `HOST` has no value. Defaults can include references such as `${HOST:-${DEFAULT_HOST}}`.
 
-Quoted values may also span several lines (PEM keys, JSON blobs) — parsing continues until the closing quote. A backslash-escaped quote (`\'` inside single quotes, `\"` inside double quotes) stays part of the value, so `B='it\'s'` is `it's`; other backslashes, such as a Windows path, are kept as-is.
+Quoted values may also span several lines (PEM keys, JSON blobs) — parsing continues until the closing quote. A backslash-escaped quote (`\'` inside single quotes, `\"` inside double quotes) stays part of the value, so `B='it\'s'` is `it's`; other backslashes, such as a Windows path, are kept as-is. Inside double quotes, `\n` and `\r` become a real newline and carriage return (as in dotenv), so a PEM key can be written on one line as `PRIVATE_KEY="-----BEGIN-----\n..."`; write `\\n` for a literal backslash-n, and use single quotes when every backslash must stay literal.
 
 A bare line without `=`, or an assignment with an invalid key (such as `MY KEY`), raises a syntax error with its line number, without echoing the value. Assignment keys must match `[A-Za-z_][A-Za-z0-9_.-]*`: dots and dashes are allowed after the first character (as in `app.name` and `MY-KEY`), but spaces within a key are not. Use `KEY=` for an empty value.
 
