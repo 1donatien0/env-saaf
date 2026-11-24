@@ -6993,10 +6993,6 @@ assert.deepStrictEqual(scanCode("const env = process.env; env['DB.PORT']; env[`M
   assert.deepStrictEqual(formatted.details, [{ key: 'PORT', message: 'missing required variable' }]);
 }
 
-Promise.all([watchModeTest, watchModeErrorPathTest, watchModeEsmSchemaTest, loadEnvAsyncTest, formatErrorThrowingHookTest])
-  .then(() => console.log('env-saaf v1.5.0: all tests passed'))
-  .catch((err) => { console.error(err); process.exit(1); });
-
 // Issue #293: pattern annotations compose without changing example values.
 {
   const schema = {
@@ -7022,3 +7018,37 @@ Promise.all([watchModeTest, watchModeErrorPathTest, watchModeEsmSchemaTest, load
   assert.deepStrictEqual(values(example), values(generateExample(plain)));
   assert.ok(!generateExample(plain).includes('pattern:'));
 }
+
+// Issue #359: CLI `scan --stdin` scans piped code through scanCode.
+{
+  const { spawnSync } = require('node:child_process');
+  const path = require('node:path');
+  const cli = path.join(__dirname, 'cli.js');
+  const runStdin = (args, input) => spawnSync(process.execPath, [cli, ...args], {
+    encoding: 'utf8',
+    input,
+  });
+
+  const code = "const a = process.env.BETA;\n// process.env.IGNORED\nconst b = import.meta.env['ALPHA'];\n";
+  const plain = runStdin(['scan', '--stdin'], code);
+  assert.strictEqual(plain.status, 0, plain.stderr);
+  assert.strictEqual(plain.stdout, scanCode(code).join('\n') + '\n');
+  assert.strictEqual(plain.stderr, '');
+
+  const json = runStdin(['scan', '--stdin', '--json'], code);
+  assert.strictEqual(json.status, 0, json.stderr);
+  assert.deepStrictEqual(JSON.parse(json.stdout), { ok: true, vars: ['ALPHA', 'BETA'] });
+
+  const empty = runStdin(['scan', '--stdin'], '');
+  assert.strictEqual(empty.status, 0);
+  assert.strictEqual(empty.stdout, '');
+  assert.strictEqual(empty.stderr, 'No process.env usage found.\n');
+
+  const withDir = runStdin(['scan', '--stdin', __dirname], code);
+  assert.strictEqual(withDir.status, 2);
+  assert.match(withDir.stderr, /--stdin cannot be combined with a directory argument/);
+}
+
+Promise.all([watchModeTest, watchModeErrorPathTest, watchModeEsmSchemaTest, loadEnvAsyncTest, formatErrorThrowingHookTest])
+  .then(() => console.log('env-saaf v1.5.0: all tests passed'))
+  .catch((err) => { console.error(err); process.exit(1); });
