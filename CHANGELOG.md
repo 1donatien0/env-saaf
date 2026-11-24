@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Added: generateExample annotates string and RegExp patterns without changing generated values (fixes #293).
+
 - Added: `EnvSaafError.details` and the `{ throwOnError: false }` result expose structured `{ key, message }` entries mirroring `errors` one-to-one, including grouped keys; printable `errors` strings and `message` formatting are unchanged (fixes #294).
 
 - Added: tests validate complete `toJsonSchema` documents against the draft 2020-12 keyword shapes with a hand-rolled, zero-dependency checker, covering all types, groups, choices, defaults, bounds, arrays and `requiredIf` (fixes #296).

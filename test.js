@@ -6872,3 +6872,29 @@ assert.deepStrictEqual(scanCode("const env = process.env; env['DB.PORT']; env[`M
 Promise.all([watchModeTest, watchModeErrorPathTest, watchModeEsmSchemaTest, loadEnvAsyncTest, formatErrorThrowingHookTest])
   .then(() => console.log('env-saaf v1.5.0: all tests passed'))
   .catch((err) => { console.error(err); process.exit(1); });
+
+// Issue #293: pattern annotations compose without changing example values.
+{
+  const schema = {
+    S: { type: 'string', pattern: /^[A-Z]+$/ },
+    STR: { type: 'string', pattern: '^[a-z]+$' },
+    EMPTY: { type: 'string', pattern: '' },
+    MODE: { type: 'string', required: true, choices: ['YES', 'NO'], pattern: /^[A-Z]+$/i },
+    GROUP: { prefix: 'APP_', schema: {
+      CODE: { type: 'string', pattern: /^code_\d+$/ },
+      STRCODE: { type: 'string', pattern: '^item_[0-9]+$' },
+    } },
+  };
+  const example = generateExample(schema);
+  assert.ok(example.includes('# type: string, pattern: /^[A-Z]+$/\nS=your_value_here\n'));
+  assert.ok(example.includes('# type: string, required, one of: YES|NO, pattern: /^[A-Z]+$/i\nMODE=YES\n'));
+  assert.ok(example.includes('# type: string, pattern: /^code_\\d+$/\nAPP_CODE=your_value_here\n'));
+  assert.ok(example.includes('# type: string, pattern: ^[a-z]+$\nSTR=your_value_here\n'));
+  assert.ok(example.includes('# type: string, pattern: \nEMPTY=your_value_here\n'));
+  assert.ok(example.includes('# type: string, pattern: ^item_[0-9]+$\nAPP_STRCODE=your_value_here\n'));
+  const plain = { S: { type: 'string' }, STR: { type: 'string' }, EMPTY: { type: 'string' }, MODE: { type: 'string', required: true, choices: ['YES', 'NO'] },
+    GROUP: { prefix: 'APP_', schema: { CODE: { type: 'string' }, STRCODE: { type: 'string' } } } };
+  const values = text => text.split('\n').filter(line => line && !line.startsWith('#'));
+  assert.deepStrictEqual(values(example), values(generateExample(plain)));
+  assert.ok(!generateExample(plain).includes('pattern:'));
+}
