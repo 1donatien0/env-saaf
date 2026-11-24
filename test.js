@@ -633,6 +633,27 @@ assert.ok(!ex.includes('sk_live'));
   fs.rmSync(dir, { recursive: true, force: true });
 }
 
+// scanDir skips build output so a stale bundle cannot make an unused key look used (issue #334)
+{
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const path = require('node:path');
+  const { scanDir } = require('./index');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'env-saaf-scan-skip-'));
+  try {
+    fs.writeFileSync(path.join(dir, 'app.js'), 'const a = process.env.FROM_SOURCE;');
+    for (const skipped of ['dist', 'build', 'coverage', '.next', 'out', 'target']) {
+      fs.mkdirSync(path.join(dir, skipped), { recursive: true });
+      fs.writeFileSync(path.join(dir, skipped, 'bundle.js'), 'const b = process.env.FROM_' + skipped.replace('.', '') + ';');
+    }
+    fs.mkdirSync(path.join(dir, 'nested', 'dist'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'nested', 'dist', 'bundle.js'), 'process.env.FROM_NESTED_DIST');
+    assert.deepStrictEqual(scanDir(dir), ['FROM_SOURCE']);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+}
+
 // Issue #235: scanDir also scans single-file components (.vue/.svelte/.astro)
 {
   const fs = require('node:fs');

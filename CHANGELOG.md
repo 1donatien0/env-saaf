@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Fixed: `scanDir` skips `dist`, `build`, `coverage`, `.next`, `out` and `target` (and `node_modules`/`.git*` as before), so a stale build output no longer makes an unused key look used (fixes #334).
+
 - Fixed: `parseEnvFile` now expands `\n` and `\r` escape sequences in double-quoted values (dotenv parity), so a PEM key written as `"-----BEGIN-----\n..."` loads with real newlines; `\\` stays a single backslash and single-quoted values are unchanged (fixes #333).
 
 - Added: duration rules accept human duration strings for inclusive `min` / `max` bounds, including compound durations. Invalid or reversed bounds fail schema validation; numeric bounds keep their existing behavior. Generated examples and JSON Schema use the parsed bounds (fixes #322).

@@ -1755,11 +1755,18 @@ function scanCode(text) {
 const SCAN_EXTENSIONS = /\.(js|cjs|mjs|ts|mts|cts|tsx|jsx|vue|svelte|astro)$/;
 
 /** Scan a folder (recursive) for env usage in .js/.cjs/.mjs/.ts/.mts/.cts/.tsx/.jsx/.vue/.svelte/.astro files. */
+// Directories a scan never enters: installed packages, VCS metadata and build
+// output. A stale bundle in one of these mentions keys the source no longer
+// uses, which hides real drift from `check`.
+const SCAN_SKIP_DIRECTORIES = new Set([
+  'node_modules', 'dist', 'build', 'coverage', '.next', 'out', 'target',
+]);
+
 function scanDir(dir) {
   const found = new Set();
   const walk = (d) => {
     for (const e of fs.readdirSync(d, { withFileTypes: true })) {
-      if (e.name === 'node_modules' || e.name.startsWith('.git')) continue;
+      if (SCAN_SKIP_DIRECTORIES.has(e.name) || e.name.startsWith('.git')) continue;
       const p = path.join(d, e.name);
       if (e.isDirectory()) walk(p);
       else if (SCAN_EXTENSIONS.test(e.name)) scanCode(fs.readFileSync(p, 'utf8')).forEach(k => found.add(k));
