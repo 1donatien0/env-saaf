@@ -96,23 +96,40 @@ function groupShape(rule) {
     && rule.schema !== null && typeof rule.schema === 'object' && !Array.isArray(rule.schema);
 }
 
-// Flatten a (valid) schema into plain rules keyed by full env name, plus a
-// map from flat key back to its group for re-nesting the result.
-function flattenSchema(schema) {
-  const flat = {};
-  const groupOf = new Map();
+function invalidSchema(errors) {
+  const unique = [...new Set(errors)];
+  return new EnvSaafError(unique, 'Invalid schema:\n' + unique.map(e => `  - ${e}`).join('\n'));
+}
+
+// Keep env prefixes separate from result paths: APP_DB_HOST becomes APP.DB.HOST.
+// Only active ancestors are circular; a shared sub-schema can appear in several groups.
+function walkSchema(schema, onRule, onGroup = () => {}, prefix = '', path = [], ancestors = new Set()) {
+  if (ancestors.has(schema)) throw invalidSchema([`${path.join('.')}: group "schema" contains a circular reference`]);
+  ancestors.add(schema);
   for (const [key, rule] of Object.entries(schema)) {
     if (groupShape(rule)) {
-      for (const [innerKey, innerRule] of Object.entries(rule.schema)) {
-        const flatKey = rule.prefix + innerKey;
-        flat[flatKey] = innerRule;
-        groupOf.set(flatKey, { group: key, innerKey });
-      }
+      if (typeof rule.prefix !== 'string' || rule.prefix.trim() === '') continue; // shape validation reports it
+      const groupPath = [...path, key];
+      const groupPrefix = prefix + rule.prefix;
+      onGroup(groupPath, groupPrefix);
+      walkSchema(rule.schema, onRule, onGroup, groupPrefix, groupPath, ancestors);
     } else {
-      flat[key] = rule;
+      onRule(prefix + key, rule, [...path, key], prefix);
     }
   }
-  return { flat, groupOf };
+  ancestors.delete(schema);
+}
+
+// Flatten a (valid) schema into plain rules keyed by full env name, plus a
+// map back to each grouped result path for re-nesting.
+function flattenSchema(schema, prefix = '') {
+  const entries = [];
+  const groupOf = new Map();
+  walkSchema(schema, (key, rule, path) => {
+    entries.push([key, rule]);
+    if (path.length > 1) groupOf.set(key, path);
+  }, undefined, prefix);
+  return { flat: Object.fromEntries(entries), groupOf };
 }
 
 // Re-nest flat results: DB_HOST -> out.DB.HOST. Groups whose keys all
@@ -120,17 +137,20 @@ function flattenSchema(schema) {
 function nestGroups(out, groupOf) {
   const nested = {};
   const groups = [];
+  const put = (object, key, value) => Object.defineProperty(object, key, {
+    value, enumerable: true, writable: true, configurable: true,
+  });
   for (const [k, v] of Object.entries(out)) {
-    const g = groupOf.get(k);
-    if (g) {
-      if (nested[g.group] === undefined) {
-        nested[g.group] = {};
-        groups.push(nested[g.group]);
+    const path = groupOf.get(k) || [k];
+    let current = nested;
+    for (const key of path.slice(0, -1)) {
+      if (!Object.prototype.hasOwnProperty.call(current, key)) {
+        put(current, key, {});
+        groups.push(current[key]);
       }
-      nested[g.group][g.innerKey] = v;
-    } else {
-      nested[k] = v;
+      current = current[key];
     }
+    put(current, path[path.length - 1], v);
   }
   // Freeze only the containers we created, leaving rule values untouched.
   for (const group of groups) Object.freeze(group);
@@ -162,11 +182,14 @@ function validateSchema(schema) {
   validateSchemaRules(schema, msg => console.warn(msg));
 }
 
-function validateSchemaRules(schema, warn, patterns = new Map()) {
+function validateSchemaRules(schema, warn, patterns = new Map(), prefix = '', ancestors = new Set()) {
+  if (ancestors.has(schema)) throw invalidSchema([`${prefix}: group "schema" contains a circular reference`]);
+  ancestors = new Set(ancestors).add(schema);
   const errors = [];
-  const keys = new Set(Object.keys(schema));
+  const keys = new Set(Object.keys(schema).map(key => prefix + key));
   const aliasOwners = new Map();
-  for (const [key, rule] of Object.entries(schema)) {
+  for (const [name, rule] of Object.entries(schema)) {
+    const key = prefix + name;
     if (rule === null || typeof rule !== 'object' || Array.isArray(rule)) continue;
     // Issue #228: group rule — validate its shape, then its inner rules under
     // their full (prefixed) names so errors read `DB_HOST: ...`, not `HOST`.
@@ -188,17 +211,9 @@ function validateSchemaRules(schema, warn, patterns = new Map()) {
       } else {
         const innerKeys = Object.keys(inner);
         if (innerKeys.length === 0) errors.push(`${key}: group "schema" must not be empty`);
-        for (const ik of innerKeys) {
-          const ir = inner[ik];
-          if (ir !== null && typeof ir === 'object' && !Array.isArray(ir) && ir.schema !== undefined) {
-            errors.push(`${key}: groups cannot be nested (inner "${ik}" is itself a group)`);
-          }
-        }
-        if (typeof rule.prefix === 'string' && rule.prefix !== '') {
-          const sub = {};
-          for (const ik of innerKeys) sub[rule.prefix + ik] = inner[ik];
+        if (typeof rule.prefix === 'string' && rule.prefix.trim() !== '') {
           try {
-            validateSchemaRules(sub, () => {}, patterns);
+            validateSchemaRules(inner, () => {}, patterns, prefix + rule.prefix, ancestors);
           } catch (e) {
             if (e instanceof EnvSaafError) errors.push(...e.errors);
             else throw e;
@@ -425,27 +440,25 @@ function validateSchemaRules(schema, warn, patterns = new Map()) {
   // overlapping) — that would silently read one env var for two rules.
   const flatOwners = new Map();
   for (const key of keys) flatOwners.set(key, `"${key}"`);
-  for (const [key, rule] of Object.entries(schema)) {
-    if (!groupShape(rule)) continue;
-    if (typeof rule.prefix !== 'string' || rule.prefix === '') continue; // already reported above
-    for (const ik of Object.keys(rule.schema)) {
-      const fk = rule.prefix + ik;
-      if (flatOwners.has(fk)) {
-        errors.push(`${key}: prefix "${rule.prefix}" makes "${fk}" collide with ${flatOwners.get(fk)}`);
-      } else {
-        flatOwners.set(fk, `the "${key}" group`);
-      }
+  walkSchema(schema, (key, rule, path, fullPrefix) => {
+    if (path.length === 1) return; // flat names and group names were reserved above
+    const group = prefix + path.slice(0, -1).join('.');
+    if (flatOwners.has(key)) {
+      errors.push(`${group}: prefix "${fullPrefix}" makes "${key}" collide with ${flatOwners.get(key)}`);
+    } else {
+      flatOwners.set(key, `the "${group}" group`);
     }
-  }
+  }, undefined, prefix);
   // Issue #228: aliases inside a group are FULL env names, and each group used
   // to be validated with its own fresh alias map — so an alias in one group
   // could name another group's key (or a flat key) and one env var would then
   // silently feed two rules. Run the alias collision check over the FLATTENED
   // schema as well; the per-group recursion above already reports the
   // within-group cases, and the dedupe below keeps every message single.
-  const flatKeys = new Set(Object.keys(flattenSchema(schema).flat));
+  const { flat } = flattenSchema(schema, prefix);
+  const flatKeys = new Set(Object.keys(flat));
   const flatAliasOwners = new Map();
-  for (const [fkey, frule] of Object.entries(flattenSchema(schema).flat)) {
+  for (const [fkey, frule] of Object.entries(flat)) {
     if (frule === null || typeof frule !== 'object' || Array.isArray(frule)
       || !Array.isArray(frule.aliases)
       || frule.aliases.some(a => typeof a !== 'string' || a.trim() === '')) continue; // already reported above
@@ -463,12 +476,11 @@ function validateSchemaRules(schema, warn, patterns = new Map()) {
     // Issue #283: a schema problem is a bug in the schema, not a bad env value.
     // Label it "Invalid schema:" so users debug the right thing; the errors
     // array is unchanged, only the header differs from genuine value errors.
-    const unique = [...new Set(errors)];
-    throw new EnvSaafError(unique, 'Invalid schema:\n' + unique.map(e => `  - ${e}`).join('\n'));
+    throw invalidSchema(errors);
   }
   // Check only the complete flattened schema: a group may reference a key
   // in another group or at the top level. External flags remain supported.
-  for (const [key, rule] of Object.entries(flattenSchema(schema).flat)) {
+  for (const [key, rule] of Object.entries(flat)) {
     if (rule && rule.requiredIf && !flatKeys.has(rule.requiredIf.key)) {
       warn(`env-saaf: ${key}: requiredIf references undeclared key "${rule.requiredIf.key}"; check for a typo or declare the key (external env flags still work)`);
     }
@@ -1947,19 +1959,10 @@ function generateExample(schema) {
         : scalarPlaceholder(rule, stringGrowth);
       return [comment, `${key}=${placeholder}`];
   };
-  for (const [key, rule] of Object.entries(schema)) {
-    // Issue #228: a group emits its inner keys under their full prefixed env
-    // names, with a group comment above the run — the .env file stays flat.
-    if (groupShape(rule)) {
-      lines.push(`# group ${key} — the keys below are read from env vars prefixed with '${rule.prefix}'`);
-      for (const [innerKey, innerRule] of Object.entries(rule.schema)) {
-        lines.push(...entry(rule.prefix + innerKey, innerRule));
-      }
-      continue;
-    }
-    lines.push(...entry(key, rule));
-    continue;
-  }
+  // The .env file stays flat; each group level documents its complete prefix.
+  walkSchema(schema, (key, rule) => lines.push(...entry(key, rule)), (path, prefix) => {
+    lines.push(`# group ${path.join('.')} — the keys below are read from env vars prefixed with '${prefix}'`);
+  });
   return lines.join('\n') + '\n';
 }
 
@@ -2104,15 +2107,16 @@ function jsonSchemaForRule(key, rule, required) {
 }
 
 function jsonSchemaRequiredPath(key, groupOf, match) {
-  const member = groupOf.get(key);
-  const name = member ? member.innerKey : key;
-  const constraint = { required: [name] };
-  if (match) constraint.properties = { [name]: match };
-  if (!member) return constraint;
-  return {
-    required: [member.group],
-    properties: { [member.group]: { type: 'object', ...constraint } },
-  };
+  const path = groupOf.get(key) || [key];
+  let constraint = { required: [path[path.length - 1]] };
+  if (match) constraint.properties = { [path[path.length - 1]]: match };
+  for (let i = path.length - 2; i >= 0; i--) {
+    constraint = {
+      required: [path[i]],
+      properties: { [path[i]]: { type: 'object', ...constraint } },
+    };
+  }
+  return constraint;
 }
 
 function isArrayIncludes(method) {

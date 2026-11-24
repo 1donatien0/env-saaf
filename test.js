@@ -4637,6 +4637,165 @@ assert.deepStrictEqual(
   assert.doesNotThrow(() => validateSchema({ COUNT: { type: 'int', choices: [2, Infinity, 0, NaN] } }));
 }
 
+// Issue #287: groups compose prefixes and nest results at every level.
+{
+  const schema = {
+    MODE: { type: 'string' },
+    APP: { prefix: 'APP_', schema: {
+      DB: { prefix: 'DB_', schema: {
+        HOST: { type: 'host', required: true },
+        PORT: { type: 'port', default: 5432 },
+      } },
+      CACHE: { prefix: 'CACHE_', schema: { TTL: { type: 'int' } } },
+    } },
+  };
+  assert.doesNotThrow(() => validateSchema(schema));
+  const result = validateEnv(schema, { MODE: 'dev', APP_DB_HOST: 'db.internal' }, { strict: true });
+  assert.deepStrictEqual(result, { MODE: 'dev', APP: { DB: { HOST: 'db.internal', PORT: 5432 } } });
+  for (const container of [result, result.APP, result.APP.DB]) assert.ok(Object.isFrozen(container));
+  assert.throws(() => { result.APP.DB.HOST = 'changed'; }, TypeError);
+  assert.ok(!('CACHE' in result.APP));
+  assert.deepStrictEqual(validateEnv({ APP: { prefix: 'APP_', schema: {
+    CACHE: { prefix: 'CACHE_', schema: { TTL: { type: 'int' } } },
+  } } }, {}), {});
+
+  const partial = validateEnv(schema, {}, { throwOnError: false });
+  assert.deepStrictEqual(partial, {
+    env: { APP: { DB: { PORT: 5432 } } }, errors: ['APP_DB_HOST: missing required variable'],
+  });
+  assert.ok(Object.isFrozen(partial.env.APP.DB));
+  assert.throws(() => validateEnv(schema, { APP_DB_HOST: 'db.internal', APP_DB_EXTRA: 'x' }, { strict: true }),
+    err => err instanceof EnvSaafError && err.errors.includes('APP_DB_EXTRA: set but not in schema (strict mode)'));
+  assert.throws(() => validateSchema({ APP: { prefix: 'APP_', schema: {
+    DB: { prefix: 'DB_', schema: { PORT: { type: 'unknown' } } },
+  } } }), err => err instanceof EnvSaafError && err.errors.includes('APP_DB_PORT: unknown type "unknown"'));
+
+  const warnings = [];
+  const references = { APP: { prefix: 'APP_', schema: {
+    DB: { prefix: 'DB_', schema: { HOST: { type: 'host', aliases: ['OLD_DB_HOST'] } } },
+    MAIL: { prefix: 'MAIL_', schema: { HOST: { type: 'host', requiredIf: { key: 'APP_DB_HOST', equals: 'db.internal' } } } },
+  } } };
+  const referenced = validateEnv(references, { OLD_DB_HOST: 'db.internal', APP_MAIL_HOST: 'mail.internal' },
+    { strict: true, onWarn: warning => warnings.push(warning) });
+  assert.deepStrictEqual(referenced, { APP: { DB: { HOST: 'db.internal' }, MAIL: { HOST: 'mail.internal' } } });
+  assert.strictEqual(warnings.length, 1);
+  assert.ok(warnings[0].includes('OLD_DB_HOST is deprecated'));
+  const required = validateEnv(references, { APP_DB_HOST: 'db.internal' }, { throwOnError: false, onWarn: () => {} });
+  assert.deepStrictEqual(required.errors, ['APP_MAIL_HOST: missing required variable']);
+
+  const example = generateExample(schema);
+  assert.ok(example.includes("# group APP — the keys below are read from env vars prefixed with 'APP_'"));
+  assert.ok(example.includes("# group APP.DB — the keys below are read from env vars prefixed with 'APP_DB_'"));
+  assert.ok(example.includes("# group APP.CACHE — the keys below are read from env vars prefixed with 'APP_CACHE_'"));
+  assert.match(example, /^APP_DB_HOST=localhost$/m);
+  assert.match(example, /^APP_DB_PORT=5432$/m);
+  assert.match(example, /^APP_CACHE_TTL=42$/m);
+  assert.ok(example.indexOf('# group APP.DB') < example.indexOf('APP_DB_HOST='));
+  assert.strictEqual(validateEnv(schema, parseEnvFile(example), { strict: true }).APP.DB.PORT, 5432);
+  assert.deepStrictEqual(toJsonSchema(schema), {
+    $schema: 'https://json-schema.org/draft/2020-12/schema', type: 'object', properties: {
+      MODE: { type: 'string' },
+      APP: { type: 'object', properties: {
+        DB: { type: 'object', properties: {
+          HOST: { type: 'string', anyOf: [{ format: 'hostname' }, { format: 'ipv4' }, { format: 'ipv6' }] },
+          PORT: { type: 'integer', minimum: 0, maximum: 65535, default: 5432 },
+        }, required: ['HOST'] },
+        CACHE: { type: 'object', properties: { TTL: { type: 'integer' } } },
+      } },
+    },
+  });
+
+  const defaultValue = { count: 1 };
+  const transformedValue = { count: 2 };
+  const deep = { APP: { prefix: 'APP_', schema: {
+    DB: { prefix: 'DB_', schema: {
+      AUTH: { prefix: 'AUTH_', schema: {
+        USER: { type: 'string', required: true },
+        DATA: { type: 'json', default: defaultValue },
+        EXTRA: { type: 'json', transform: () => transformedValue },
+      } },
+    } },
+  } } };
+  const deepResult = validateEnv(deep, { APP_DB_AUTH_USER: 'alice', APP_DB_AUTH_EXTRA: '{}' });
+  assert.strictEqual(deepResult.APP.DB.AUTH.USER, 'alice');
+  for (const group of [deepResult.APP, deepResult.APP.DB, deepResult.APP.DB.AUTH]) assert.ok(Object.isFrozen(group));
+  assert.strictEqual(deepResult.APP.DB.AUTH.DATA, defaultValue);
+  assert.strictEqual(deepResult.APP.DB.AUTH.EXTRA, transformedValue);
+  deepResult.APP.DB.AUTH.DATA.count++;
+  deepResult.APP.DB.AUTH.EXTRA.count++;
+  assert.strictEqual(defaultValue.count, 2);
+  assert.strictEqual(transformedValue.count, 3);
+  assert.ok(generateExample(deep).includes('# group APP.DB.AUTH'));
+  assert.deepStrictEqual(toJsonSchema(deep).properties.APP.properties.DB.properties.AUTH.required, ['USER']);
+
+  const collides = candidate => assert.throws(() => validateSchema(candidate),
+    err => err instanceof EnvSaafError && err.errors.some(error => error.includes('collide')));
+  collides({ ...schema, APP_DB_HOST: { type: 'string' } });
+  collides({ ...schema, OTHER: { prefix: 'APP_DB_', schema: { HOST: {} } } });
+  collides({ APP: { prefix: 'APP_', schema: {
+    DB: { prefix: 'DB_', schema: { HOST: {} } }, DB_HOST: {},
+  } } });
+  // Group names remain reserved against prefixed keys, as for one-level groups.
+  collides({ ROOT: { prefix: 'APP_', schema: { DB: { prefix: 'DB_', schema: { HOST: {} } } } },
+    APP_DB_HOST: { prefix: 'OTHER_', schema: { KEY: {} } } });
+  assert.throws(() => validateSchema({ ...schema, OTHER: { aliases: ['APP_DB_HOST'] } }),
+    err => err instanceof EnvSaafError && err.errors.includes('OTHER: alias "APP_DB_HOST" conflicts with a declared schema key'));
+  const duplicateAlias = { APP: { prefix: 'APP_', schema: {
+    A: { prefix: 'A_', schema: { VALUE: { aliases: ['OLD_VALUE'] } } },
+    B: { prefix: 'B_', schema: { VALUE: { aliases: ['OLD_VALUE'] } } },
+  } } };
+  assert.throws(() => validateSchema(duplicateAlias),
+    err => err instanceof EnvSaafError && err.errors.some(error => error.includes('alias "OLD_VALUE" is already used')));
+
+  // Sharing a sub-schema is valid; only a reference back to an ancestor is circular.
+  const shared = Object.freeze({ PORT: Object.freeze({ type: 'port', default: 8080 }) });
+  const reused = Object.freeze({
+    APP: Object.freeze({ prefix: 'APP_', schema: Object.freeze({
+      A: Object.freeze({ prefix: 'A_', schema: shared }),
+      B: Object.freeze({ prefix: 'B_', schema: shared }),
+    }) }),
+  });
+  const reusedResult = validateEnv(reused, {});
+  assert.deepStrictEqual(reusedResult, { APP: { A: { PORT: 8080 }, B: { PORT: 8080 } } });
+  assert.notStrictEqual(reusedResult.APP.A, reusedResult.APP.B);
+  const circular = {};
+  circular.APP = { prefix: 'APP_', schema: circular };
+  for (const check of [validateSchema, generateExample, toJsonSchema, candidate => loadEnv(candidate, { paths: [], env: {} })]) {
+    assert.throws(() => check(circular), err => err instanceof EnvSaafError && /circular/.test(err.message));
+  }
+  // Group names are own properties even when Object.prototype has that name.
+  const named = validateEnv({ APP: { prefix: 'APP_', schema: Object.fromEntries(
+    ['__proto__', 'constructor', 'toString'].map((name, index) => [name, {
+      prefix: `N${index}_`, schema: { VALUE: { type: 'string', default: name } },
+    }]),
+  ) } }, {});
+  for (const name of ['__proto__', 'constructor', 'toString']) {
+    assert.ok(Object.prototype.hasOwnProperty.call(named.APP, name));
+    assert.strictEqual(named.APP[name].VALUE, name);
+    assert.ok(Object.isFrozen(named.APP[name]));
+  }
+  assert.strictEqual(Object.getPrototypeOf(named.APP), Object.prototype);
+  assert.ok(!Object.isFrozen(Object.prototype));
+
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const path = require('node:path');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'env-saaf-nested-'));
+  try {
+    const file = path.join(dir, '.env');
+    fs.writeFileSync(file, 'APP_DB_HOST=db.internal\nAPP_DB_PORT=6543\n');
+    const assigned = {};
+    const loaded = loadEnv(schema, { path: file, env: assigned, assign: true });
+    assert.deepStrictEqual(loaded, { APP: { DB: { HOST: 'db.internal', PORT: 6543 } } });
+    assert.deepStrictEqual(assigned, { APP_DB_HOST: 'db.internal', APP_DB_PORT: '6543' });
+    assert.ok(Object.isFrozen(loaded.APP.DB));
+    assert.throws(() => loadEnv(schema, { paths: [path.join(dir, 'missing.env')], env: {} }),
+      /required variables missing: APP_DB_HOST/);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+}
+
 // feat: grouped (nested) schemas with a key prefix (fixes #228)
 {
   const fs = require('node:fs');
@@ -4804,7 +4963,7 @@ assert.deepStrictEqual(
   bad({ G: { prefix: 'G_', schema: {} } }, 'group "schema" must not be empty');                // empty group
   bad({ G: { prefix: 'G_', schema: { A: {} }, type: 'string' } }, 'cannot also set "type"');  // type + schema
   bad({ G: { prefix: 'G_', schema: { A: {} }, required: true } }, 'group rules only support'); // extra option on group
-  bad({ G: { prefix: 'G_', schema: { A: { schema: {} } } } }, 'groups cannot be nested');     // nested group
+  bad({ G: { prefix: 'G_', schema: { A: { schema: {} } } } }, 'needs a non-empty string "prefix"'); // malformed nested group
   bad({ G: { prefix: 'G_', schema: { A: { type: 'nope' } } } }, 'G_A: unknown type');         // inner rule error uses full name
   bad({ DB_HOST: { type: 'string' }, G: { prefix: 'DB_', schema: { HOST: {} } } }, 'collide'); // prefix collision with a declared key
   bad({ A: { prefix: 'X_', schema: { K: {} } }, B: { prefix: 'X_', schema: { K: {} } } }, 'collide'); // two groups collide
@@ -5678,6 +5837,15 @@ const loadEnvAsyncTest = (async () => {
     assert.ok(Object.isFrozen(grouped.DB));
     assert.throws(() => { grouped.DB.HOST = 'changed.internal'; }, TypeError);
     assert.strictEqual(grouped.DB.HOST, 'db.internal');
+    fs.writeFileSync(groupedFile, 'APP_DB_HOST=db.internal\n');
+    const nestedTarget = {};
+    const nested = await loadEnvAsync({ APP: { prefix: 'APP_', schema: {
+      DB: { prefix: 'DB_', schema: { HOST: { type: 'host', required: true } } },
+    } } }, { path: groupedFile, env: nestedTarget, assign: true });
+    assert.deepStrictEqual(nested, { APP: { DB: { HOST: 'db.internal' } } });
+    assert.deepStrictEqual(nestedTarget, { APP_DB_HOST: 'db.internal' });
+    assert.ok(Object.isFrozen(nested.APP));
+    assert.ok(Object.isFrozen(nested.APP.DB));
     const defaultRead = fs.promises.readFile;
     try {
       fs.promises.readFile = async (file, encoding) => {
@@ -6336,6 +6504,40 @@ assert.deepStrictEqual(scanCode("const env = process.env; env['DB.PORT']; env[`M
     assert.deepStrictEqual(result.then, { required: ['TOKEN'] });
     assert.strictEqual(result.allOf, undefined);
   }
+}
+
+// Issue #289: nested groups export nested if/then paths for requiredIf.
+{
+  const schema = {
+    APP: { prefix: 'APP_', schema: {
+      DB: { prefix: 'DB_', schema: {
+        MODE: {},
+        AUTH: { requiredIf: { key: 'APP_DB_MODE', equals: 'tls' } },
+      } },
+      MAIL: { prefix: 'MAIL_', schema: {
+        TOKEN: { requiredIf: { key: 'APP_DB_MODE', in: ['tls', 'mtls'] } },
+      } },
+    } },
+    AUDIT: { requiredIf: { key: 'APP_DB_MODE', equals: 'tls' } },
+  };
+  assert.deepStrictEqual(validateEnv(schema, { APP_DB_MODE: 'tls' }, { throwOnError: false }).errors, [
+    'APP_DB_AUTH: missing required variable',
+    'APP_MAIL_TOKEN: missing required variable',
+    'AUDIT: missing required variable',
+  ]);
+  const result = toJsonSchema(schema);
+  const wrap = (path, leaf) => path.reduceRight((inner, name) => ({
+    required: [name], properties: { [name]: { type: 'object', ...inner } },
+  }), leaf);
+  const dbTls = wrap(['APP', 'DB'], { required: ['MODE'], properties: { MODE: { const: 'tls' } } });
+  assert.deepStrictEqual(result.allOf, [
+    { if: dbTls, then: wrap(['APP', 'DB'], { required: ['AUTH'] }) },
+    {
+      if: wrap(['APP', 'DB'], { required: ['MODE'], properties: { MODE: { enum: ['tls', 'mtls'] } } }),
+      then: wrap(['APP', 'MAIL'], { required: ['TOKEN'] }),
+    },
+    { if: dbTls, then: { required: ['AUDIT'] } },
+  ]);
 }
 
 Promise.all([watchModeTest, watchModeErrorPathTest, watchModeEsmSchemaTest, loadEnvAsyncTest, formatErrorThrowingHookTest])
