@@ -40,7 +40,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
 const { types: { isModuleNamespaceObject } } = require('node:util');
-const { scanCode, scanDir, parseEnvFile, diffEnv, validateEnv, EnvSaafError, generateExample, toJsonSchema } = require('./index');
+const { scanCode, scanCodeLocations, scanDir, scanDirLocations, parseEnvFile, diffEnv, validateEnv, EnvSaafError, generateExample, toJsonSchema } = require('./index');
 
 const argv = process.argv.slice(2);
 // --version / -v is global: report the installed version wherever it appears, before anything else runs
@@ -383,7 +383,7 @@ function readStdin() {
   });
 }
 
-function printScanResult(vars) {
+function printScanResult(vars, locations) {
   // Issue #63: the reverse drift — keys declared in the template that no code reads any more.
   // Only a warning: stdout stays the plain list of used vars and the exit code is unchanged.
   // Without a template file there is nothing to compare, so the output is exactly as before.
@@ -397,7 +397,8 @@ function printScanResult(vars) {
     }
   }
   if (jsonMode) {
-    const result = { ok: true, vars };
+    // Issue #335: locations map sits beside unchanged vars/unused; plain output ignores it.
+    const result = { ok: true, vars, locations: locations || {} };
     if (unused) result.unused = unused;
     console.log(JSON.stringify(result));
   } else {
@@ -412,6 +413,11 @@ function printScanResult(vars) {
 // re-run them; the non-watch path below calls them exactly once, keeping
 // output and exit codes byte-for-byte unchanged.
 function runScan() {
+  // Issue #335: JSON mode reuses scanDirLocations so the CLI does not re-walk.
+  if (jsonMode) {
+    const { vars, locations } = scanDirLocations(dir);
+    return printScanResult(vars, locations);
+  }
   return printScanResult(scanDir(dir));
 }
 
@@ -703,7 +709,15 @@ if (cmd === 'scan' || cmd === 'check') {
     watchLoop(); // runs until Ctrl-C
   } else if (stdinOpt) {
     readStdin().then(
-      (text) => { process.exitCode = printScanResult(scanCode(text)); },
+      (text) => {
+        // Issue #335: piped --json uses the same library locations helper (`file: "-"`).
+        if (jsonMode) {
+          const { vars, locations } = scanCodeLocations(text, '-');
+          process.exitCode = printScanResult(vars, locations);
+        } else {
+          process.exitCode = printScanResult(scanCode(text));
+        }
+      },
       (err) => { console.error(err); process.exitCode = 1; }
     );
   } else if (cmd === 'scan') {

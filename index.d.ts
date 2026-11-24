@@ -291,7 +291,27 @@ export function parseEnvFile(text: string): Record<string, string>;
  * Mentions inside comments and string literals do not count.
  */
 export function scanCode(text: string): string[];
+/** One reported use of an env key (relative `file`, 1-based `line`). */
+export interface ScanLocation {
+  file: string;
+  line: number;
+}
+/**
+ * Same reads as `scanCode`, plus a `locations` map from each key to its uses.
+ * `file` defaults to `-` for piped / in-memory text (issue #335).
+ */
+export function scanCodeLocations(
+  text: string,
+  file?: string,
+): { vars: string[]; locations: Record<string, ScanLocation[]> };
 export function scanDir(dir: string): string[];
+/**
+ * Directory scan with a `locations` map. Paths are relative to `dir` with
+ * forward slashes; `vars` matches `scanDir` (issue #335).
+ */
+export function scanDirLocations(
+  dir: string,
+): { vars: string[]; locations: Record<string, ScanLocation[]> };
 export function diffEnv(usedKeys: string[], documentedKeys: string[]): { usedNotDocumented: string[]; documentedNotUsed: string[] };
 /** Mask strings only; return non-string values unchanged. */
 export function maskValue<T>(value: T): T extends string ? string : T;
