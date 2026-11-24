@@ -189,11 +189,11 @@ export type EnvResult<S extends EnvSchema> = string extends keyof S
   : {
       [K in keyof S as S[K] extends EnvGroupRule<infer _I>
         ? never
-        : S[K] extends { required: true } ? K : S[K] extends { default: unknown } ? K : never]: EnvValue<S[K]>;
+        : S[K] extends { required: true } ? K : S[K] extends { default: unknown } ? K : never]: EnvValue<Extract<S[K], EnvRule>>;
     } & {
       [K in keyof S as S[K] extends EnvGroupRule<infer I>
         ? K
-        : S[K] extends { required: true } ? never : S[K] extends { default: unknown } ? never : K]?: S[K] extends EnvGroupRule<infer I> ? EnvResult<I> | undefined : EnvValue<S[K]> | undefined;
+        : S[K] extends { required: true } ? never : S[K] extends { default: unknown } ? never : K]?: S[K] extends EnvGroupRule<infer I> ? EnvResult<I> | undefined : EnvValue<Extract<S[K], EnvRule>> | undefined;
     };
 
 /**

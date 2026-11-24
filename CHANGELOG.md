@@ -14,6 +14,15 @@
 
 - Docs: added "How validation works" to the README, with the exact order of operations inside `validateEnv` and the three order-dependent behaviours users trip on (fixes #365).
 
+- Added: a packaging smoke test (`test-pack.js`, part of `npm test`) packs the
+  package, installs the tarball into CommonJS and ESM scratch projects, checks
+  the public exports, runs the installed bin and type-checks a consumer
+  (fixes #368).
+
+- Fixed: the published `index.d.ts` now compiles for a consumer without
+  `skipLibCheck`; `EnvResult` passed a group member to `EnvValue`, whose
+  constraint only allows a rule.
+
 - Fixed: `parseEnvFile` now expands `\n` and `\r` escape sequences in double-quoted values (dotenv parity), so a PEM key written as `"-----BEGIN-----\n..."` loads with real newlines; `\\` stays a single backslash and single-quoted values are unchanged (fixes #333).
 
 - Added: duration rules accept human duration strings for inclusive `min` / `max` bounds, including compound durations. Invalid or reversed bounds fail schema validation; numeric bounds keep their existing behavior. Generated examples and JSON Schema use the parsed bounds (fixes #322).
