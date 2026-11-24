@@ -1113,20 +1113,21 @@ function validateEnvCore(schema, env, options) {
 
 // Issue #231: an opt-in hook may replace the message. It only ever sees an
 // isolated copy of the error strings and the schema keys, never env values
-// or the schema rules, and `error.errors` keeps the raw strings. A hook
-// that throws or returns a non-string falls back to the default message.
+// or the schema rules, and `error.errors` keeps the raw strings. Issue #279:
+// a hook that throws is a programming error, so its error propagates out of
+// validateEnv/loadEnv unchanged instead of vanishing behind the default
+// message — the same way a non-function hook is a TypeError up front. A hook
+// that returns a non-string still falls back to the default message.
 // Shared by validateEnv and loadEnvSteps (which uses the core directly so
 // `assign` writes the FLAT env names) so both honour the hook.
 function formatErrorMessage(errors, schema, options) {
   let message;
   if (options.formatError) {
-    try {
-      const formatted = options.formatError(
-        Object.freeze(errors.slice()),
-        Object.freeze({ keys: Object.freeze(Object.keys(schema)) })
-      );
-      if (typeof formatted === 'string') message = formatted;
-    } catch (_) { /* fall back to the default message */ }
+    const formatted = options.formatError(
+      Object.freeze(errors.slice()),
+      Object.freeze({ keys: Object.freeze(Object.keys(schema)) })
+    );
+    if (typeof formatted === 'string') message = formatted;
   }
   return message;
 }
