@@ -91,6 +91,59 @@ try {
     assert.strictEqual(r.stderr, '', 'findings belong on stdout in --json mode');
   }
 
+  // --- --json is a public contract: pin every field and its type (issue #367) --
+  {
+    const dir = mkProject({ 'src/app.js': 'console.log(process.env.PORT);\n', '.env.example': 'PORT=\n' });
+    const parsed = JSON.parse(run(['check', dir, '--json'], dir).stdout);
+    assert.deepStrictEqual(parsed, {
+      ok: true, missing: [], extra: [], unused: [], invalid: [], envExtra: [], envMissing: [],
+    });
+    assert.strictEqual(typeof parsed.ok, 'boolean');
+    for (const field of ['missing', 'extra', 'unused', 'invalid', 'envExtra', 'envMissing']) {
+      assert.ok(Array.isArray(parsed[field]), `${field} must be an array`);
+    }
+  }
+
+  {
+    // One finding of each kind, so no field can be dropped or renamed unnoticed.
+    const dir = mkProject({
+      'src/app.js': 'console.log(process.env.PORT, process.env.DOCUMENTED_USED, process.env.UNDOCUMENTED);\n',
+      '.env.example': 'PORT=\nDOCUMENTED_USED=\nDOCUMENTED_UNUSED=\nMISSING_IN_ENV=\n',
+      '.env': 'DOCUMENTED_USED=1\nPORT=not-a-port\nEXTRA_IN_ENV=2\n',
+      'env.schema.js': "module.exports = { PORT: { type: 'port' } };\n",
+    });
+    const parsed = JSON.parse(run(['check', dir, '--schema', 'env.schema.js', '--json'], dir).stdout);
+    assert.deepStrictEqual(Object.keys(parsed).sort(), [
+      'envExtra', 'envMissing', 'extra', 'invalid', 'missing', 'ok', 'unused',
+    ]);
+    assert.strictEqual(parsed.ok, false);
+    assert.deepStrictEqual(parsed.missing, ['UNDOCUMENTED']);
+    assert.deepStrictEqual(parsed.extra, ['DOCUMENTED_UNUSED', 'MISSING_IN_ENV']);
+    assert.deepStrictEqual(parsed.unused, ['DOCUMENTED_UNUSED', 'MISSING_IN_ENV']);
+    assert.deepStrictEqual(parsed.envExtra, ['EXTRA_IN_ENV']);
+    assert.deepStrictEqual(parsed.envMissing, ['DOCUMENTED_UNUSED', 'MISSING_IN_ENV']);
+    assert.strictEqual(parsed.invalid.length, 1);
+    assert.match(parsed.invalid[0], /PORT/);
+    for (const field of ['missing', 'extra', 'unused', 'invalid', 'envExtra', 'envMissing']) {
+      for (const item of parsed[field]) assert.strictEqual(typeof item, 'string', `${field} holds strings`);
+    }
+  }
+
+  {
+    const dir = mkProject({
+      'src/app.js': 'console.log(process.env.USED_KEY);\n',
+      '.env.example': 'USED_KEY=\nOLD_KEY=\n',
+    });
+    const parsed = JSON.parse(run(['scan', dir, '--json'], dir).stdout);
+    assert.deepStrictEqual(parsed, { ok: true, vars: ['USED_KEY'], unused: ['OLD_KEY'] });
+  }
+
+  {
+    // Without a template there is nothing to compare: no unused field at all.
+    const dir = mkProject({ 'src/app.js': 'console.log(process.env.ONLY);\n' });
+    assert.deepStrictEqual(JSON.parse(run(['scan', dir, '--json'], dir).stdout), { ok: true, vars: ['ONLY'] });
+  }
+
   // --- check --schema: an invalid value in the real .env fails the check ----
   {
     const dir = mkProject({
