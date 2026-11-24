@@ -661,6 +661,48 @@ Next.js loads `.env`, `.env.local`, and environment-specific `.env.*` files into
 
 **`NEXT_PUBLIC_` variables are out of scope for secrets:** Next.js inlines every `NEXT_PUBLIC_*` variable into the browser bundle at build time. Never store secrets (API keys, database URLs, signing secrets) in `NEXT_PUBLIC_*` variables — keep secrets in unprefixed server-only variables validated in server-only modules like `lib/env.ts`. If you also want to validate public client settings (such as `NEXT_PUBLIC_SITE_URL`), pass an explicit object (`validateEnv({ NEXT_PUBLIC_SITE_URL: { type: 'url', required: true } }, { NEXT_PUBLIC_SITE_URL: process.env.NEXT_PUBLIC_SITE_URL })`) because Next.js statically replaces literal `process.env.NEXT_PUBLIC_*` references in client bundles rather than exposing a full `process.env` object.
 
+### Vite
+
+Vite exposes only `VITE_`-prefixed variables to client code, and only through `import.meta.env` — `process.env` is not available in the browser bundle. Validate that object once in a module imported before the app renders, so a missing or malformed value fails on the first page load instead of at the API call that needed it:
+
+```ts
+// src/env.ts — imported first from src/main.tsx
+import { validateEnv } from 'env-saaf';
+
+export const env = validateEnv(
+  {
+    VITE_API_URL:      { type: 'url', required: true },
+    VITE_WS_URL:       { type: 'url', protocols: ['wss'], default: 'wss://api.example.com/ws' },
+    VITE_API_TIMEOUT:  { type: 'duration', default: '10s' },
+    VITE_FEATURE_JSON: { type: 'json', default: '{}' },
+    VITE_DEBUG:        { type: 'boolean', default: 'false' },
+  },
+  {
+    // Literal import.meta.env.VITE_* reads: Vite replaces these at build time.
+    VITE_API_URL:      import.meta.env.VITE_API_URL,
+    VITE_WS_URL:       import.meta.env.VITE_WS_URL,
+    VITE_API_TIMEOUT:  import.meta.env.VITE_API_TIMEOUT,
+    VITE_FEATURE_JSON: import.meta.env.VITE_FEATURE_JSON,
+    VITE_DEBUG:        import.meta.env.VITE_DEBUG,
+  },
+);
+```
+
+```ts
+// src/main.tsx
+import { env } from './env'; // first: throws here on a bad environment
+import { createRoot } from 'react-dom/client';
+import { App } from './App';
+
+createRoot(document.getElementById('root')!).render(<App config={env} />);
+```
+
+Pass the keys explicitly rather than the whole `import.meta.env`: Vite only replaces literal `import.meta.env.VITE_*` expressions in client code, and `import.meta.env` also carries non-string values such as `DEV` and `MODE`. The validated result is typed from the schema (`env.VITE_API_TIMEOUT` is a `number`, `env.VITE_FEATURE_JSON` is `unknown`), so components can take `env` as a prop or through a context instead of reading `import.meta.env` again.
+
+**A validated `VITE_` value is still public.** Vite inlines every `VITE_*` variable into the bundle: anyone can read it in DevTools. `sensitive: true` hides a value in error messages and masking output; it does not encrypt the bundle. Never put an API key, a database URL or a signing secret behind a `VITE_` prefix — keep those server-side.
+
+For a build-time check, the CLI's scanner already understands Vite: `scanCode` and `scan` find `import.meta.env.VITE_*` reads in dot, bracket, optional-chaining and destructured forms, so `npx env-saaf scan src` lists every key the client code reads, and `npx env-saaf check --schema env.schema.js` fails when one is missing from the deployment's environment. To validate the same schema in Node before Vite starts building (and without the browser bundle), import the schema module at the top of `vite.config.ts` and call `validateEnv` there with `process.env` from `loadEnv`.
+
 ### Keep `.env.example` honest (CLI)
 
 CLI output is plain text by default, including in pipes and CI. For scripts that set a shared color preference, pass `--no-color` before or after the command, or set `NO_COLOR=1`.
