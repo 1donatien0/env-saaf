@@ -933,6 +933,55 @@ try {
       child.stdin.write(buf.subarray(0, splitAt));
       child.stdin.end(buf.subarray(splitAt));
     }));
+
+    // Large piped output (>300 KiB) under delayed stdout drain must flush completely without truncation.
+    const largeCount = 15000;
+    const largeCode = Array.from(
+      { length: largeCount },
+      (_, i) => `process.env.LARGE_PIPE_KEY_${String(i).padStart(5, '0')};`
+    ).join('\n');
+    for (const jsonFlag of [true, false]) {
+      asyncChecks.push(new Promise((resolve, reject) => {
+        const args = jsonFlag ? [CLI, 'scan', '--stdin', '--json'] : [CLI, 'scan', '--stdin'];
+        const child = spawn(process.execPath, args, {
+          cwd: dir,
+          env: cleanEnv(),
+          stdio: ['pipe', 'pipe', 'pipe'],
+        });
+        let err = '';
+        child.stderr.setEncoding('utf8');
+        child.stderr.on('data', d => { err += d; });
+        child.on('error', reject);
+        child.stdin.end(largeCode, () => {
+          setTimeout(() => {
+            let out = '';
+            child.stdout.setEncoding('utf8');
+            child.stdout.on('data', d => { out += d; });
+            child.on('close', (code) => {
+              try {
+                assert.strictEqual(code, 0, err);
+                assert.strictEqual(err, '');
+                if (jsonFlag) {
+                  const parsed = JSON.parse(out);
+                  assert.strictEqual(parsed.ok, true);
+                  assert.strictEqual(parsed.vars.length, largeCount);
+                  assert.strictEqual(parsed.vars[0], 'LARGE_PIPE_KEY_00000');
+                  assert.strictEqual(parsed.vars[largeCount - 1], 'LARGE_PIPE_KEY_14999');
+                } else {
+                  const lines = out.trimEnd().split('\n');
+                  assert.strictEqual(lines.length, largeCount);
+                  assert.strictEqual(lines[0], 'LARGE_PIPE_KEY_00000');
+                  assert.strictEqual(lines[largeCount - 1], 'LARGE_PIPE_KEY_14999');
+                }
+                resolve();
+              } catch (assertionErr) {
+                reject(assertionErr);
+              }
+            });
+          }, 100);
+        });
+      }));
+    }
   }
 } catch (err) {
   cleanup();

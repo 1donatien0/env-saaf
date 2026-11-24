@@ -11,7 +11,7 @@
  *                           document instead of running the check (issue #268). A scaffold
  *                           with no code usage yet passes with a single note instead of
  *                           one UNUSED line per key (issue #170).
- *   env-saaf scan  [dir | --stdin] [--file name] [--json] [--watch] — just list the env vars your code uses; keys in
+ *   env-saaf scan  [dir | --stdin] [--file name] [--json] [--watch]: just list the env vars your code uses; keys in
  *                           .env.example (or the --file given) that no code reads are reported
  *                           as UNUSED warnings (stderr; `unused` in --json), never an exit code
  *   env-saaf example [dir] [--write[=file]] [--force] [--schema file] — print a .env.example draft from code
@@ -703,8 +703,8 @@ if (cmd === 'scan' || cmd === 'check') {
     watchLoop(); // runs until Ctrl-C
   } else if (stdinOpt) {
     readStdin().then(
-      text => process.exit(printScanResult(scanCode(text))),
-      (err) => { console.error(err); process.exit(1); }
+      (text) => { process.exitCode = printScanResult(scanCode(text)); },
+      (err) => { console.error(err); process.exitCode = 1; }
     );
   } else if (cmd === 'scan') {
     process.exit(runScan());
