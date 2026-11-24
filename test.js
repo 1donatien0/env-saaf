@@ -5692,8 +5692,8 @@ const loadEnvAsyncTest = (async () => {
   assert.strictEqual(plain.message, 'Invalid environment variables:\n' + plain.errors.map(x => `  - ${x}`).join('\n'));
   assert.throws(() => validateEnv(schema, bad, { formatError: () => '' }), (e) => e.message === '');
 
-  // Throwing or non-string hooks fall back to the default message.
-  for (const hook of [() => { throw new Error('boom'); }, () => 42, () => undefined, () => null, () => ({})]) {
+  // Non-string hooks fall back to the default message.
+  for (const hook of [() => 42, () => undefined, () => null, () => ({})]) {
     assert.throws(() => validateEnv(schema, bad, { formatError: hook }), (e) => { assert.strictEqual(e.message, plain.message); assert.deepStrictEqual(e.errors, plain.errors); return true; });
   }
 
@@ -5731,6 +5731,31 @@ const loadEnvAsyncTest = (async () => {
   }
   console.log('formatError tests passed');
 }
+
+// Issue #279: a throwing `formatError` hook is a programming error — its
+// error propagates out of validateEnv / loadEnv unchanged, instead of
+// vanishing behind the default message.
+const formatErrorThrowingHookTest = (async () => {
+  const { loadEnvAsync } = require('./index');
+  const schema = { A: { type: 'string', required: true } };
+  const hookError = new Error('hook boom');
+  assert.throws(() => validateEnv(schema, {}, { formatError: () => { throw hookError; } }),
+    (e) => { assert.strictEqual(e, hookError); return true; });
+  // Same through loadEnv, which forwards the hook for validation failures.
+  const tmp = require('node:fs').mkdtempSync(require('node:path').join(require('node:os').tmpdir(), 'env-saaf-279-'));
+  const envFile = require('node:path').join(tmp, 'empty.env');
+  try {
+    require('node:fs').writeFileSync(envFile, '');
+    assert.throws(() => loadEnv(schema, { path: envFile, env: {}, formatError: () => { throw hookError; } }),
+      (e) => { assert.strictEqual(e, hookError); return true; });
+    // And through loadEnvAsync, which shares the same steps.
+    await assert.rejects(loadEnvAsync(schema, { path: envFile, env: {}, formatError: () => { throw hookError; } }),
+      (e) => { assert.strictEqual(e, hookError); return true; });
+  } finally {
+    require('node:fs').rmSync(tmp, { recursive: true, force: true });
+  }
+  console.log('formatError throwing-hook tests passed');
+})();
 
 // Issue #283: schema mistakes are reported as "Invalid schema:", not
 // "Invalid environment variables:". A bad rule is a bug in the schema, so the
@@ -5975,6 +6000,6 @@ const loadEnvAsyncTest = (async () => {
   assert.deepStrictEqual(composed.properties.B64, { type: 'string' });
 }
 
-Promise.all([watchModeTest, watchModeErrorPathTest, loadEnvAsyncTest])
+Promise.all([watchModeTest, watchModeErrorPathTest, loadEnvAsyncTest, formatErrorThrowingHookTest])
   .then(() => console.log('env-saaf v1.5.0: all tests passed'))
   .catch((err) => { console.error(err); process.exit(1); });

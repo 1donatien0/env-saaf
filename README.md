@@ -140,7 +140,7 @@ try {
 
 - `errors` is a read-only copy of the same raw diagnostics `error.errors` carries. These are the existing messages, so they can include non-sensitive input examples (values of `sensitive: true` keys stay masked, as before). `context` is separate and contains only `{ keys }`, the schema's key names; the environment object and schema rules are never passed in.
 - The string you return becomes `error.message`. `error.errors` is unchanged, and without the option the message is byte-for-byte what it was.
-- A hook that throws, or returns anything other than a string, falls back to the default message. A `formatError` that is not a function is a `TypeError`.
+- If the hook throws, its error propagates out of `validateEnv` / `loadEnv` unchanged — a broken hook is a programming error, so it is never silently replaced by the default message. A hook that returns anything other than a string still falls back to the default message. A `formatError` that is not a function is a `TypeError`.
 - With `{ throwOnError: false }` no error is thrown, so the hook is not called and `errors` in the result stays raw. `loadEnv` always throws, so it forwards the hook for validation failures. Failures before validation, such as an unreadable or unparsable `.env` file, throw their own errors and are outside the hook's scope. Malformed-schema errors are not formatted either.
 
 In TypeScript, `{ throwOnError: false }` (not `formatError`) narrows the return type to `ValidateResult<S>` (`{ env: EnvResult<S>; errors: string[] }`), so `env.PORT` keeps the type inferred from the schema.
