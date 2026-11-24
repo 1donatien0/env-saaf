@@ -14,6 +14,7 @@
  *   env-saaf scan  [dir | --stdin] [--file name] [--json] [--watch]: just list the env vars your code uses; keys in
  *                           .env.example (or the --file given) that no code reads are reported
  *                           as UNUSED warnings (stderr; `unused` in --json), never an exit code
+ *   env-saaf print [dir] [--schema file] [--file name] [--json] — load and validate the env file, then print the coerced values with sensitive rules masked
  *   env-saaf example [dir] [--write[=file]] [--force] [--schema file] — print a .env.example draft from code
  *                           usage (v1.0.0); --write saves it to .env.example (or the file
  *                           named) instead, refusing to overwrite unless --force is given
@@ -40,7 +41,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
 const { types: { isModuleNamespaceObject } } = require('node:util');
-const { scanCode, scanDir, parseEnvFile, diffEnv, validateEnv, EnvSaafError, generateExample, toJsonSchema } = require('./index');
+const { scanCode, scanDir, parseEnvFile, diffEnv, validateEnv, EnvSaafError, generateExample, toJsonSchema, maskValue } = require('./index');
 
 const argv = process.argv.slice(2);
 // --version / -v is global: report the installed version wherever it appears, before anything else runs
@@ -51,7 +52,7 @@ if (argv.includes('--version') || argv.includes('-v')) {
 // Output is already plain in every mode, including when NO_COLOR is set.
 while (argv[0] === '--no-color') argv.shift();
 const cmd = argv[0];
-const USAGE = 'Usage: env-saaf check [dir] [--file name] [--schema file] [--json] [--json-schema] [--watch] | env-saaf scan [dir | --stdin] [--file name] [--json] [--watch] | env-saaf example [dir] [--write[=file]] [--force] [--schema file] | env-saaf init [dir] [--schema file] [--force] [--from-example[=file]]\n'
+const USAGE = 'Usage: env-saaf check [dir] [--file name] [--schema file] [--json] [--json-schema] [--watch] | env-saaf scan [dir | --stdin] [--file name] [--json] [--watch] | env-saaf print [dir] [--schema file] [--file name] [--json] | env-saaf example [dir] [--write[=file]] [--force] [--schema file] | env-saaf init [dir] [--schema file] [--force] [--from-example[=file]]\n'
   + 'Global options: --no-color, --version / -v (before or after the command).';
 // --help / -h / help: print usage and exit 0 (asking for help is not an error — this used to exit 2)
 if (cmd === '--help' || cmd === '-h' || cmd === 'help') {
@@ -142,6 +143,7 @@ if (fromExampleOpt !== null) {
 const COMMAND_FLAGS = {
   check: ['--file', '--schema', '--json', '--json-schema', '--watch'],
   scan: ['--file', '--json', '--watch', '--stdin'],
+  print: ['--schema', '--file', '--json'],
   example: ['--write', '--force', '--schema'],
   init: ['--schema', '--force', '--from-example', '--groups'],
 };
@@ -315,7 +317,7 @@ function schemaFromExample(hint, exampleName, entries, scannedKeys = [], groups 
 // Issue #133: validate the directory argument before any command uses it.
 // scanDir's readdirSync otherwise throws a raw Node stack trace for a file
 // path or a missing directory. Report a clear message and exit 2 instead.
-if (cmd === 'scan' || cmd === 'check' || cmd === 'example' || cmd === 'init') {
+if (cmd === 'scan' || cmd === 'check' || cmd === 'example' || cmd === 'init' || cmd === 'print') {
   const invalidDir = !fs.existsSync(dir)
     ? `${dir} does not exist`
     : !fs.statSync(dir).isDirectory() ? `${dir} is not a directory` : null;
@@ -381,6 +383,73 @@ function readStdin() {
     process.stdin.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')));
     process.stdin.on('error', reject);
   });
+}
+
+// Issue #353: print the effective configuration, masking sensitive rules.
+function maskBySchema(schema, values) {
+  const out = Array.isArray(values) ? [...values] : { ...values };
+  for (const [key, rule] of Object.entries(schema)) {
+    if (!Object.prototype.hasOwnProperty.call(out, key)) continue;
+    if (rule && typeof rule === 'object' && rule.schema && typeof rule.prefix === 'string') {
+      out[key] = maskBySchema(rule.schema, out[key]);
+    } else if (rule && rule.sensitive === true) {
+      out[key] = typeof out[key] === 'string' ? maskValue(out[key]) : '[REDACTED]';
+    }
+  }
+  return out;
+}
+
+function printEffective(schema, values, prefix = '', lines = []) {
+  for (const [key, rule] of Object.entries(schema)) {
+    if (!Object.prototype.hasOwnProperty.call(values, key)) continue;
+    if (rule && typeof rule === 'object' && rule.schema && typeof rule.prefix === 'string') {
+      printEffective(rule.schema, values[key], prefix + rule.prefix, lines);
+    } else {
+      const value = values[key];
+      const shown = value instanceof Date ? value.toISOString()
+        : value !== null && typeof value === 'object' ? JSON.stringify(value)
+          : String(value);
+      lines.push(`${prefix}${key}=${shown}`);
+    }
+  }
+  return lines;
+}
+
+// Issue #353: async so the schema can be loaded with the ESM-aware loader.
+async function runPrint() {
+  // Issue #353: an answer to "what did my app load?", with sensitive values
+  // masked. Validation failures use the same messages and exit code as check.
+  if (!schemaOpt) {
+    const message = 'env-saaf: print needs --schema <file>';
+    if (jsonMode) console.log(JSON.stringify({ ok: false, error: message }));
+    else console.error(message);
+    process.exit(2);
+  }
+  const valuesName = fileExplicit ? fileOpt : '.env';
+  const valuesPath = path.join(dir, valuesName);
+  if (!fs.existsSync(valuesPath)) {
+    const message = `env-saaf: ${valuesName} not found in ${dir}`;
+    if (jsonMode) console.log(JSON.stringify({ ok: false, error: message }));
+    else console.error(message);
+    process.exit(2);
+  }
+  const schema = await loadSchemaFile();
+  let env;
+  try {
+    env = validateEnv(schema, readEnvFile(valuesPath));
+  } catch (error) {
+    if (!(error instanceof EnvSaafError)) throw error;
+    if (jsonMode) console.log(JSON.stringify({ ok: false, errors: error.errors }));
+    else error.errors.forEach((line) => console.error(line));
+    process.exit(1);
+  }
+  const masked = maskBySchema(schema, env);
+  if (jsonMode) {
+    console.log(JSON.stringify(masked, null, 2));
+  } else {
+    printEffective(schema, masked).forEach((line) => console.log(line));
+  }
+  return 0;
 }
 
 function printScanResult(vars) {
@@ -714,6 +783,11 @@ if (cmd === 'scan' || cmd === 'check') {
       (err) => { console.error(err); process.exit(1); }
     );
   }
+} else if (cmd === 'print') {
+  runPrint().then(
+    (code) => process.exit(code),
+    (error) => { console.error(error); process.exit(1); },
+  );
 } else if (cmd === 'example') {
   // Issue #206: with --schema <file>, generate the example from the schema
   // (type placeholders plus alias/requiredIf annotations) instead of the code

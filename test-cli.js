@@ -164,6 +164,51 @@ try {
     assert.ok(Array.isArray(parsed.invalid) && parsed.invalid.length === 1 && /PORT/.test(parsed.invalid[0]));
   }
 
+  // --- print: coerced values, defaults and masked sensitive rules (#353) ---
+  {
+    const schema = "module.exports = {\n"
+      + "  PORT: { type: 'port', required: true },\n"
+      + "  DEBUG: { type: 'boolean', default: false },\n"
+      + "  API_TOKEN: { type: 'string', required: true, sensitive: true },\n"
+      + "  DB: { prefix: 'DB_', schema: { HOST: { type: 'string', default: 'localhost' } } },\n"
+      + "};\n";
+    const dir = mkProject({
+      'src/app.js': 'console.log(process.env.PORT);\n',
+      'env.schema.js': schema,
+      '.env': 'PORT=3000\nAPI_TOKEN=supersecretvalue\n',
+      '.env.production': 'PORT=3100\nAPI_TOKEN=other-secret\n',
+    });
+    const text = run(['print', dir, '--schema', 'env.schema.js'], dir);
+    assert.strictEqual(text.status, 0, text.stdout + text.stderr);
+    assert.match(text.stdout, /^PORT=3000$/m);
+    assert.match(text.stdout, /^DEBUG=false$/m);
+    assert.match(text.stdout, /^DB_HOST=localhost$/m);
+    assert.ok(!text.stdout.includes('supersecretvalue'), 'sensitive value leaked in text output');
+    assert.match(text.stdout, /^API_TOKEN=su\*\*\*ue$/m);
+
+    const json = JSON.parse(run(['print', dir, '--schema', 'env.schema.js', '--json'], dir).stdout);
+    assert.strictEqual(json.PORT, 3000);
+    assert.strictEqual(json.DEBUG, false);
+    assert.strictEqual(json.DB.HOST, 'localhost');
+    assert.notStrictEqual(json.API_TOKEN, 'supersecretvalue');
+    assert.ok(!JSON.stringify(json).includes('supersecretvalue'));
+
+    const other = JSON.parse(run(['print', dir, '--schema', 'env.schema.js', '--file', '.env.production', '--json'], dir).stdout);
+    assert.strictEqual(other.PORT, 3100);
+    assert.ok(!JSON.stringify(other).includes('other-secret'));
+
+    fs.writeFileSync(path.join(dir, '.env'), 'PORT=nope\nAPI_TOKEN=x\n');
+    const bad = run(['print', dir, '--schema', 'env.schema.js'], dir);
+    assert.strictEqual(bad.status, 1);
+    assert.match(bad.stderr, /PORT: expected a port/);
+    const noSchema = run(['print', dir], dir);
+    assert.strictEqual(noSchema.status, 2);
+    assert.match(noSchema.stderr, /print needs --schema/);
+    const noEnv = run(['print', dir, '--schema', 'env.schema.js', '--file', 'missing.env'], dir);
+    assert.strictEqual(noEnv.status, 2);
+    assert.match(noEnv.stderr, /missing\.env not found/);
+  }
+
   // --- check --json-schema: stdout is the draft 2020-12 JSON Schema for the --schema file (issue #268)
   {
     const { toJsonSchema } = require('./index');
