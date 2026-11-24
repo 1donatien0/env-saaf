@@ -659,6 +659,8 @@ fastify.listen({ port: fastify.config.PORT, host: fastify.config.HOST });
 
 For local development with a `.env` file, replace `validateEnv(schema)` with `loadEnv(schema)` (or `loadEnv(schema, { paths: ['.env', '.env.local'] })`) in the same startup block.
 
+A runnable version of this recipe, with a schema in `server.js` and an `.env.example`, is in [`examples/fastify/`](examples/fastify/).
+
 ### Next.js
 
 Put your server-only schema in a shared module (such as `lib/env.ts`) and import it from Next.js's `instrumentation.ts` `register()` hook, which runs **once when the Node.js server boots** — before handling requests, Route Handlers, or Server Components. Guard with `process.env.NEXT_RUNTIME === 'nodejs'` if your app also uses the Edge runtime, since `env-saaf` uses Node built-ins (`node:fs`, `node:net`, `node:path`). You can also import the same validation module at the top of `next.config.mjs` if you want `next build` to fail fast on missing build-time config.
@@ -684,6 +686,8 @@ export async function register() {
 ```
 
 Next.js loads `.env`, `.env.local`, and environment-specific `.env.*` files into `process.env` automatically before `instrumentation.ts` runs, so `validateEnv` reads them directly without calling `loadEnv`.
+
+A runnable version of this recipe is in [`examples/nextjs/`](examples/nextjs/): `instrumentation.ts` imports the server-only schema module, and `lib/env.ts` exits with the env-saaf message when a required value is missing.
 
 **`NEXT_PUBLIC_` variables are out of scope for secrets:** Next.js inlines every `NEXT_PUBLIC_*` variable into the browser bundle at build time. Never store secrets (API keys, database URLs, signing secrets) in `NEXT_PUBLIC_*` variables — keep secrets in unprefixed server-only variables validated in server-only modules like `lib/env.ts`. If you also want to validate public client settings (such as `NEXT_PUBLIC_SITE_URL`), pass an explicit object (`validateEnv({ NEXT_PUBLIC_SITE_URL: { type: 'url', required: true } }, { NEXT_PUBLIC_SITE_URL: process.env.NEXT_PUBLIC_SITE_URL })`) because Next.js statically replaces literal `process.env.NEXT_PUBLIC_*` references in client bundles rather than exposing a full `process.env` object.
 

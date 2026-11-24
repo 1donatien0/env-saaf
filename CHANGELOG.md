@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Added: runnable `examples/fastify/` and `examples/nextjs/` projects, matching
+  the Express example's layout, so the Fastify and Next.js recipes are exercised
+  instead of living only as README snippets. Both fail with the env-saaf message
+  when a required value is missing (fixes #364).
+
 - Fixed: `validateSchema` rejects `required: true` together with a `default` (the default means the key can never be missing, so `required` was dead config). The `init` starter schema no longer sets both on `PORT` (fixes #340).
 
 - Fixed: duration bound errors name the duration and show milliseconds for numeric bounds, while preserving explicit units in string bounds (fixes #341).
