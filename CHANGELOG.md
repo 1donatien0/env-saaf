@@ -44,6 +44,8 @@
 
 - Fixed: `parseEnvFile` reports a line-numbered `SyntaxError` for invalid assignment keys instead of silently dropping them, without exposing their values (fixes #221).
 
+- Added: `parseEnvFile` accepts dots and dashes after the first character of `.env` keys, so `loadEnv` and `init --from-example` can use names like `DB.PORT` and `MY-KEY`. Interpolation syntax is unchanged (fixes #290).
+
 - Fixed: `number`, `int` and `port` reject hexadecimal, binary and octal strings (including array items), while decimal strings and numeric defaults keep working (fixes #219).
 
 - Added: grouped (nested) schemas — a rule with a `schema` object and a `prefix` (and no `type`) reads inner rules from prefixed env vars (`DB_` + `HOST` -> `DB_HOST`) and nests the result (`{ DB: { HOST, ... } }`); errors name the full env var; `strict`/`aliases`/`requiredIf`/`default`/`transform` work inside groups (aliases and requiredIf keys use full env names there); `generateExample` emits the flat prefixed keys with a group comment; `loadEnv` assign writes flat names; `validateSchema` is now exported and rejects malformed groups up front (bad prefix/schema shape, `type` on a group, nested groups, prefix collisions) (fixes #228).

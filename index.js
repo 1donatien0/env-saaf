@@ -1306,7 +1306,7 @@ function parseEnvFile(text) {
   for (let i = 0; i < lines.length; i++) {
     const t = lines[i].trim();
     if (!t || t.startsWith('#')) continue;
-    const m = t.replace(/^export\s+/, '').match(/^([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$/);
+    const m = t.replace(/^export\s+/, '').match(/^([A-Za-z_][A-Za-z0-9_.-]*)\s*=\s*(.*)$/);
     if (!m) {
       // Reject malformed assignments as well as bare lines, without echoing values.
       throw new SyntaxError(`line ${i + 1}: expected KEY=VALUE`);

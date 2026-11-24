@@ -329,6 +329,24 @@ try {
     assert.strictEqual(c.status, 0, `check against the example should pass, got ${c.status}: ${c.stdout}${c.stderr}`);
   }
 
+  // --- issue #290: inferred schemas keep dotted and dashed names as usable flat keys
+  {
+    const dir = mkProject({ '.env.example': 'DB.PORT=5432\nMY-KEY=demo\nA.B-C_D=3\n' });
+    const r = run(['init', dir, '--from-example'], dir);
+    assert.strictEqual(r.status, 0, `${r.stdout}${r.stderr}`);
+
+    const schema = require(path.join(dir, 'env.schema.js'));
+    assert.deepStrictEqual(schema, {
+      'DB.PORT': { type: 'port' }, 'MY-KEY': { type: 'string' }, 'A.B-C_D': { type: 'int' },
+    });
+    const { loadEnv } = require('./index');
+    assert.deepStrictEqual(loadEnv(schema, { path: path.join(dir, '.env.example'), env: {} }), {
+      'DB.PORT': 5432, 'MY-KEY': 'demo', 'A.B-C_D': 3,
+    });
+    const c = run(['check', dir, '--file', '.env.example', '--schema', 'env.schema.js'], dir);
+    assert.strictEqual(c.status, 0, `${c.stdout}${c.stderr}`);
+  }
+
   // --- issue #232: a scanned key the example lacks is folded in as a string rule
   {
     const dir = mkProject({ '.env.example': 'PORT=8080\n', 'src/app.js': 'console.log(process.env.EXTRA_SCANNED);\n' });
