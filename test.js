@@ -691,6 +691,37 @@ assert.ok(!ex.includes('sk_live'));
   }
 }
 
+// Issue #355: user exclusions, on top of the built-in skips
+{
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const path = require('node:path');
+  const { scanDir } = require('./index');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'env-saaf-scan-exclude-'));
+  try {
+    fs.writeFileSync(path.join(dir, 'app.js'), 'process.env.FROM_APP');
+    fs.mkdirSync(path.join(dir, 'fixtures'));
+    fs.writeFileSync(path.join(dir, 'fixtures', 'a.js'), 'process.env.FROM_FIXTURES');
+    fs.mkdirSync(path.join(dir, 'src', 'generated'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'src', 'generated', 'g.js'), 'process.env.FROM_GENERATED');
+    fs.mkdirSync(path.join(dir, 'src', 'keep'));
+    fs.writeFileSync(path.join(dir, 'src', 'keep', 'k.js'), 'process.env.FROM_KEEP');
+    fs.mkdirSync(path.join(dir, 'node_modules', 'pkg'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'node_modules', 'pkg', 'i.js'), 'process.env.FROM_NODE_MODULES');
+
+    assert.deepStrictEqual(scanDir(dir), ['FROM_APP', 'FROM_FIXTURES', 'FROM_GENERATED', 'FROM_KEEP']);
+    // A bare name matches that directory anywhere; a glob is relative to the root.
+    assert.deepStrictEqual(scanDir(dir, { exclude: ['fixtures'] }), ['FROM_APP', 'FROM_GENERATED', 'FROM_KEEP']);
+    assert.deepStrictEqual(scanDir(dir, { exclude: ['src/generated/**'] }), ['FROM_APP', 'FROM_FIXTURES', 'FROM_KEEP']);
+    assert.deepStrictEqual(scanDir(dir, { exclude: ['src/gen*'] }), ['FROM_APP', 'FROM_FIXTURES', 'FROM_KEEP']);
+    // Built-in skips still apply when exclusions are present.
+    assert.deepStrictEqual(scanDir(dir, { exclude: ['fixtures', 'src/generated/**'] }), ['FROM_APP', 'FROM_KEEP']);
+    assert.deepStrictEqual(scanDir(dir, { exclude: [] }), ['FROM_APP', 'FROM_FIXTURES', 'FROM_GENERATED', 'FROM_KEEP']);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+}
+
 // Issue #235: scanDir also scans single-file components (.vue/.svelte/.astro)
 {
   const fs = require('node:fs');

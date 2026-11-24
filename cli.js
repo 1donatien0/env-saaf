@@ -51,7 +51,7 @@ if (argv.includes('--version') || argv.includes('-v')) {
 // Output is already plain in every mode, including when NO_COLOR is set.
 while (argv[0] === '--no-color') argv.shift();
 const cmd = argv[0];
-const USAGE = 'Usage: env-saaf check [dir] [--file name] [--schema file] [--json] [--json-schema] [--watch] | env-saaf scan [dir | --stdin] [--file name] [--json] [--watch] | env-saaf example [dir] [--write[=file]] [--force] [--schema file] | env-saaf init [dir] [--schema file] [--force] [--from-example[=file]]\n'
+const USAGE = 'Usage: env-saaf check [dir] [--file name] [--schema file] [--exclude pattern] [--json] [--json-schema] [--watch] | env-saaf scan [dir | --stdin] [--file name] [--exclude pattern] [--json] [--watch] | env-saaf example [dir] [--write[=file]] [--force] [--schema file] | env-saaf init [dir] [--schema file] [--force] [--from-example[=file]]\n'
   + 'Global options: --no-color, --version / -v (before or after the command).';
 // --help / -h / help: print usage and exit 0 (asking for help is not an error — this used to exit 2)
 if (cmd === '--help' || cmd === '-h' || cmd === 'help') {
@@ -79,6 +79,8 @@ let forceOpt = false;
 // Issue #230: --watch ('check' and 'scan' only) re-runs the command when watched inputs change.
 let watchOpt = false;
 let stdinOpt = false;
+// Issue #355: repeatable --exclude patterns for scan and check.
+const excludeOpts = [];
 
 // Issue #230: in watch mode an error exit must not kill the watcher — fatalExit
 // throws WatchExit instead, so watchLoop's runOnce can log the exit code and
@@ -110,6 +112,8 @@ for (let i = 1; i < argv.length; i++) {
   else if (a.startsWith('--file=')) { fileOpt = a.slice('--file='.length); fileExplicit = true; }
   else if (a === '--schema' && argv[i + 1]) schemaOpt = argv[++i];
   else if (a.startsWith('--schema=')) schemaOpt = a.slice('--schema='.length);
+  else if (a === '--exclude' && argv[i + 1]) excludeOpts.push(argv[++i]);
+  else if (a.startsWith('--exclude=')) excludeOpts.push(a.slice('--exclude='.length));
   else if (a === '--json') jsonMode = true;
   else if (a === '--json-schema') jsonSchemaOpt = true;
   else if (a === '--write') writeOpt = '.env.example';
@@ -121,7 +125,7 @@ for (let i = 1; i < argv.length; i++) {
   else if (a.startsWith('--from-example=')) fromExampleOpt = a.slice('--from-example='.length) || '.env.example';
   else if (a === '--groups') groupsOpt = true;
   else if (a === '--no-color') { /* global flag, allowed on every command */ }
-  else if (a === '--file' || a === '--schema') valuelessFlags.push(a);
+  else if (a === '--file' || a === '--schema' || a === '--exclude') valuelessFlags.push(a);
   else if (a.startsWith('--')) unknownFlags.push(a);
   else positional.push(a);
 }
@@ -140,8 +144,8 @@ if (fromExampleOpt !== null) {
 // like `--jsoon` in CI produced text output where JSON was expected. Fail
 // fast with exit 2, in the same message shape as other usage errors.
 const COMMAND_FLAGS = {
-  check: ['--file', '--schema', '--json', '--json-schema', '--watch'],
-  scan: ['--file', '--json', '--watch', '--stdin'],
+  check: ['--file', '--schema', '--exclude', '--json', '--json-schema', '--watch'],
+  scan: ['--file', '--exclude', '--json', '--watch', '--stdin'],
   example: ['--write', '--force', '--schema'],
   init: ['--schema', '--force', '--from-example', '--groups'],
 };
@@ -155,6 +159,7 @@ if (COMMAND_FLAGS[cmd]) {
   if (forceOpt) seenFlags.add('--force');
   if (watchOpt) seenFlags.add('--watch');
   if (stdinOpt) seenFlags.add('--stdin');
+  if (excludeOpts.length) seenFlags.add('--exclude');
   if (fromExampleOpt !== null) seenFlags.add('--from-example');
   if (groupsOpt) seenFlags.add('--groups');
   let flagError = null;
@@ -412,7 +417,7 @@ function printScanResult(vars) {
 // re-run them; the non-watch path below calls them exactly once, keeping
 // output and exit codes byte-for-byte unchanged.
 function runScan() {
-  return printScanResult(scanDir(dir));
+  return printScanResult(scanDir(dir, { exclude: excludeOpts }));
 }
 
 const esmWatchPaths = new Set();
@@ -544,7 +549,7 @@ async function runCheck() {
     fatalExit(2);
   }
   const documented = Object.keys(readEnvFile(examplePath));
-  const used = scanDir(dir);
+  const used = scanDir(dir, { exclude: excludeOpts });
   const { usedNotDocumented, documentedNotUsed } = diffEnv(used, documented);
   // The real .env is not committed, so only compare keys when it is actually present
   const envPath = path.join(dir, '.env');

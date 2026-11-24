@@ -1770,12 +1770,52 @@ const SCAN_SKIP_DIRECTORIES = new Set([
   'node_modules', 'dist', 'build', 'coverage', '.next', 'out', 'target',
 ]);
 
-function scanDir(dir) {
+/** Turn one exclusion glob into an anchored RegExp over a relative path. */
+function globToRegExp(glob) {
+  let out = '';
+  for (let i = 0; i < glob.length; i++) {
+    const ch = glob[i];
+    if (ch === '*') {
+      if (glob[i + 1] === '*') {
+        out += '.*';
+        i++;
+        if (glob[i + 1] === '/') i++;   // `**/` also matches zero directories
+      } else {
+        out += '[^/]*';
+      }
+    } else if (ch === '?') {
+      out += '[^/]';
+    } else {
+      out += ch.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    }
+  }
+  return new RegExp(`^${out}$`);
+}
+
+/** A predicate over a path relative to the scanned root (issue #355). */
+function scanExcluder(patterns) {
+  if (!patterns || !patterns.length) return () => false;
+  const tests = patterns.map((pattern) => {
+    const glob = String(pattern).trim().replace(/\\/g, '/').replace(/^\.\//, '').replace(/\/+$/, '');
+    if (!glob) return () => false;
+    const re = globToRegExp(glob);
+    // A bare name matches that segment anywhere in the tree; a path with a
+    // slash matches the relative path.
+    return glob.includes('/')
+      ? (rel) => re.test(rel)
+      : (rel) => rel.split('/').some((segment) => re.test(segment));
+  });
+  return (rel) => tests.some((test) => test(rel));
+}
+
+function scanDir(dir, options = {}) {
+  const excluded = scanExcluder(options.exclude);
   const found = new Set();
   const walk = (d) => {
     for (const e of fs.readdirSync(d, { withFileTypes: true })) {
       if (SCAN_SKIP_DIRECTORIES.has(e.name) || e.name.startsWith('.git')) continue;
       const p = path.join(d, e.name);
+      if (excluded(path.relative(dir, p))) continue;
       if (e.isDirectory()) walk(p);
       else if (SCAN_EXTENSIONS.test(e.name)) scanCode(fs.readFileSync(p, 'utf8')).forEach(k => found.add(k));
     }
