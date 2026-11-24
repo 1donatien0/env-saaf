@@ -218,3 +218,7 @@ validateEnv({ PORT: { type: 'port' } }, {}, {
 loadEnv({ PORT: { type: 'port' } }, { formatError: (errors) => errors.join('; ') });
 // @ts-expect-error formatError must return a string
 validateEnv({ PORT: { type: 'port' } }, {}, { formatError: () => 1 });
+
+// Duration string bounds retain the numeric result type.
+const boundedDuration = validateEnv({ TIMEOUT: { type: 'duration', min: '30s', max: '1h30m', required: true } });
+const boundedMilliseconds: number = boundedDuration.TIMEOUT;

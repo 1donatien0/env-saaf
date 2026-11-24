@@ -83,6 +83,12 @@ const KNOWN_LOAD_ENV_OPTIONS = new Set([
   ...KNOWN_VALIDATE_OPTIONS, 'path', 'paths', 'env', 'override', 'assign',
 ]);
 
+// Only string duration bounds need coercion; numeric bounds retain their contract.
+function numericBound(key, rule, value) {
+  return rule.type === 'duration' && typeof value === 'string'
+    ? coerce(key, value, 'duration') : value;
+}
+
 // Issue #228: a group rule nests a sub-schema under one prefix, so
 // { DB: { prefix: 'DB_', schema: { HOST: {...} } } } reads the env var
 // DB_HOST and returns { DB: { HOST: ... } }. A rule carrying a `schema`
@@ -276,6 +282,22 @@ function validateSchemaRules(schema, warn, patterns = new Map()) {
         if (lo instanceof Date && hi instanceof Date && lo.getTime() > hi.getTime()) {
           errors.push(`${key}: "min" must not exceed "max"`);
         }
+      }
+    } else if (effectiveType === 'duration') {
+      const parsed = {};
+      for (const opt of ['min', 'max']) {
+        if (rule[opt] === undefined) continue;
+        try {
+          if (typeof rule[opt] !== 'number' && typeof rule[opt] !== 'string') throw new Error();
+          const bound = numericBound(key, rule, rule[opt]);
+          if (!Number.isFinite(bound)) throw new Error();
+          parsed[opt] = bound;
+        } catch (_) {
+          errors.push(`${key}: "${opt}" must be a number or valid duration string for type 'duration'`);
+        }
+      }
+      if (parsed.min !== undefined && parsed.max !== undefined && parsed.min > parsed.max) {
+        errors.push(`${key}: "min" must not exceed "max"`);
       }
     } else {
       for (const opt of ['min', 'max']) {
@@ -974,8 +996,8 @@ function validateEnvCore(schema, env, options) {
       // Runs right after coercion, before choices/pattern/transform; the
       // error names the allowed range. min alone or max alone both work.
       if (typeof val === 'number' && (rule.min !== undefined || rule.max !== undefined)) {
-        const lo = rule.min !== undefined ? rule.min : -Infinity;
-        const hi = rule.max !== undefined ? rule.max : Infinity;
+        const lo = rule.min !== undefined ? numericBound(key, rule, rule.min) : -Infinity;
+        const hi = rule.max !== undefined ? numericBound(key, rule, rule.max) : Infinity;
         if (val < lo || val > hi) {
           const range = rule.min !== undefined && rule.max !== undefined ? `${rule.min}–${rule.max}`
             : rule.min !== undefined ? `at least ${rule.min}` : `at most ${rule.max}`;
@@ -1882,8 +1904,10 @@ function scalarPlaceholder(rule, stringGrowth) {
   }
   if (!['number', 'int', 'port', 'duration'].includes(type)) return placeholder;
 
-  let min = Number.isFinite(rule.min) ? rule.min : -Infinity;
-  let max = Number.isFinite(rule.max) ? rule.max : Infinity;
+  const lower = numericBound('placeholder', rule, rule.min);
+  const upper = numericBound('placeholder', rule, rule.max);
+  let min = Number.isFinite(lower) ? lower : -Infinity;
+  let max = Number.isFinite(upper) ? upper : Infinity;
   if (type === 'port' || type === 'duration') min = Math.max(0, min);
   if (type === 'port') max = Math.min(65535, max);
   if (type === 'int' || type === 'port') {
@@ -2075,8 +2099,8 @@ function jsonSchemaForRule(key, rule, required) {
   }
   // JSON Schema numerical bounds also apply to numbers in an otherwise unconstrained `json` rule.
   if (type === 'json' || property.type === 'number' || property.type === 'integer') {
-    if (rule.min !== undefined) property.minimum = Math.max(rule.min, property.minimum ?? -Infinity);
-    if (rule.max !== undefined) property.maximum = Math.min(rule.max, property.maximum ?? Infinity);
+    if (rule.min !== undefined) property.minimum = Math.max(numericBound('schema', rule, rule.min), property.minimum ?? -Infinity);
+    if (rule.max !== undefined) property.maximum = Math.min(numericBound('schema', rule, rule.max), property.maximum ?? Infinity);
   }
   if (rule.minLength !== undefined) property.minLength = rule.minLength;
   if (rule.maxLength !== undefined) property.maxLength = rule.maxLength;

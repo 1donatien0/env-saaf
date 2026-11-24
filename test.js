@@ -2,6 +2,52 @@
 const assert = require('node:assert');
 const { loadEnv, validateEnv, validateSchema, EnvSaafError, parseEnvFile, scanCode, diffEnv, maskSecrets, maskValue, generateExample, toJsonSchema } = require('./index');
 
+// Issue #322: duration bounds use the value parser without changing numeric bounds.
+{
+  const rule = Object.freeze({ type: 'duration', min: '30s', max: '1h30m' });
+  const schema = Object.freeze({ TIMEOUT: rule });
+  assert.doesNotThrow(() => validateSchema(schema));
+  for (const [raw, expected] of [['30s', 30000], ['1h30m', 5400000], ['1m', 60000]]) {
+    assert.strictEqual(validateEnv(schema, { TIMEOUT: raw }).TIMEOUT, expected);
+  }
+  assert.throws(() => validateEnv(schema, { TIMEOUT: '29s' }), /30s/);
+  assert.throws(() => validateEnv(schema, { TIMEOUT: '2h' }), /1h30m/);
+  assert.throws(() => validateEnv({ T: { type: 'duration', min: '500ms' } }, { T: '499ms' }), /at least 500ms/);
+  assert.strictEqual(validateEnv({ T: { type: 'duration', max: '500ms' } }, { T: '500ms' }).T, 500);
+  assert.strictEqual(validateEnv({ T: { type: 'duration', min: 30000, max: '1m' } }, { T: '30s' }).T, 30000);
+  assert.strictEqual(validateEnv({ T: { type: 'duration', min: '30s', max: 60000 } }, { T: '1m' }).T, 60000);
+  for (const bound of ['soon', '', '1h30', '1h2h', '-1s', '1e3', true, null, {}, [], Infinity, NaN]) {
+    for (const opt of ['min', 'max']) {
+      assert.throws(() => validateSchema({ T: { type: 'duration', [opt]: bound } }), EnvSaafError);
+    }
+  }
+  for (const [min, max] of [['2m', '30s'], ['2m', 30000], [120000, '30s']]) {
+    assert.throws(() => validateSchema({ T: { type: 'duration', min, max } }), /must not exceed/);
+  }
+  assert.strictEqual(validateEnv({ T: { type: 'duration', min: '500ms', max: 500 } }, { T: '500ms' }).T, 500);
+  assert.throws(() => validateEnv({ T: { type: 'duration', min: 'soon' } }, {}, { throwOnError: false }), /Invalid schema/);
+  assert.throws(() => validateEnv({ T: { type: 'duration', min: '30s', default: '1s' } }, {}), /at least 30s/);
+  assert.strictEqual(validateEnv({ T: { type: 'duration', min: -1, max: 500 } }, { T: '500' }).T, 500);
+  assert.throws(() => validateEnv({ T: { type: 'duration', min: 1000 } }, { T: '500' }), /at least 1000/);
+  assert.throws(() => validateSchema({ T: { type: 'number', min: '30s' } }), /must be a number/);
+  const grouped = { API: { prefix: 'API_', schema: { TIMEOUT: rule } } };
+  assert.strictEqual(validateEnv(grouped, { API_TIMEOUT: '30s' }).API.TIMEOUT, 30000);
+  const errors = validateEnv(schema, { TIMEOUT: '1s' }, { throwOnError: false }).errors;
+  assert.strictEqual(errors.length, 1);
+  assert.match(errors[0], /30s/);
+  for (const bounds of [{ min: '1h' }, { max: '500ms' }, { min: '1h', max: '2h' }]) {
+    const s = { TIMEOUT: { type: 'duration', ...bounds } };
+    assert.doesNotThrow(() => validateEnv(s, parseEnvFile(generateExample(s))));
+    const property = toJsonSchema(s).properties.TIMEOUT;
+    if (bounds.min) assert.strictEqual(property.minimum, bounds.min === '1h' ? 3600000 : 0);
+    if (bounds.max) assert.strictEqual(property.maximum, bounds.max === '2h' ? 7200000 : 500);
+    assert.ok(!JSON.stringify(property).includes('null'));
+  }
+  assert.deepStrictEqual(toJsonSchema(grouped).properties.API.properties.TIMEOUT,
+    { type: 'number', minimum: 30000, maximum: 5400000 });
+  assert.deepStrictEqual(rule, { type: 'duration', min: '30s', max: '1h30m' });
+}
+
 // Issue #229: JSON Schema export
 {
   const draft = 'https://json-schema.org/draft/2020-12/schema';
