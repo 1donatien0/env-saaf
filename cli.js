@@ -38,6 +38,8 @@
  */
 const fs = require('node:fs');
 const path = require('node:path');
+const { pathToFileURL } = require('node:url');
+const { types: { isModuleNamespaceObject } } = require('node:util');
 const { scanDir, parseEnvFile, diffEnv, validateEnv, EnvSaafError, generateExample, toJsonSchema } = require('./index');
 
 const argv = process.argv.slice(2);
@@ -393,27 +395,75 @@ function runScan() {
   return 0;
 }
 
-// Load the --schema file (relative to the checked directory, like --file)
-// and check it exports a schema object. Shared by the --schema validation
-// step in runCheck and by --json-schema (issue #268). A load failure or a
-// non-object export reports a plain message and exits 2.
-function loadSchemaFile() {
-  let schema;
+const esmWatchPaths = new Set();
+let watchLoadSeq = 0;
+
+function isPlainObject(value) {
+  if (value === null || typeof value !== 'object') return false;
+  const proto = Object.getPrototypeOf(value);
+  return proto === Object.prototype || proto === null;
+}
+
+function unwrapSchemaModule(mod, loadedViaRequire) {
+  if (!isModuleNamespaceObject(mod)) return mod;
+  // Node's require(esm) attaches a synthetic __esModule: true alongside default;
+  // ignore that marker only on require-loaded namespaces so explicit ESM named
+  // exports are never silently dropped.
+  const exportKeys = Object.keys(mod).filter(
+    key => !(loadedViaRequire && key === '__esModule' && mod[key] === true)
+  );
+  if (exportKeys.length === 1 && exportKeys[0] === 'default') {
+    return mod.default;
+  }
+  return mod;
+}
+
+async function loadSchemaModule(schemaPath) {
+  const importFresh = async () => {
+    const url = pathToFileURL(schemaPath);
+    if (watchActive) url.searchParams.set('watch', String(++watchLoadSeq));
+    return { mod: await import(url.href), loadedViaRequire: false };
+  };
+  if (schemaIsEsm(schemaPath) || (watchActive && esmWatchPaths.has(schemaPath))) {
+    return importFresh();
+  }
   try {
-    const schemaPath = path.resolve(dir, schemaOpt);
     // Issue #230: require() caches modules, so in watch mode a schema edit
     // would otherwise re-run against the stale cached schema — drop the
     // cache entry before loading (the init command uses the same pattern).
     if (watchActive) {
       try { delete require.cache[require.resolve(schemaPath)]; } catch { /* not loaded yet */ }
     }
-    schema = require(schemaPath);
+    const mod = require(schemaPath);
+    if (watchActive && isModuleNamespaceObject(mod)) {
+      esmWatchPaths.add(schemaPath);
+    }
+    return { mod, loadedViaRequire: true };
+  } catch (e) {
+    if (e && (e.code === 'ERR_REQUIRE_ESM' || e.code === 'ERR_REQUIRE_ASYNC_MODULE')) {
+      if (watchActive) esmWatchPaths.add(schemaPath);
+      return importFresh();
+    }
+    throw e;
+  }
+}
+
+// Load the --schema file (relative to the checked directory, like --file)
+// and check it exports a schema object. Shared by the --schema validation
+// step in runCheck, --json-schema (issue #268), and example --schema
+// (issue #206). A load failure or a non-object export reports a plain message
+// and exits 2.
+async function loadSchemaFile() {
+  const schemaPath = path.resolve(dir, schemaOpt);
+  let loaded;
+  try {
+    loaded = await loadSchemaModule(schemaPath);
   } catch (e) {
     // Issue #184: when the schema file is one Node treats as an ES module,
     // say so plainly and name the fix instead of surfacing the raw
     // `ReferenceError: module is not defined` text.
-    let detail = e.message;
-    if (/ES module|module is not defined/.test(e.message)) {
+    let detail = e && typeof e.message === 'string' ? e.message : String(e);
+    if (/ES module|module is not defined/.test(detail)) {
       detail += ' — in a "type": "module" project the schema must be a .cjs file (e.g. env.schema.cjs)';
     }
     const message = `env-saaf: cannot load schema ${schemaOpt}: ${detail}`;
@@ -421,7 +471,8 @@ function loadSchemaFile() {
     else console.error(message);
     fatalExit(2);
   }
-  if (schema === null || typeof schema !== 'object' || Array.isArray(schema)) {
+  const schema = unwrapSchemaModule(loaded.mod, loaded.loadedViaRequire);
+  if (!isPlainObject(schema)) {
     const message = `env-saaf: schema ${schemaOpt} must export a schema object (module.exports = { KEY: { type: 'port', ... } })`;
     if (jsonMode) console.log(JSON.stringify({ ok: false, error: message }));
     else console.error(message);
@@ -430,7 +481,7 @@ function loadSchemaFile() {
   return schema;
 }
 
-function runCheck() {
+async function runCheck() {
   // Issue #268: --json-schema prints the --schema file as a draft 2020-12
   // JSON Schema document to stdout instead of running the check. The
   // .env.example is never read here, so a schema can be converted even
@@ -444,7 +495,7 @@ function runCheck() {
       else console.error(message);
       fatalExit(2);
     }
-    const schema = loadSchemaFile();
+    const schema = await loadSchemaFile();
     let document;
     try {
       document = toJsonSchema(schema);
@@ -494,7 +545,7 @@ function runCheck() {
   // errors already name the key) and fail the check like a missing key.
   let invalid = [];
   if (schemaOpt) {
-    const schema = loadSchemaFile();
+    const schema = await loadSchemaFile();
     const targetName = fileExplicit ? fileOpt : (fs.existsSync(envPath) ? '.env' : null);
     if (targetName) {
       const values = readEnvFile(path.join(dir, targetName));
@@ -558,20 +609,39 @@ function runCheck() {
 // outside the scanned tree. Ctrl-C exits cleanly with code 0.
 function watchLoop() {
   watchActive = true;
-  const runOnce = () => {
-    let code;
-    try {
-      code = cmd === 'scan' ? runScan() : runCheck();
-    } catch (e) {
-      // Issue #230: error paths report their exit code and the loop survives.
-      if (e instanceof WatchExit) code = e.code;
-      else throw e;
+  let running = false;
+  let rerunPending = false;
+  const runOnce = async () => {
+    if (running) {
+      rerunPending = true;
+      return;
     }
-    console.error(`env-saaf: [${new Date().toISOString()}] ${cmd} finished, exit ${code}`);
-    return code;
+    running = true;
+    try {
+      do {
+        rerunPending = false;
+        let code;
+        try {
+          code = cmd === 'scan' ? runScan() : await runCheck();
+        } catch (e) {
+          // Issue #230: error paths report their exit code and the loop survives.
+          if (e instanceof WatchExit) code = e.code;
+          else throw e;
+        }
+        console.error(`env-saaf: [${new Date().toISOString()}] ${cmd} finished, exit ${code}`);
+      } while (rerunPending);
+    } finally {
+      running = false;
+    }
+  };
+  const triggerRun = () => {
+    runOnce().catch((err) => {
+      console.error(err);
+      process.exit(1);
+    });
   };
   console.error(`env-saaf: watching ${dir} (${cmd}) — press Ctrl-C to stop`);
-  runOnce();
+  triggerRun();
 
   const watchDirs = new Set();
   const collect = (d) => {
@@ -595,7 +665,7 @@ function watchLoop() {
   let scheduled = null;
   const onChange = () => {
     if (scheduled) clearTimeout(scheduled);
-    scheduled = setTimeout(() => { scheduled = null; runOnce(); }, 150);
+    scheduled = setTimeout(() => { scheduled = null; triggerRun(); }, 150);
   };
   for (const d of watchDirs) {
     try { watchers.push(fs.watch(d, onChange)); } catch { /* removed mid-watch */ }
@@ -611,46 +681,37 @@ function watchLoop() {
 if (cmd === 'scan' || cmd === 'check') {
   if (watchOpt) {
     watchLoop(); // runs until Ctrl-C
+  } else if (cmd === 'scan') {
+    process.exit(runScan());
   } else {
-    process.exit(cmd === 'scan' ? runScan() : runCheck());
+    runCheck().then(
+      code => process.exit(code),
+      (err) => { console.error(err); process.exit(1); }
+    );
   }
 } else if (cmd === 'example') {
   // Issue #206: with --schema <file>, generate the example from the schema
   // (type placeholders plus alias/requiredIf annotations) instead of the code
   // scan, which cannot know them. Without --schema the scan draft is unchanged.
   if (schemaOpt) {
-    let schema;
-    try {
-      schema = require(path.resolve(dir, schemaOpt));
-    } catch (e) {
-      let detail = e.message;
-      if (/ES module|module is not defined/.test(e.message)) {
-        detail += ' — in a "type": "module" project the schema must be a .cjs file (e.g. env.schema.cjs)';
+    loadSchemaFile().then((schema) => {
+      const text = generateExample(schema);
+      if (writeOpt === null) {
+        process.stdout.write(text);
+      } else {
+        const target = path.join(dir, writeOpt);
+        if (fs.existsSync(target) && !forceOpt) {
+          console.error(`env-saaf: ${writeOpt} already exists in ${dir} — pass --force to overwrite it`);
+          process.exit(1);
+        }
+        fs.writeFileSync(target, text);
+        const count = Object.keys(schema).length;
+        console.log(`env-saaf: wrote ${writeOpt} (${count} variable${count === 1 ? '' : 's'})`);
       }
-      const message = `env-saaf: cannot load schema ${schemaOpt}: ${detail}`;
-      if (jsonMode) console.log(JSON.stringify({ ok: false, error: message }));
-      else console.error(message);
-      process.exit(2);
-    }
-    if (schema === null || typeof schema !== 'object' || Array.isArray(schema)) {
-      const message = `env-saaf: schema ${schemaOpt} must export a schema object (module.exports = { KEY: { type: 'port', ... } })`;
-      if (jsonMode) console.log(JSON.stringify({ ok: false, error: message }));
-      else console.error(message);
-      process.exit(2);
-    }
-    const text = generateExample(schema);
-    if (writeOpt === null) {
-      process.stdout.write(text);
-    } else {
-      const target = path.join(dir, writeOpt);
-      if (fs.existsSync(target) && !forceOpt) {
-        console.error(`env-saaf: ${writeOpt} already exists in ${dir} — pass --force to overwrite it`);
-        process.exit(1);
-      }
-      fs.writeFileSync(target, text);
-      const count = Object.keys(schema).length;
-      console.log(`env-saaf: wrote ${writeOpt} (${count} variable${count === 1 ? '' : 's'})`);
-    }
+    }, (err) => {
+      console.error(err);
+      process.exit(1);
+    });
   } else {
   // v1.0.0: draft a .env.example from a code scan (placeholder values only)
   const used = scanDir(dir);
