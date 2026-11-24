@@ -194,8 +194,21 @@ export type EnvResult<S extends EnvSchema> = string extends keyof S
         : S[K] extends { required: true } ? never : S[K] extends { default: unknown } ? never : K]?: S[K] extends EnvGroupRule<infer I> ? EnvResult<I> | undefined : EnvValue<S[K]> | undefined;
     };
 
+/**
+ * Structured form of one validation diagnostic (issue #294). `key` is the full
+ * env name the message is about, or `''` for errors that are not tied to a key
+ * (e.g. an unknown option). `message` is the printable text without the
+ * `key: ` prefix, so it is safe to translate or map back to a form field.
+ */
+export interface ErrorDetail {
+  key: string;
+  message: string;
+}
+
 export class EnvSaafError extends Error {
   errors: string[];
+  /** The same diagnostics as `errors`, in the same order, split by key. */
+  details: ErrorDetail[];
 }
 
 /** Context passed to `formatError`: only the schema keys, never values. */
@@ -235,6 +248,8 @@ export interface ValidateResult<S extends EnvSchema> {
   env: EnvResult<S>;
   /** The same messages `EnvSaafError.errors` would carry, in the same order. */
   errors: string[];
+  /** The same diagnostics as `errors`, in the same order, split by key. */
+  details: ErrorDetail[];
 }
 
 /**

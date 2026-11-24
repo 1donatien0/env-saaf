@@ -98,12 +98,12 @@ Without a hook, runtime validation also uses `console.warn`.
 
 ### Non-throwing mode — collect errors instead of throwing
 
-A health check, a CLI, or a server that wants to boot in a degraded mode cannot use an API that throws on the first bad value. Pass `{ throwOnError: false }` and `validateEnv` returns `{ env, errors }` instead: `env` holds every value that validated, and `errors` is the same list `EnvSaafError` would have carried.
+A health check, a CLI, or a server that wants to boot in a degraded mode cannot use an API that throws on the first bad value. Pass `{ throwOnError: false }` and `validateEnv` returns `{ env, errors, details }` instead: `env` holds every value that validated, `errors` is the same list `EnvSaafError` would have carried, and `details` is the same list split into `{ key, message }` objects (see [Structured error details](#structured-error-details)).
 
 ```js
 const { validateEnv } = require('env-saaf');
 
-const { env, errors } = validateEnv(
+const { env, errors, details } = validateEnv(
   {
     PORT:  { type: 'port', required: true },
     DEBUG: { type: 'boolean', default: false },
@@ -114,6 +114,7 @@ const { env, errors } = validateEnv(
 
 if (errors.length) {
   console.warn('config problems:', errors);
+  for (const { key, message } of details) showFieldError(key, message);
   // keep booting: env.DEBUG is still usable, env.PORT is absent
 }
 ```
@@ -143,7 +144,24 @@ try {
 - If the hook throws, its error propagates out of `validateEnv` / `loadEnv` unchanged — a broken hook is a programming error, so it is never silently replaced by the default message. A hook that returns anything other than a string still falls back to the default message. A `formatError` that is not a function is a `TypeError`.
 - With `{ throwOnError: false }` no error is thrown, so the hook is not called and `errors` in the result stays raw. `loadEnv` always throws, so it forwards the hook for validation failures. Failures before validation, such as an unreadable or unparsable `.env` file, throw their own errors and are outside the hook's scope. Malformed-schema errors are not formatted either.
 
-In TypeScript, `{ throwOnError: false }` (not `formatError`) narrows the return type to `ValidateResult<S>` (`{ env: EnvResult<S>; errors: string[] }`), so `env.PORT` keeps the type inferred from the schema.
+In TypeScript, `{ throwOnError: false }` (not `formatError`) narrows the return type to `ValidateResult<S>` (`{ env: EnvResult<S>; errors: string[]; details: ErrorDetail[] }`), so `env.PORT` keeps the type inferred from the schema.
+
+### Structured error details
+
+For programmatic handling — mapping failures back to form fields, translating messages, grouping by key — both the thrown error and the non-throwing result expose a `details` array of `{ key, message }` objects. It mirrors `errors` one-to-one, in the same order, without changing the printable strings or `error.message`. `key` is the full env name (including the group prefix for grouped keys, e.g. `DB_HOST`), and `message` is the text with the `key: ` prefix removed. Errors that are not tied to a key (such as an unknown option) use `key: ''` and keep the full text as `message`.
+
+```js
+try {
+  validateEnv(schema, process.env);
+} catch (err) {
+  for (const { key, message } of err.details) {
+    // key: 'DB_PORT', message: 'expected a port (0-65535, e.g. 3000), got "abc"'
+    showFieldError(key, message);
+  }
+}
+```
+
+The same field is available without throwing: `const { env, errors, details } = validateEnv(schema, process.env, { throwOnError: false })`. A custom `formatError` changes only `error.message`; `errors` and `details` stay raw.
 
 ### Strict mode — catch typos in variable names
 

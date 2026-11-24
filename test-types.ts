@@ -69,8 +69,18 @@ const collected = validateEnv(
 const collectedPort: number = collected.env.PORT;
 const collectedDebug: boolean | undefined = collected.env.DEBUG;
 const collectedErrors: string[] = collected.errors;
-// @ts-expect-error — the non-throwing result is { env, errors }, not the env itself
+// Issue #294: structured details mirror errors one-to-one.
+const collectedDetails: { key: string; message: string }[] = collected.details;
+const firstKey: string = collected.details[0].key;
+const firstMessage: string = collected.details[0].message;
+// @ts-expect-error — details keys are strings, not numbers
+const wrongDetailKey: number = collected.details[0].key;
+// @ts-expect-error — the non-throwing result is { env, errors, details }, not the env itself
 const collectedAsEnv: number = collected.PORT;
+
+// Issue #294: thrown errors carry the same details field.
+declare const thrownError: import('./index').EnvSaafError;
+const thrownDetails: import('./index').ErrorDetail[] = thrownError.details;
 
 // The default (throwing) return type is unchanged by the new option.
 const throwingPort: number = validateEnv(

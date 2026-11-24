@@ -2637,7 +2637,7 @@ assert.deepStrictEqual(
 
   // The returned env is frozen exactly like the throwing API's result.
   assert.ok(Object.isFrozen(strict.env));
-  assert.deepStrictEqual(validateEnv({}, {}, { throwOnError: false }), { env: {}, errors: [] });
+  assert.deepStrictEqual(validateEnv({}, {}, { throwOnError: false }), { env: {}, errors: [], details: [] });
 
   // A malformed schema is a bug in the code, not a config problem: it throws
   // even in non-throwing mode, where no result could be trusted.
@@ -4047,7 +4047,7 @@ assert.deepStrictEqual(
       { APP_PORT: '3000' },
       { throwOnError: false, onWarn: msg => warnings.push(msg) },
     );
-    assert.deepStrictEqual(collected, { env: { PORT: 3000 }, errors: [] });
+    assert.deepStrictEqual(collected, { env: { PORT: 3000 }, errors: [], details: [] });
     assert.deepStrictEqual(warnings, ['env-saaf: APP_PORT is deprecated; use PORT instead']);
   }
 
@@ -4793,6 +4793,7 @@ assert.deepStrictEqual(
   const partial = validateEnv(schema, {}, { throwOnError: false });
   assert.deepStrictEqual(partial, {
     env: { APP: { DB: { PORT: 5432 } } }, errors: ['APP_DB_HOST: missing required variable'],
+    details: [{ key: 'APP_DB_HOST', message: 'missing required variable' }],
   });
   assert.ok(Object.isFrozen(partial.env.APP.DB));
   assert.throws(() => validateEnv(schema, { APP_DB_HOST: 'db.internal', APP_DB_EXTRA: 'x' }, { strict: true }),
@@ -6332,7 +6333,7 @@ const formatErrorThrowingHookTest = (async () => {
 
   const warnings = [];
   const result = validateEnv(schema, {}, { onWarn: msg => warnings.push(msg), throwOnError: false });
-  assert.deepStrictEqual(result, { env: {}, errors: [] });
+  assert.deepStrictEqual(result, { env: {}, errors: [], details: [] });
   assert.deepStrictEqual(warnings, [expected]);
 
   // A legitimate undeclared NODE_ENV still makes the dependent key required.
@@ -6433,11 +6434,11 @@ const formatErrorThrowingHookTest = (async () => {
     assert.strictEqual(itemPattern.test(sample), true, `expected array item pattern to accept ${JSON.stringify(sample)}`);
     assert.deepStrictEqual(
       validateEnv({ V: { type: 'semver', trim: false } }, { V: sample }, { throwOnError: false }),
-      { env: { V: sample }, errors: [] }
+      { env: { V: sample }, errors: [], details: [] }
     );
     assert.deepStrictEqual(
       validateEnv({ VERSIONS: { type: 'array', of: 'semver', trim: false } }, { VERSIONS: [sample] }, { throwOnError: false }),
-      { env: { VERSIONS: [sample] }, errors: [] }
+      { env: { VERSIONS: [sample] }, errors: [], details: [] }
     );
   }
   for (const sample of invalidSemvers) {
@@ -6515,9 +6516,10 @@ assert.deepStrictEqual(scanCode("const env = process.env; env['DB.PORT']; env[`M
     TOKEN: { requiredIf: { key: 'MODE', equals: 'production', in: undefined } },
     MODE: { type: 'string' },
   };
-  assert.deepStrictEqual(validateEnv(schema, {}, { throwOnError: false }), { env: {}, errors: [] });
+  assert.deepStrictEqual(validateEnv(schema, {}, { throwOnError: false }), { env: {}, errors: [], details: [] });
   assert.deepStrictEqual(validateEnv(schema, { MODE: ' production ' }, { throwOnError: false }), {
     env: { MODE: 'production' }, errors: ['TOKEN: missing required variable'],
+    details: [{ key: 'TOKEN', message: 'missing required variable' }],
   });
   assert.deepStrictEqual(toJsonSchema(schema), {
     $schema: 'https://json-schema.org/draft/2020-12/schema',
@@ -6606,9 +6608,10 @@ assert.deepStrictEqual(scanCode("const env = process.env; env['DB.PORT']; env[`M
   const options = { throwOnError: false, onWarn: () => {} };
   assert.deepStrictEqual(validateEnv(schema, {}, options), {
     env: { MODE: true, PORT: 0 }, errors: ['TOKEN: missing required variable'],
+    details: [{ key: 'TOKEN', message: 'missing required variable' }],
   });
   assert.deepStrictEqual(validateEnv(schema, { OLD_MODE: 'on', OLD_TOKEN: 'value' }, options), {
-    env: { MODE: true, TOKEN: 'value', PORT: 0 }, errors: [],
+    env: { MODE: true, TOKEN: 'value', PORT: 0 }, errors: [], details: [],
   });
   const result = toJsonSchema(schema);
   assert.deepStrictEqual(result.if, { required: ['MODE'], properties: { MODE: { const: true } } });
@@ -6656,6 +6659,7 @@ assert.deepStrictEqual(scanCode("const env = process.env; env['DB.PORT']; env[`M
   for (const [raw, coerced] of [['true', true], ['null', null]]) {
     assert.deepStrictEqual(validateEnv(schema, { DATA: raw }, { throwOnError: false }), {
       env: { DATA: coerced }, errors: ['TOKEN: missing required variable'],
+      details: [{ key: 'TOKEN', message: 'missing required variable' }],
     });
   }
   const result = toJsonSchema(schema);
@@ -6762,6 +6766,82 @@ assert.deepStrictEqual(scanCode("const env = process.env; env['DB.PORT']; env[`M
     },
     { if: dbTls, then: { required: ['AUDIT'] } },
   ]);
+}
+
+// Issue #294: structured `details` mirror `errors` one-to-one.
+{
+  const schema = {
+    DB: { prefix: 'DB_', schema: {
+      PORT: { type: 'port', required: true },
+      HOST: { required: true },
+    } },
+    DEBUG: { type: 'boolean' },
+  };
+  const env = { DB_PORT: 'abc', DEBUG: 'maybe' };
+  const expectedErrors = [
+    'DB_PORT: expected a port (0-65535, e.g. 3000), got "abc"',
+    'DB_HOST: missing required variable',
+    'DEBUG: expected a boolean (e.g. true/false, yes/no, on/off, 1/0, y/n), got "maybe"',
+  ];
+  const expectedDetails = [
+    { key: 'DB_PORT', message: 'expected a port (0-65535, e.g. 3000), got "abc"' },
+    { key: 'DB_HOST', message: 'missing required variable' },
+    { key: 'DEBUG', message: 'expected a boolean (e.g. true/false, yes/no, on/off, 1/0, y/n), got "maybe"' },
+  ];
+
+  // Throwing mode: same order, split by full (grouped) env name.
+  let thrown;
+  try { validateEnv(schema, env); } catch (e) { thrown = e; }
+  assert.ok(thrown instanceof EnvSaafError);
+  assert.deepStrictEqual(thrown.errors, expectedErrors);
+  assert.deepStrictEqual(thrown.details, expectedDetails);
+  assert.strictEqual(thrown.details.length, thrown.errors.length);
+  for (let i = 0; i < thrown.errors.length; i++) {
+    assert.strictEqual(`${thrown.details[i].key}: ${thrown.details[i].message}`, thrown.errors[i]);
+  }
+
+  // Non-throwing mode carries the same details.
+  const collected = validateEnv(schema, env, { throwOnError: false });
+  assert.deepStrictEqual(collected.errors, expectedErrors);
+  assert.deepStrictEqual(collected.details, expectedDetails);
+  assert.deepStrictEqual(collected.details, thrown.details);
+
+  // Clean results have no details.
+  assert.deepStrictEqual(
+    validateEnv({ PORT: { type: 'port' } }, { PORT: '3000' }, { throwOnError: false }).details,
+    []
+  );
+
+  // Schema errors are structured too.
+  assert.throws(() => validateEnv({ PORT: { type: 'emial' } }, {}), e =>
+    e instanceof EnvSaafError
+    && e.errors[0] === 'PORT: unknown type "emial"'
+    && e.details[0].key === 'PORT'
+    && e.details[0].message === 'unknown type "emial"');
+
+  // Errors not tied to a key keep the full message with an empty key — the
+  // colon inside "validateEnv accepts: ..." must not be treated as a separator.
+  assert.throws(() => validateEnv({}, {}, { typo: true }), e =>
+    e instanceof EnvSaafError
+    && e.errors.length === 1
+    && e.details.length === 1
+    && e.details[0].key === ''
+    && e.details[0].message === e.errors[0]);
+
+  // Strict-mode errors keep their key.
+  assert.throws(() => validateEnv({ A: {} }, { TYPO: 'x' }, { strict: true }), e =>
+    e instanceof EnvSaafError
+    && e.details[0].key === 'TYPO'
+    && e.details[0].message === 'set but not in schema (strict mode)');
+
+  // A custom formatError changes only `message`; `errors` and `details` stay raw.
+  let formatted;
+  try {
+    validateEnv({ PORT: { required: true } }, {}, { formatError: () => 'CUSTOM MESSAGE' });
+  } catch (e) { formatted = e; }
+  assert.strictEqual(formatted.message, 'CUSTOM MESSAGE');
+  assert.deepStrictEqual(formatted.errors, ['PORT: missing required variable']);
+  assert.deepStrictEqual(formatted.details, [{ key: 'PORT', message: 'missing required variable' }]);
 }
 
 Promise.all([watchModeTest, watchModeErrorPathTest, watchModeEsmSchemaTest, loadEnvAsyncTest, formatErrorThrowingHookTest])

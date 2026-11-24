@@ -10,11 +10,27 @@ const net = require('node:net');
 const path = require('node:path');
 const { isProxy } = require('node:util').types;
 
+// Issue #294: expose the structured form of every diagnostic alongside the
+// printable `errors` strings. A leading `KEY: ` is recognised only when the key
+// is the whole first token (no spaces or extra colons), so global messages such
+// as `unknown option "x" (validateEnv accepts: ...)` are not split at the colon
+// inside them. Grouped keys are already full env names (e.g. `DB_HOST`), and
+// dotted names are left intact.
+function errorDetails(errors) {
+  return errors.map(message => {
+    const match = /^([^\s:]+): ([\s\S]*)$/.exec(message);
+    return match
+      ? { key: match[1], message: match[2] }
+      : { key: '', message };
+  });
+}
+
 class EnvSaafError extends Error {
   constructor(errors, message) {
     super(typeof message === 'string' ? message : 'Invalid environment variables:\n' + errors.map(e => `  - ${e}`).join('\n'));
     this.name = 'EnvSaafError';
     this.errors = errors;
+    this.details = errorDetails(errors);
   }
 }
 
@@ -1217,7 +1233,7 @@ function validateEnv(schema, env = process.env, options = {}) {
   const { out, errors, groupOf } = validateEnvCore(schema, env, options);
   // Issue #228: re-nest grouped keys (DB_HOST -> { DB: { HOST } }).
   const result = groupOf.size ? nestGroups(out, groupOf) : out;
-  if (options.throwOnError === false) return { env: Object.freeze(result), errors };
+  if (options.throwOnError === false) return { env: Object.freeze(result), errors, details: errorDetails(errors) };
   if (errors.length) {
     throw new EnvSaafError(errors, formatErrorMessage(errors, schema, options));
   }

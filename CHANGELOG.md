@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Added: `EnvSaafError.details` and the `{ throwOnError: false }` result expose structured `{ key, message }` entries mirroring `errors` one-to-one, including grouped keys; printable `errors` strings and `message` formatting are unchanged (fixes #294).
+
 - Added: tests validate complete `toJsonSchema` documents against the draft 2020-12 keyword shapes with a hand-rolled, zero-dependency checker, covering all types, groups, choices, defaults, bounds, arrays and `requiredIf` (fixes #296).
 
 - Added: `toJsonSchema` expresses `requiredIf` on canonical values with `if` / `then`, including conditions across groups (fixes #289).
