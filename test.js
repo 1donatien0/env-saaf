@@ -4796,6 +4796,99 @@ assert.deepStrictEqual(
   }
 }
 
+// Issue #320: `choices` on an `array` rule constrains each coerced item.
+{
+  const never = (key, entry, type) =>
+    `${key}: "choices" entry ${entry} can never match type '${type}' (a choice must be a value this type can produce)`;
+
+  // A value whose items are all allowed passes; a single bad item names the
+  // key, the offending item and its index.
+  assert.deepStrictEqual(
+    validateEnv({ A: { type: 'array', of: 'string', choices: ['a', 'b'] } }, { A: 'a,b,a' }),
+    { A: ['a', 'b', 'a'] },
+  );
+  assert.throws(
+    () => validateEnv({ A: { type: 'array', of: 'string', choices: ['a', 'b'] } }, { A: 'a,c' }),
+    err => err instanceof EnvSaafError
+      && err.errors.includes('A: expected one of [a, b], got "c" (item 1)'),
+  );
+
+  // Items are coerced before the choices check, just like scalar rules.
+  assert.deepStrictEqual(
+    validateEnv({ N: { type: 'array', of: 'int', choices: [1, 2] } }, { N: '01,2' }),
+    { N: [1, 2] },
+  );
+  assert.deepStrictEqual(
+    validateEnv({ B: { type: 'array', of: 'boolean', choices: [true] } }, { B: 'yes,true' }),
+    { B: [true, true] },
+  );
+  assert.throws(
+    () => validateEnv({ N: { type: 'array', of: 'int', choices: [1, 2] } }, { N: '1,3' }),
+    err => err instanceof EnvSaafError && /N: expected one of \[1, 2\], got "3"/.test(err.errors[0]),
+  );
+  // Defaults go through the same per-item check.
+  assert.deepStrictEqual(
+    validateEnv({ A: { type: 'array', choices: ['a', 'b'], default: ['b', 'a'] } }, {}),
+    { A: ['b', 'a'] },
+  );
+  assert.throws(
+    () => validateEnv({ A: { type: 'array', choices: ['a', 'b'], default: ['b', 'z'] } }, {}),
+    err => err instanceof EnvSaafError && err.errors.some(m => m.includes('got "z"')),
+  );
+
+  // Schema validation applies #305 to the item type.
+  assert.throws(
+    () => validateSchema({ N: { type: 'array', of: 'int', choices: ['1', '2'] } }),
+    err => err instanceof EnvSaafError
+      && err.errors.includes(never('N', '"1"', 'int'))
+      && err.errors.includes(never('N', '"2"', 'int')),
+  );
+  assert.throws(
+    () => validateSchema({ B: { type: 'array', of: 'boolean', choices: ['true'] } }),
+    err => err instanceof EnvSaafError && err.errors.includes(never('B', '"true"', 'boolean')),
+  );
+  assert.throws(
+    () => validateSchema({ D: { type: 'array', of: 'date', choices: ['2026-01-31'] } }),
+    err => err instanceof EnvSaafError
+      && err.errors.includes(`D: "choices" cannot be used with type 'date' (a parsed date is a new Date object, so no choice can ever match)`),
+  );
+  assert.doesNotThrow(() => validateSchema({
+    A: { type: 'array', choices: ['a', 'b'] },
+    N: { type: 'array', of: 'int', choices: [1, 2] },
+    U: { type: 'array', of: 'url', choices: ['https://example.com'] },
+  }));
+
+  // toJsonSchema puts the enum on items, not on the array itself.
+  assert.deepStrictEqual(
+    toJsonSchema({ A: { type: 'array', of: 'string', choices: ['a', 'b'] } }).properties.A,
+    { type: 'array', items: { type: 'string', minLength: 1, enum: ['a', 'b'] } },
+  );
+  assert.deepStrictEqual(
+    toJsonSchema({ N: { type: 'array', of: 'int', choices: [1, 2] } }).properties.N,
+    { type: 'array', items: { type: 'integer', enum: [1, 2] } },
+  );
+  // Scalar behaviour is unchanged.
+  assert.deepStrictEqual(
+    toJsonSchema({ S: { choices: ['a', 'b'] } }).properties.S,
+    { type: 'string', enum: ['a', 'b'] },
+  );
+
+  // generateExample emits allowed items that validate against the same schema.
+  const schema = { A: { type: 'array', of: 'string', choices: ['a', 'b'], required: true } };
+  const example = generateExample(schema);
+  assert.match(example, /^A=a,b$/m);
+  assert.deepStrictEqual(validateEnv(schema, parseEnvFile(example)), { A: ['a', 'b'] });
+  const typed = { N: { type: 'array', of: 'int', choices: [2, 4] } };
+  const typedExample = generateExample(typed);
+  assert.match(typedExample, /^N=2,4$/m);
+  assert.deepStrictEqual(validateEnv(typed, parseEnvFile(typedExample)), { N: [2, 4] });
+  // minItems/maxItems, separator, unique and explicit defaults are respected.
+  assert.match(generateExample({ A: { type: 'array', choices: ['a', 'b', 'c'], minItems: 4, maxItems: 5 } }), /^A=a,b,c,a$/m);
+  assert.match(generateExample({ A: { type: 'array', separator: ';', choices: ['x;y', 'ok'] } }), /^A=ok$/m);
+  assert.match(generateExample({ A: { type: 'array', unique: true, choices: ['a', 'b'] } }), /^A=a,b$/m);
+  assert.match(generateExample({ A: { type: 'array', choices: ['a', 'b'], default: ['b'] } }), /^A=b$/m);
+}
+
 // feat: grouped (nested) schemas with a key prefix (fixes #228)
 {
   const fs = require('node:fs');

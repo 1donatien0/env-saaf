@@ -22,6 +22,8 @@
 - Fixed: generateExample uses the first allowed choice instead of a generic placeholder, preserving explicit defaults and empty secret placeholders (fixes #273).
 - Fixed: `validateSchema` now rejects `choices` entries that can never match the declared type (for example `['1', '2']` on an `int` rule, `['true']` on a `boolean` rule, or any `choices` on a `date` rule) instead of accepting the schema and failing every value at runtime; string-typed rules and non-finite numbers, which `toJsonSchema` drops from `enum`, are unaffected (fixes #305).
 
+- Fixed: `choices` on `array` rules now apply to each coerced item instead of the whole array, with errors naming the offending item and its index; `validateSchema` applies the #305 item-type check against `of`, `toJsonSchema` emits `items.enum`, and `generateExample` builds placeholders from allowed choices while respecting `minItems`/`maxItems` (fixes #320).
+
 - Fixed: `int` (and `port`, which builds on it) now only accepts plain integer literals — optional sign + digits — so decimal and scientific spellings such as `1.0`, `1e3` and `1.5e2` are rejected even when they happen to be whole numbers, instead of silently passing (fixes #277). `number` still accepts them.
 
 - Added: `unique: true` on `array` rules rejects repeated items, compared after item coercion (so `'1,01'` for `of: 'int'` counts as a duplicate), with an error naming the key and the duplicated item; it applies to `default` values too, is rejected up front on non-`array` rules, and `toJsonSchema` renders it as `uniqueItems: true` (fixes #291).
