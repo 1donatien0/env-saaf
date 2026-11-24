@@ -41,6 +41,32 @@ const env = validateEnv({
 
 `validateEnv` treats an empty string (`''`) the same as an unset variable: an optional key with no `default` is omitted from the result, a `required` key fails as missing (`missing required variable`), and a key with a `default` uses that default instead. This matches `${VAR:-fallback}` in [Loading a real `.env` file](#loading-a-real-env-file), which also treats an empty expansion as unset. Only `''` counts as unset — whitespace-only input such as `'   '` is treated as provided (trimmed to `''` for `string` by default, or kept as-is with `trim: false`).
 
+### How validation works
+
+`loadEnv` parses the file and expands `${VAR:-default}` first; after that, both `validateEnv` and `loadEnv` run the same pipeline, so the order below is the whole contract:
+
+1. **Options and schema** are checked before any value: an unknown option or a malformed rule throws even when the variable is absent.
+2. **Groups are flattened** to full names (`DB_HOST`), so every later step works on the name that appears in the environment and errors name it.
+3. **`strict`** reports keys that are set but not declared (or known as an alias) in the schema.
+4. For each key, in schema order:
+   1. **`null` counts as unset**, like `undefined`.
+   2. **Aliases** resolve: a set canonical key wins (populated aliases are reported as ignored), otherwise the first populated alias supplies the value with a deprecation warning. Empty strings count as unset.
+   3. An **object or array** in a hand-built env fails here, except for `json` rules and arrays on `array` rules.
+   4. A **`default`** applies when the key is absent or empty; the default then goes through every step below. `required` and `requiredIf` are deferred if there is still nothing.
+   5. **Coercion** turns the string into its type (`port` to a number, `boolean` from `true`/`1`/`on`, and so on).
+   6. **Bounds and shape**: `min`/`max`, `minItems`/`maxItems`, `unique`, `minLength`/`maxLength`, the `hex` `length`.
+   7. **`choices`** (per item for array rules), then **`pattern`**.
+   8. **`validate(value, env)`** receives the coerced value.
+   9. **`transform(value)`** runs only for a supplied value, never a default; its result is re-checked against the declared `type`.
+5. **`requiredIf`** is a second pass over all keys, after every value has been coerced and defaulted, so declaration order never matters.
+6. The result is **re-nested** for groups and **frozen**, then returned or thrown as one `EnvSaafError`.
+
+The order explains the three surprises people hit most:
+
+- `validate` never sees the raw string; use `type: 'string', trim: false` if you need it verbatim.
+- `transform` does not run on a `default`, so a default is already in its final shape.
+- An alias (or a default) is resolved before coercion, so a `validate` or `transform` receives the value from whichever source won.
+
 ### Types reference
 
 Environment inputs are strings. Output below is before an optional `transform`.
