@@ -669,6 +669,7 @@ CLI output is plain text by default, including in pipes and CI. For scripts that
 npx env-saaf --version      # print the installed version
 npx env-saaf scan ./src     # every env var your code actually uses
                            # scans .js/.cjs/.mjs/.ts/.mts/.cts/.tsx/.jsx and .vue/.svelte/.astro components
+git show HEAD:src/config.js | npx env-saaf scan --stdin  # scan code piped on standard input
 npx env-saaf check .        # compare code against .env.example
 npx env-saaf check . --file .env.sample  # compare against a differently-named template file instead
 npx env-saaf check . --json # machine-readable check results for CI or tooling
@@ -706,7 +707,7 @@ These codes describe a single CLI run.
 | `2` | Usage or input error, such as an unknown command, a missing project directory, or an invalid input file. |
 
 - `check` exits `1` for missing keys, unused template keys, differences between `.env` and the template, or schema validation failures. If no code reads environment variables and unused template keys are the only finding, it exits `0` with a scaffold note. In comparison JSON, `ok: true` means exit `0` and `ok: false` means exit `1`. Usage and input errors such as a missing or malformed template exit `2` with `ok: false` and an `error` field in JSON mode.
-- `scan` exits `0` even when it finds unused keys or no environment variable reads. In JSON mode, `ok: true` accompanies `vars` and any template comparison appears in `unused`. A malformed template or missing directory exits `2` with `ok: false` and an `error` field in JSON mode.
+- `scan` exits `0` even when it finds unused keys or no environment variable reads. In JSON mode, `ok: true` accompanies `vars` and any template comparison appears in `unused`. A malformed template, a missing directory, or `--stdin` combined with a directory argument exits `2` with `ok: false` and an `error` field in JSON mode.
 - `example` exits `0` when it prints or writes a draft. Printing with no discovered keys still succeeds. Writing a scan-based draft with no keys, or overwriting an existing output without `--force`, exits `1`. An unloadable schema exits `2`.
 - `init` exits `0` when it creates the scaffold or infers a schema. An existing output without `--force` exits `1`. A missing `--from-example` input exits `2`.
 

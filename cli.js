@@ -11,7 +11,7 @@
  *                           document instead of running the check (issue #268). A scaffold
  *                           with no code usage yet passes with a single note instead of
  *                           one UNUSED line per key (issue #170).
- *   env-saaf scan  [dir] [--file name] [--json] [--watch] — just list the env vars your code uses; keys in
+ *   env-saaf scan  [dir | --stdin] [--file name] [--json] [--watch] — just list the env vars your code uses; keys in
  *                           .env.example (or the --file given) that no code reads are reported
  *                           as UNUSED warnings (stderr; `unused` in --json), never an exit code
  *   env-saaf example [dir] [--write[=file]] [--force] [--schema file] — print a .env.example draft from code
@@ -40,7 +40,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
 const { types: { isModuleNamespaceObject } } = require('node:util');
-const { scanDir, parseEnvFile, diffEnv, validateEnv, EnvSaafError, generateExample, toJsonSchema } = require('./index');
+const { scanCode, scanDir, parseEnvFile, diffEnv, validateEnv, EnvSaafError, generateExample, toJsonSchema } = require('./index');
 
 const argv = process.argv.slice(2);
 // --version / -v is global: report the installed version wherever it appears, before anything else runs
@@ -51,7 +51,7 @@ if (argv.includes('--version') || argv.includes('-v')) {
 // Output is already plain in every mode, including when NO_COLOR is set.
 while (argv[0] === '--no-color') argv.shift();
 const cmd = argv[0];
-const USAGE = 'Usage: env-saaf check [dir] [--file name] [--schema file] [--json] [--json-schema] [--watch] | env-saaf scan [dir] [--file name] [--json] [--watch] | env-saaf example [dir] [--write[=file]] [--force] [--schema file] | env-saaf init [dir] [--schema file] [--force] [--from-example[=file]]\n'
+const USAGE = 'Usage: env-saaf check [dir] [--file name] [--schema file] [--json] [--json-schema] [--watch] | env-saaf scan [dir | --stdin] [--file name] [--json] [--watch] | env-saaf example [dir] [--write[=file]] [--force] [--schema file] | env-saaf init [dir] [--schema file] [--force] [--from-example[=file]]\n'
   + 'Global options: --no-color, --version / -v (before or after the command).';
 // --help / -h / help: print usage and exit 0 (asking for help is not an error — this used to exit 2)
 if (cmd === '--help' || cmd === '-h' || cmd === 'help') {
@@ -78,6 +78,7 @@ let writeOpt = null;
 let forceOpt = false;
 // Issue #230: --watch ('check' and 'scan' only) re-runs the command when watched inputs change.
 let watchOpt = false;
+let stdinOpt = false;
 
 // Issue #230: in watch mode an error exit must not kill the watcher — fatalExit
 // throws WatchExit instead, so watchLoop's runOnce can log the exit code and
@@ -115,6 +116,7 @@ for (let i = 1; i < argv.length; i++) {
   else if (a.startsWith('--write=')) writeOpt = a.slice('--write='.length) || '.env.example';
   else if (a === '--force') forceOpt = true;
   else if (a === '--watch') watchOpt = true;
+  else if (a === '--stdin') stdinOpt = true;
   else if (a === '--from-example') fromExampleOpt = true;
   else if (a.startsWith('--from-example=')) fromExampleOpt = a.slice('--from-example='.length) || '.env.example';
   else if (a === '--groups') groupsOpt = true;
@@ -139,7 +141,7 @@ if (fromExampleOpt !== null) {
 // fast with exit 2, in the same message shape as other usage errors.
 const COMMAND_FLAGS = {
   check: ['--file', '--schema', '--json', '--json-schema', '--watch'],
-  scan: ['--file', '--json', '--watch'],
+  scan: ['--file', '--json', '--watch', '--stdin'],
   example: ['--write', '--force', '--schema'],
   init: ['--schema', '--force', '--from-example', '--groups'],
 };
@@ -152,6 +154,7 @@ if (COMMAND_FLAGS[cmd]) {
   if (writeOpt !== null) seenFlags.add('--write');
   if (forceOpt) seenFlags.add('--force');
   if (watchOpt) seenFlags.add('--watch');
+  if (stdinOpt) seenFlags.add('--stdin');
   if (fromExampleOpt !== null) seenFlags.add('--from-example');
   if (groupsOpt) seenFlags.add('--groups');
   let flagError = null;
@@ -160,6 +163,8 @@ if (COMMAND_FLAGS[cmd]) {
   else {
     const bad = [...seenFlags].find(f => !COMMAND_FLAGS[cmd].includes(f));
     if (bad) flagError = `flag ${bad} is not supported for ${cmd}`;
+    else if (stdinOpt && positional.length > 0) flagError = '--stdin cannot be combined with a directory argument';
+    else if (stdinOpt && watchOpt) flagError = '--stdin cannot be combined with --watch';
   }
   if (flagError) {
     const message = `env-saaf: ${flagError}`;
@@ -369,19 +374,27 @@ function schemaIsEsm(schemaPath) {
   }
 }
 
-// Issue #230: the scan/check bodies are plain functions so watch mode can
-// re-run them; the non-watch path below calls them exactly once, keeping
-// output and exit codes byte-for-byte unchanged.
-function runScan() {
-  const vars = scanDir(dir);
+function readStdin() {
+  return new Promise((resolve, reject) => {
+    const chunks = [];
+    process.stdin.on('data', chunk => chunks.push(chunk));
+    process.stdin.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')));
+    process.stdin.on('error', reject);
+  });
+}
+
+function printScanResult(vars) {
   // Issue #63: the reverse drift — keys declared in the template that no code reads any more.
   // Only a warning: stdout stays the plain list of used vars and the exit code is unchanged.
   // Without a template file there is nothing to compare, so the output is exactly as before.
-  const templatePath = path.join(dir, fileOpt);
+  // Issue #359: in --stdin mode there is no scanned directory, so only compare when --file is explicit.
   let unused = null;
-  if (fs.existsSync(templatePath) && fs.statSync(templatePath).isFile()) {
-    const declared = Object.keys(readEnvFile(templatePath));
-    unused = diffEnv(vars, declared).documentedNotUsed;
+  if (!stdinOpt || fileExplicit) {
+    const templatePath = path.join(dir, fileOpt);
+    if (fs.existsSync(templatePath) && fs.statSync(templatePath).isFile()) {
+      const declared = Object.keys(readEnvFile(templatePath));
+      unused = diffEnv(vars, declared).documentedNotUsed;
+    }
   }
   if (jsonMode) {
     const result = { ok: true, vars };
@@ -393,6 +406,13 @@ function runScan() {
     if (unused) unused.forEach(k => console.error(`UNUSED: ${k} (in ${fileOpt}, never used in code)`));
   }
   return 0;
+}
+
+// Issue #230: the scan/check bodies are plain functions so watch mode can
+// re-run them; the non-watch path below calls them exactly once, keeping
+// output and exit codes byte-for-byte unchanged.
+function runScan() {
+  return printScanResult(scanDir(dir));
 }
 
 const esmWatchPaths = new Set();
@@ -681,6 +701,11 @@ function watchLoop() {
 if (cmd === 'scan' || cmd === 'check') {
   if (watchOpt) {
     watchLoop(); // runs until Ctrl-C
+  } else if (stdinOpt) {
+    readStdin().then(
+      text => process.exit(printScanResult(scanCode(text))),
+      (err) => { console.error(err); process.exit(1); }
+    );
   } else if (cmd === 'scan') {
     process.exit(runScan());
   } else {

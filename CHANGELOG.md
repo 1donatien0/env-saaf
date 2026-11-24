@@ -4,6 +4,8 @@
 
 - Fixed: duration bound errors name the duration and show milliseconds for numeric bounds, while preserving explicit units in string bounds (fixes #341).
 
+- Added: CLI `scan --stdin` reads source code from standard input through `scanCode`, supporting `--json` output, standard empty-scan handling, and exit code 2 when combined with a directory argument (fixes #359).
+
 - Docs: document CLI exit codes and JSON results for `check`, `scan`, `example` and `init` (fixes #360).
 
 - Fixed: `scanDir` skips `dist`, `build`, `coverage`, `.next`, `out` and `target` (and `node_modules`/`.git*` as before), so a stale build output no longer makes an unused key look used (fixes #334).

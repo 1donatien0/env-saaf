@@ -30,12 +30,14 @@ function cleanEnv() {
 }
 
 /** Run the CLI in `cwd` and return { status, stdout, stderr }. */
-function run(args, cwd) {
-  const r = spawnSync(process.execPath, [CLI, ...args], {
+function run(args, cwd, input) {
+  const opts = {
     cwd,
     encoding: 'utf8',
     env: cleanEnv(),
-  });
+  };
+  if (input !== undefined) opts.input = input;
+  const r = spawnSync(process.execPath, [CLI, ...args], opts);
   assert.ifError(r.error);
   return { status: r.status, stdout: r.stdout, stderr: r.stderr };
 }
@@ -62,6 +64,7 @@ function cleanup() {
 const SRC_WITH_USAGE = 'const port = process.env.PORT;\nconst db = process.env.DATABASE_URL;\nconsole.log(port, db);\n';
 const EXAMPLE_BOTH = 'PORT=\nDATABASE_URL=\n';
 const SCHEMA = "module.exports = { PORT: { type: 'port', required: true } };\n";
+const asyncChecks = [];
 
 try {
   // --- check: clean project exits 0 and says so on stdout -------------------
@@ -813,8 +816,136 @@ try {
     assert.strictEqual(nullThrow.status, 2);
     assert.match(nullThrow.stderr, /cannot load schema throw-null\.cjs: null/);
   }
-} finally {
+
+  // --- issue #359: scan --stdin reads piped code via scanCode ----------------
+  {
+    const { scanCode } = require('./index');
+    const { spawn } = require('node:child_process');
+    const dir = mkProject({
+      'src/disk.js': 'console.log(process.env.DISK_ONLY_KEY);\n',
+      '.env.example': 'PORT=\nCWD_TEMPLATE_UNUSED=\n',
+    });
+    const piped = [
+      '// process.env.COMMENT_DECOY',
+      '/* import.meta.env.BLOCK_DECOY */',
+      "const literal = 'process.env.STRING_DECOY';",
+      'const port = process.env.PORT;',
+      "const host = process.env['DB.HOST'];",
+      'const opt = process.env?.OPTIONAL_KEY;',
+      'const vite = import.meta.env.VITE_API_URL;',
+      "const { SECRET_TOKEN, RETRIES: r = '3' } = process.env;",
+      'const env = process.env; const aliased = env.ALIAS_KEY;',
+      'const tpl = `plain process.env.TPL_DECOY ${process.env.TPL_READ}`;',
+      '',
+    ].join('\n');
+    const expectedVars = scanCode(piped);
+    assert.deepStrictEqual(expectedVars, [
+      'ALIAS_KEY', 'DB.HOST', 'OPTIONAL_KEY', 'PORT', 'RETRIES', 'SECRET_TOKEN', 'TPL_READ', 'VITE_API_URL',
+    ]);
+
+    // Text mode: prints the exact sorted scanCode keys, ignores disk files and implicit cwd .env.example.
+    const plain = run(['scan', '--stdin'], dir, piped);
+    assert.strictEqual(plain.status, 0, `${plain.stdout}${plain.stderr}`);
+    assert.strictEqual(plain.stderr, '');
+    assert.strictEqual(plain.stdout, expectedVars.join('\n') + '\n');
+
+    // JSON mode (both flag orders): standard { ok: true, vars } shape without implicit cwd template noise.
+    for (const args of [['scan', '--stdin', '--json'], ['scan', '--json', '--stdin']]) {
+      const js = run(args, dir, piped);
+      assert.strictEqual(js.status, 0, `${js.stdout}${js.stderr}`);
+      assert.strictEqual(js.stderr, '');
+      assert.deepStrictEqual(JSON.parse(js.stdout), { ok: true, vars: expectedVars });
+    }
+
+    // Explicit --file compares stdin keys against the named template file.
+    const withFile = run(['scan', '--stdin', '--file', '.env.example', '--json'], dir, 'process.env.PORT;\n');
+    assert.strictEqual(withFile.status, 0, `${withFile.stdout}${withFile.stderr}`);
+    assert.deepStrictEqual(JSON.parse(withFile.stdout), {
+      ok: true,
+      vars: ['PORT'],
+      unused: ['CWD_TEMPLATE_UNUSED'],
+    });
+
+    // Empty stdin and comment-only stdin print existing no-usage output rather than hanging or crashing.
+    for (const emptyInput of ['', '   \n', '// process.env.IGNORED\nconst x = 1;\n']) {
+      const emptyPlain = run(['scan', '--stdin'], dir, emptyInput);
+      assert.strictEqual(emptyPlain.status, 0);
+      assert.strictEqual(emptyPlain.stdout, '');
+      assert.strictEqual(emptyPlain.stderr, 'No process.env usage found.\n');
+
+      const emptyJson = run(['scan', '--stdin', '--json'], dir, emptyInput);
+      assert.strictEqual(emptyJson.status, 0);
+      assert.strictEqual(emptyJson.stderr, '');
+      assert.deepStrictEqual(JSON.parse(emptyJson.stdout), { ok: true, vars: [] });
+    }
+
+    // Combining --stdin with a directory argument exits 2 with a clear message (text and --json).
+    for (const args of [['scan', '--stdin', dir], ['scan', dir, '--stdin'], ['scan', '--stdin', '.']]) {
+      const badDir = run(args, dir, piped);
+      assert.strictEqual(badDir.status, 2, args.join(' '));
+      assert.strictEqual(badDir.stdout, '');
+      assert.match(badDir.stderr, /^env-saaf: --stdin cannot be combined with a directory argument\r?\n$/);
+    }
+    const badDirJson = run(['scan', '--stdin', dir, '--json'], dir, piped);
+    assert.strictEqual(badDirJson.status, 2);
+    assert.strictEqual(badDirJson.stderr, '');
+    assert.deepStrictEqual(JSON.parse(badDirJson.stdout), {
+      ok: false,
+      error: 'env-saaf: --stdin cannot be combined with a directory argument',
+    });
+
+    // Combining --stdin with --watch or passing --stdin to other commands exits 2 cleanly.
+    const badWatch = run(['scan', '--stdin', '--watch'], dir, '');
+    assert.strictEqual(badWatch.status, 2);
+    assert.match(badWatch.stderr, /--stdin cannot be combined with --watch/);
+    for (const other of ['check', 'example', 'init']) {
+      const badCmd = run([other, '--stdin'], dir, '');
+      assert.strictEqual(badCmd.status, 2, other);
+      assert.match(badCmd.stderr, new RegExp(`flag --stdin is not supported for ${other}`));
+    }
+
+    // Async child-process pipe (chunked writes + multi-byte UTF-8 split across chunks).
+    asyncChecks.push(new Promise((resolve, reject) => {
+      const child = spawn(process.execPath, [CLI, 'scan', '--stdin', '--json'], {
+        cwd: dir,
+        env: cleanEnv(),
+        stdio: ['pipe', 'pipe', 'pipe'],
+      });
+      let out = '';
+      let err = '';
+      child.stdout.setEncoding('utf8');
+      child.stderr.setEncoding('utf8');
+      child.stdout.on('data', d => { out += d; });
+      child.stderr.on('data', d => { err += d; });
+      child.on('error', reject);
+      child.on('close', code => {
+        try {
+          assert.strictEqual(code, 0, err);
+          assert.strictEqual(err, '');
+          assert.deepStrictEqual(JSON.parse(out), { ok: true, vars: ['PIPE_FIRST', 'PIPE_SECOND'] });
+          resolve();
+        } catch (assertionErr) {
+          reject(assertionErr);
+        }
+      });
+      const buf = Buffer.from('const icon = "🚀";\nconst a = process.env.PIPE_FIRST;\nconst b = process.env.PIPE_SECOND;\n', 'utf8');
+      const splitAt = buf.indexOf(0xf0) + 2; // split mid-4-byte UTF-8 sequence
+      child.stdin.write(buf.subarray(0, splitAt));
+      child.stdin.end(buf.subarray(splitAt));
+    }));
+  }
+} catch (err) {
   cleanup();
+  throw err;
 }
 
-console.log('test-cli.js: all CLI integration tests passed');
+Promise.all(asyncChecks)
+  .then(() => {
+    cleanup();
+    console.log('test-cli.js: all CLI integration tests passed');
+  })
+  .catch((err) => {
+    cleanup();
+    console.error(err);
+    process.exit(1);
+  });
