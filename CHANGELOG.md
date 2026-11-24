@@ -34,6 +34,8 @@
 
 - Added: `toJsonSchema(schema)` exports a draft 2020-12 JSON Schema for coerced configuration values (fixes #229).
 
+- Added: `pattern` accepts regular expression source strings as well as `RegExp`. Invalid sources report a schema error naming the key, and JSON Schema export preserves string sources verbatim (fixes #286).
+
 - Added: opt-in `formatError(errors, { keys })` option for `validateEnv` and `loadEnv`: the returned string becomes the thrown `EnvSaafError`'s `message` while `error.errors` keeps the raw per-key strings; the hook sees only a read-only copy of the errors and the schema keys, falls back to the default message if it throws or returns a non-string, and is not called with `throwOnError: false` (fixes #231).
 
 - Changed: The `base64` type accepts standard and URL-safe strings with or without padding and preserves the input encoding (fixes #226).

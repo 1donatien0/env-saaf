@@ -136,6 +136,23 @@ function nestGroups(out, groupOf) {
   return nested;
 }
 
+function compilePattern(pattern, key, errors, patterns) {
+  if (pattern instanceof RegExp) return pattern;
+  if (typeof pattern !== 'string') {
+    errors.push(`${key}: "pattern" must be a RegExp or string`);
+    return;
+  }
+  const cached = patterns.get(pattern);
+  if (cached !== undefined) return cached;
+  try {
+    const compiled = new RegExp(pattern);
+    patterns.set(pattern, compiled);
+    return compiled;
+  } catch {
+    errors.push(`${key}: "pattern" is not a valid regular expression string`);
+  }
+}
+
 // Validate the shape of the schema itself, independent of any env values.
 // These checks used to live only inside the per-key coercion loop, so an
 // invalid rule on an absent optional key was never reached and slipped through
@@ -144,7 +161,7 @@ function validateSchema(schema) {
   validateSchemaRules(schema, msg => console.warn(msg));
 }
 
-function validateSchemaRules(schema, warn) {
+function validateSchemaRules(schema, warn, patterns = new Map()) {
   const errors = [];
   const keys = new Set(Object.keys(schema));
   const aliasOwners = new Map();
@@ -180,7 +197,7 @@ function validateSchemaRules(schema, warn) {
           const sub = {};
           for (const ik of innerKeys) sub[rule.prefix + ik] = inner[ik];
           try {
-            validateSchemaRules(sub, () => {});
+            validateSchemaRules(sub, () => {}, patterns);
           } catch (e) {
             if (e instanceof EnvSaafError) errors.push(...e.errors);
             else throw e;
@@ -224,9 +241,8 @@ function validateSchemaRules(schema, warn) {
         errors.push(`${key}: "protocols" only applies to type 'url' (cannot be used with type '${effectiveType}')`);
       }
     }
-    if (rule.pattern !== undefined && !(rule.pattern instanceof RegExp)) {
-      errors.push(`${key}: "pattern" must be a RegExp`);
-    }
+    const pattern = rule.pattern;
+    if (pattern !== undefined) compilePattern(pattern, key, errors, patterns);
     if (rule.validate !== undefined && typeof rule.validate !== 'function') {
       errors.push(`${key}: "validate" must be a function`);
     }
@@ -420,6 +436,7 @@ function validateSchemaRules(schema, warn) {
       warn(`env-saaf: ${key}: requiredIf references undeclared key "${rule.requiredIf.key}"; check for a typo or declare the key (external env flags still work)`);
     }
   }
+  return patterns;
 }
 
 // Numeric configuration strings are decimal; Number() alone also accepts
@@ -829,7 +846,7 @@ function validateEnvCore(schema, env, options) {
   if (options.onWarn !== undefined && typeof options.onWarn !== 'function') {
     throw new TypeError('env-saaf: "onWarn" option must be a function');
   }
-  validateSchemaRules(schema, options.onWarn || (msg => console.warn(msg)));
+  const patterns = validateSchemaRules(schema, options.onWarn || (msg => console.warn(msg)));
   // Issue #228: groups are validated as groups above, then flattened, so the
   // whole existing pipeline (aliases, defaults, requiredIf, strict) works on
   // full env names unchanged and errors name DB_HOST, not DB.HOST.
@@ -1001,17 +1018,14 @@ function validateEnvCore(schema, env, options) {
         errors.push(`${key}: expected one of [${rule.choices.join(', ')}], got "${shown}"`);
         continue;
       }
-      // pattern: a RegExp a string value must match (slugs, prefixed keys
-      // like `sk_...`). Runs after coercion and the choices check, before
-      // transform; non-string types are rejected up front in validateSchema.
-      // A mismatch names the pattern.
-      if (rule.pattern !== undefined) {
-        if (!(rule.pattern instanceof RegExp)) {
-          errors.push(`${key}: "pattern" must be a RegExp`);
-          continue;
-        }
-        if (typeof val === 'string' && !rule.pattern.test(val)) {
-          errors.push(`${key}: expected to match ${rule.pattern}, got "${shown}"`);
+      // Keep compiled strings off the caller's rules so frozen schemas work
+      // and later validations can see changes to the source.
+      const source = rule.pattern;
+      if (source !== undefined) {
+        const pattern = compilePattern(source, key, errors, patterns);
+        if (pattern === undefined) continue;
+        if (typeof val === 'string' && !pattern.test(val)) {
+          errors.push(`${key}: expected to match ${pattern}, got "${shown}"`);
           continue;
         }
       }
@@ -1985,9 +1999,10 @@ function jsonSchemaForRule(key, rule, required) {
     property.minLength = Math.max(rule.length, property.minLength ?? 0);
     property.maxLength = Math.min(rule.length, property.maxLength ?? Infinity);
   }
-  if (rule.pattern && !rule.pattern.flags) {
+  const pattern = rule.pattern;
+  if (typeof pattern === 'string' || (pattern && !pattern.flags)) {
     if (property.pattern) property.allOf = [{ pattern: property.pattern }];
-    property.pattern = rule.pattern.source;
+    property.pattern = typeof pattern === 'string' ? pattern : pattern.source;
   }
   if (Array.isArray(rule.choices)) {
     const choices = [...new Set(rule.choices.filter(isJsonPrimitive))];

@@ -51,13 +51,14 @@ export interface EnvRule {
    */
   protocols?: string[];
   /**
-   * A regular expression a string value (`string`, `email`, `url`, `file`,
-   * `uuid`, `hex`, `ipv4`, `semver`, `base64`, `host`) must match (e.g. a
-   * slug, or a prefixed key like `sk_...`). Checked after coercion and
-   * `choices`, before `transform`; a mismatch error names the pattern.
-   * Rejected up front on non-string rules.
+   * A RegExp or regular expression source string that a string value
+   * (`string`, `email`, `url`, `file`, `uuid`, `hex`, `ipv4`, `semver`,
+   * `base64`, `host`) must match. Checked after coercion and `choices`,
+   * before `transform`; a mismatch error names the pattern.
+   * Strings are compiled without flags. Invalid sources and uses on
+   * non-string rules are rejected during schema validation.
    */
-  pattern?: RegExp;
+  pattern?: RegExp | string;
   /**
    * Custom validation rule run after coercion and built-in checks, before
    * `transform`. Receives the coerced value and the input `env` object.
