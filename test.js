@@ -7244,6 +7244,62 @@ assert.deepStrictEqual(scanCode("const env = process.env; env['DB.PORT']; env[`M
     const stdinCrLoc = JSON.parse(stdinCr.stdout).locations;
     assert.deepStrictEqual(stdinCrLoc.A, [{ file: '-', line: 1 }]);
     assert.deepStrictEqual(stdinCrLoc.B, [{ file: '-', line: 2 }]);
+
+    // Line comments end at LF, CRLF, and bare CR; a following read must stay visible.
+    const afterComment = (nl) => scanCodeLocations(`// heading${nl}process.env.PORT;`);
+    assert.deepStrictEqual(afterComment('\n').locations.PORT, [{ file: '-', line: 2 }]);
+    assert.deepStrictEqual(afterComment('\r\n').locations.PORT, [{ file: '-', line: 2 }]);
+    assert.deepStrictEqual(afterComment('\r').locations.PORT, [{ file: '-', line: 2 }]);
+    assert.deepStrictEqual(afterComment('\r').vars, ['PORT']);
+    // Comment body itself is still filtered (no false positive from the comment text).
+    assert.deepStrictEqual(scanCodeLocations('// process.env.HIDDEN\nprocess.env.PORT;\n').vars, ['PORT']);
+
+    // Collating-equal but distinct paths (NFC vs NFD): ordinal tie-break is stable
+    // without writing those names to disk (Windows may normalize file names).
+    {
+      const nfc = 'caf\u00e9.js';
+      const nfd = 'cafe\u0301.js';
+      assert.notStrictEqual(nfc, nfd);
+      assert.strictEqual(nfc.localeCompare(nfd), 0);
+      const expectedFirst = nfc < nfd ? nfc : nfd;
+      const expectedSecond = nfc < nfd ? nfd : nfc;
+      const realReaddir = fs.readdirSync;
+      const realRead = fs.readFileSync;
+      const virtualDir = fs.mkdtempSync(path.join(os.tmpdir(), 'env-saaf-335-nfc-'));
+      try {
+        const serve = (names) => {
+          fs.readdirSync = (d, opts) => {
+            if (path.resolve(d) === path.resolve(virtualDir)) {
+              return names.map((name) => ({
+                name,
+                isDirectory: () => false,
+                isFile: () => true,
+                isSymbolicLink: () => false,
+              }));
+            }
+            return realReaddir(d, opts);
+          };
+          fs.readFileSync = (p, enc) => {
+            const base = path.basename(p);
+            if (base === nfc || base === nfd) return 'process.env.SHARED;\n';
+            return realRead(p, enc);
+          };
+          try {
+            return scanDirLocations(virtualDir).locations.SHARED.map((e) => e.file);
+          } finally {
+            fs.readdirSync = realReaddir;
+            fs.readFileSync = realRead;
+          }
+        };
+        // Reverse enumeration must still yield the same ordinal order.
+        assert.deepStrictEqual(serve([nfc, nfd]), [expectedFirst, expectedSecond]);
+        assert.deepStrictEqual(serve([nfd, nfc]), [expectedFirst, expectedSecond]);
+      } finally {
+        fs.readdirSync = realReaddir;
+        fs.readFileSync = realRead;
+        fs.rmSync(virtualDir, { recursive: true, force: true });
+      }
+    }
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }

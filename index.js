@@ -1611,7 +1611,8 @@ function codeOnly(src) {
       mask(i); i++; continue;
     }
     if (c === '/' && n === '/') {
-      while (i < src.length && src[i] !== '\n') { mask(i); i++; }
+      // End at LF, bare CR, or CRLF (stop before the break; do not swallow the next line).
+      while (i < src.length && src[i] !== '\n' && src[i] !== '\r') { mask(i); i++; }
       continue;
     }
     if (c === '/' && n === '*') {
@@ -1781,8 +1782,14 @@ function collectEnvReads(text) {
 }
 
 function compareLocations(a, b) {
+  // Primary: locale path order (documented relative-path sort).
   const byFile = a.file.localeCompare(b.file);
   if (byFile !== 0) return byFile;
+  // Tie-break: UTF-16 ordinal so collating-equal but distinct paths (e.g. NFC vs NFD) stay deterministic.
+  if (a.file !== b.file) {
+    if (a.file < b.file) return -1;
+    if (a.file > b.file) return 1;
+  }
   if (a.line < b.line) return -1;
   if (a.line > b.line) return 1;
   return 0;
