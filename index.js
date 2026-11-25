@@ -1628,7 +1628,8 @@ function codeOnly(src) {
       mask(i); i++; continue;
     }
     if (c === '/' && n === '/') {
-      while (i < src.length && src[i] !== '\n') { mask(i); i++; }
+      // End at LF, bare CR, or CRLF (stop before the break; do not swallow the next line).
+      while (i < src.length && src[i] !== '\n' && src[i] !== '\r') { mask(i); i++; }
       continue;
     }
     if (c === '/' && n === '*') {
@@ -1676,15 +1677,38 @@ function codeOnly(src) {
   return out.join('');
 }
 
-/** Find every env read in JS/TS source text — `process.env.KEY` and Vite-style `import.meta.env.KEY`. Returns sorted unique names. */
-function scanCode(text) {
+/**
+ * 1-based line number of a character index in `text`.
+ * Counts LF, CRLF, and bare CR (without double-counting CRLF).
+ */
+function lineNumberAt(text, index) {
+  const s = String(text);
+  let line = 1;
+  for (let i = 0; i < index; i++) {
+    const c = s[i];
+    if (c === '\r') {
+      line++;
+      if (s[i + 1] === '\n') i++;
+    } else if (c === '\n') {
+      line++;
+    }
+  }
+  return line;
+}
+
+/**
+ * Every env read in source text with its character index (same lexical rules as
+ * scanCode). Hits keep encounter order so callers can attach file/line metadata.
+ */
+function collectEnvReads(text) {
   const src = String(text);
   const code = codeOnly(src);
   const isCode = (start, end) => {
     for (let i = start; i < end; i++) if (code[i] === MASKED) return false;
     return true;
   };
-  const found = new Set();
+  const hits = [];
+  const add = (key, index) => { hits.push({ key, index }); };
   // Each pattern is paired with the head whose span must be real code.
   const patterns = [
     [/process\.env\.([A-Za-z_][A-Za-z0-9_]*)/g, 'process.env'],
@@ -1713,7 +1737,7 @@ function scanCode(text) {
   // only the env object they hang off has to be code.
   for (const [re, head] of patterns) {
     for (const m of src.matchAll(re)) {
-      if (isCode(m.index, m.index + head.length)) found.add(m[1]);
+      if (isCode(m.index, m.index + head.length)) add(m[1], m.index);
     }
   }
   const codeView = code.split(MASKED).join(' ');
@@ -1723,12 +1747,14 @@ function scanCode(text) {
     let offset = 0;
     for (const part of m[1].split(',')) {
       const name = part.split(':')[0].split('=')[0].trim();
-      if (/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) found.add(name);
+      if (/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) {
+        add(name, start + offset + part.indexOf(name));
+      }
       // Split the masked view so commas in defaults cannot invent properties.
       if (part.trim().startsWith(':')) {
         const original = src.slice(start + offset, start + offset + part.length);
         const quoted = /^\s*(['"])([A-Za-z_][A-Za-z0-9_.-]*)\1\s*:/.exec(original);
-        if (quoted) found.add(quoted[2]);
+        if (quoted) add(quoted[2], start + offset + original.indexOf(quoted[2]));
       }
       offset += part.length + 1;
     }
@@ -1766,10 +1792,81 @@ function scanCode(text) {
       let previous = m.index - 1;
       while (previous >= 0 && /\s/.test(codeView[previous])) previous--;
       if (codeView[previous] === '.' && codeView.slice(previous - 2, previous + 1) !== '...') continue;
-      found.add(m[2] ?? m[4]);
+      add(m[2] ?? m[4], m.index);
     }
   }
-  return [...found].sort();
+  return hits;
+}
+
+function compareLocations(a, b) {
+  // Primary: locale path order (documented relative-path sort).
+  const byFile = a.file.localeCompare(b.file);
+  if (byFile !== 0) return byFile;
+  // Tie-break: UTF-16 ordinal so collating-equal but distinct paths (e.g. NFC vs NFD) stay deterministic.
+  if (a.file !== b.file) {
+    if (a.file < b.file) return -1;
+    if (a.file > b.file) return 1;
+  }
+  if (a.line < b.line) return -1;
+  if (a.line > b.line) return 1;
+  return 0;
+}
+
+/** Own-property write so keys like `__proto__` / `constructor` cannot hit Object.prototype. */
+function setLocationEntries(target, key, entries) {
+  Object.defineProperty(target, key, {
+    value: entries,
+    enumerable: true,
+    writable: true,
+    configurable: true,
+  });
+}
+
+function buildLocationsMap(reads, file) {
+  // Map accumulation is prototype-safe for keys like constructor / __proto__ / toString.
+  const byKey = new Map();
+  // Push in reverse encounter order so sorting must restore file/line order.
+  for (let i = reads.length - 1; i >= 0; i--) {
+    const { key, index, text } = reads[i];
+    const entry = { file, line: lineNumberAt(text, index) };
+    let list = byKey.get(key);
+    if (!list) {
+      list = [];
+      byKey.set(key, list);
+    }
+    list.push(entry);
+  }
+  const locations = {};
+  for (const [key, entries] of byKey) {
+    entries.sort(compareLocations);
+    setLocationEntries(locations, key, entries);
+  }
+  return locations;
+}
+
+/** Find every env read in JS/TS source text - `process.env.KEY` and Vite-style `import.meta.env.KEY`. Returns sorted unique names. */
+function scanCode(text) {
+  const keys = new Set();
+  for (const hit of collectEnvReads(text)) keys.add(hit.key);
+  return [...keys].sort();
+}
+
+/**
+ * Issue #335: same reads as `scanCode`, plus a `locations` map from each key to
+ * `{ file, line }` entries (1-based lines). `file` defaults to `-` for piped text.
+ */
+function scanCodeLocations(text, file = '-') {
+  const src = String(text);
+  const reads = collectEnvReads(src).map(({ key, index }) => ({ key, index, text: src }));
+  const vars = [...new Set(reads.map((r) => r.key))].sort();
+  const locations = buildLocationsMap(reads, file);
+  // Every reported variable gets a locations entry, even when somehow empty.
+  for (const key of vars) {
+    if (!Object.prototype.hasOwnProperty.call(locations, key)) {
+      setLocationEntries(locations, key, []);
+    }
+  }
+  return { vars, locations };
 }
 
 // Issue #235: single-file components (.vue/.svelte/.astro) hold code too —
@@ -1787,18 +1884,66 @@ const SCAN_SKIP_DIRECTORIES = new Set([
   'node_modules', 'dist', 'build', 'coverage', '.next', 'out', 'target',
 ]);
 
-function scanDir(dir) {
-  const found = new Set();
+function listScanFiles(dir) {
+  const files = [];
   const walk = (d) => {
     for (const e of fs.readdirSync(d, { withFileTypes: true })) {
       if (SCAN_SKIP_DIRECTORIES.has(e.name) || e.name.startsWith('.git')) continue;
       const p = path.join(d, e.name);
       if (e.isDirectory()) walk(p);
-      else if (SCAN_EXTENSIONS.test(e.name)) scanCode(fs.readFileSync(p, 'utf8')).forEach(k => found.add(k));
+      else if (SCAN_EXTENSIONS.test(e.name)) files.push(p);
     }
   };
   walk(dir);
+  return files;
+}
+
+function scanDir(dir) {
+  const found = new Set();
+  for (const p of listScanFiles(dir)) {
+    scanCode(fs.readFileSync(p, 'utf8')).forEach(k => found.add(k));
+  }
   return [...found].sort();
+}
+
+/**
+ * Issue #335: directory scan with a `locations` map. File paths are relative to
+ * `dir` using forward slashes; lines are 1-based. `vars` matches `scanDir`.
+ */
+function scanDirLocations(dir) {
+  const root = path.resolve(dir);
+  const files = listScanFiles(dir)
+    .map((abs) => ({
+      abs,
+      rel: path.relative(root, abs).split(path.sep).join('/'),
+    }))
+    .sort((a, b) => a.rel.localeCompare(b.rel));
+  const reads = [];
+  for (const { abs, rel } of files) {
+    const text = fs.readFileSync(abs, 'utf8');
+    for (const { key, index } of collectEnvReads(text)) {
+      reads.push({ key, index, text, file: rel });
+    }
+  }
+  const vars = [...new Set(reads.map((r) => r.key))].sort();
+  const byKey = new Map();
+  for (let i = reads.length - 1; i >= 0; i--) {
+    const { key, index, text, file } = reads[i];
+    const entry = { file, line: lineNumberAt(text, index) };
+    let list = byKey.get(key);
+    if (!list) {
+      list = [];
+      byKey.set(key, list);
+    }
+    list.push(entry);
+  }
+  const locations = {};
+  for (const key of vars) {
+    const entries = byKey.get(key) || [];
+    entries.sort(compareLocations);
+    setLocationEntries(locations, key, entries);
+  }
+  return { vars, locations };
 }
 
 /** Compare code usage vs a documented set (e.g. keys of .env.example). */
@@ -2354,4 +2499,4 @@ function toJsonSchema(schema) {
   return result;
 }
 
-module.exports = { validateEnv, validateSchema, loadEnv, loadEnvAsync, EnvSaafError, parseEnvFile, scanCode, scanDir, diffEnv, maskValue, maskSecrets, generateExample, toJsonSchema };
+module.exports = { validateEnv, validateSchema, loadEnv, loadEnvAsync, EnvSaafError, parseEnvFile, scanCode, scanCodeLocations, scanDir, scanDirLocations, diffEnv, maskValue, maskSecrets, generateExample, toJsonSchema };

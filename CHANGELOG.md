@@ -11,6 +11,8 @@
   instead of living only as README snippets. Both fail with the env-saaf message
   when a required value is missing (fixes #364).
 
+- Added: `scan --json` includes a `locations` map from each variable to `{ file, line }` uses (relative paths, 1-based lines), driven by `scanCodeLocations` / `scanDirLocations`; plain output and `vars` / `unused` stay unchanged (fixes #335).
+
 - Added: `toJsonSchema` emits a `pattern` for `base64` rules, so a consumer
   validating against the exported schema accepts exactly the standard,
   unpadded and URL-safe forms the runtime accepts and rejects a mixed alphabet

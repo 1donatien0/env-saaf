@@ -11,8 +11,8 @@ const ROOT = __dirname;
 const TSC = path.join(ROOT, 'node_modules', 'typescript', 'bin', 'tsc');
 const EXPECTED = [
   'EnvSaafError', 'diffEnv', 'generateExample', 'loadEnv', 'loadEnvAsync', 'maskSecrets',
-  'maskValue', 'parseEnvFile', 'scanCode', 'scanDir', 'toJsonSchema', 'validateEnv',
-  'validateSchema',
+  'maskValue', 'parseEnvFile', 'scanCode', 'scanCodeLocations', 'scanDir', 'scanDirLocations',
+  'toJsonSchema', 'validateEnv', 'validateSchema',
 ];
 
 function run(args, extraEnv) {

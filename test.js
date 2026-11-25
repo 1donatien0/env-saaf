@@ -1,6 +1,6 @@
 'use strict';
 const assert = require('node:assert');
-const { loadEnv, validateEnv, validateSchema, EnvSaafError, parseEnvFile, scanCode, diffEnv, maskSecrets, maskValue, generateExample, toJsonSchema } = require('./index');
+const { loadEnv, validateEnv, validateSchema, EnvSaafError, parseEnvFile, scanCode, scanCodeLocations, scanDir, scanDirLocations, diffEnv, maskSecrets, maskValue, generateExample, toJsonSchema } = require('./index');
 
 // Issue #322: duration bounds use the value parser without changing numeric bounds.
 {
@@ -1281,7 +1281,11 @@ assert.ok(!ex.includes('sk_live'));
 
     const json = spawnSync(process.execPath, [cli, 'scan', '--no-color', dir, '--json'], { encoding: 'utf8' });
     assert.strictEqual(json.status, 0);
-    assert.deepStrictEqual(JSON.parse(json.stdout), { ok: true, vars: ['PLAIN_OUTPUT'] });
+    assert.deepStrictEqual(JSON.parse(json.stdout), {
+      ok: true,
+      vars: ['PLAIN_OUTPUT'],
+      locations: { PLAIN_OUTPUT: [{ file: 'app.js', line: 1 }] },
+    });
 
     const help = spawnSync(process.execPath, [cli, '--no-color', '--help'], { encoding: 'utf8' });
     assert.strictEqual(help.status, 0);
@@ -1390,13 +1394,14 @@ assert.ok(!ex.includes('sk_live'));
     assert.ok(human.stdout.includes('UNUSED: OLD_KEY'), human.stdout);
     assert.ok(human.stdout.includes('UNUSED: ANOTHER_OLD'), human.stdout);
 
-    // scan --json is untouched: `unused` still sits next to `vars`, ok true, exit 0.
+    // scan --json: `unused` still sits next to `vars`, ok true, exit 0; locations added (#335).
     const scanJson = spawnSync(process.execPath, [cli, 'scan', dir, '--json'], { encoding: 'utf8' });
     assert.strictEqual(scanJson.status, 0);
     assert.deepStrictEqual(JSON.parse(scanJson.stdout), {
       ok: true,
       vars: ['USED_KEY'],
       unused: ['OLD_KEY', 'ANOTHER_OLD'],
+      locations: { USED_KEY: [{ file: 'app.js', line: 1 }] },
     });
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
@@ -1494,6 +1499,15 @@ assert.ok(!ex.includes('sk_live'));
     assert.deepStrictEqual(JSON.parse(output), {
       ok: true,
       vars: ['API_PORT', 'QUEUE_NAME', 'SERVICE_HOST', 'TRACE_MODE'],
+      locations: {
+        API_PORT: [{ file: 'nested/server.mts', line: 2 }],
+        QUEUE_NAME: [{ file: 'worker.cts', line: 1 }],
+        SERVICE_HOST: [
+          { file: 'nested/server.mts', line: 3 },
+          { file: 'service.ts', line: 2 },
+        ],
+        TRACE_MODE: [{ file: 'worker.cts', line: 2 }],
+      },
     });
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
@@ -2599,7 +2613,12 @@ assert.deepStrictEqual(
     // --json: an `unused` field next to `vars`, still ok: true and exit 0
     const json = run(['scan', dir, '--json']);
     assert.strictEqual(json.status, 0);
-    assert.deepStrictEqual(JSON.parse(json.stdout), { ok: true, vars: ['USED_KEY'], unused: ['OLD_KEY'] });
+    assert.deepStrictEqual(JSON.parse(json.stdout), {
+      ok: true,
+      vars: ['USED_KEY'],
+      unused: ['OLD_KEY'],
+      locations: { USED_KEY: [{ file: 'app.js', line: 1 }] },
+    });
     assert.strictEqual(json.stderr, '');
 
     // --file picks another template
@@ -2611,12 +2630,21 @@ assert.deepStrictEqual(
     const clean = run(['scan', dir]);
     assert.strictEqual(clean.status, 0);
     assert.strictEqual(clean.stderr, '');
-    assert.deepStrictEqual(JSON.parse(run(['scan', dir, '--json']).stdout), { ok: true, vars: ['USED_KEY'], unused: [] });
+    assert.deepStrictEqual(JSON.parse(run(['scan', dir, '--json']).stdout), {
+      ok: true,
+      vars: ['USED_KEY'],
+      unused: [],
+      locations: { USED_KEY: [{ file: 'app.js', line: 1 }] },
+    });
 
     // No template file: nothing to compare, output exactly as before
     fs.rmSync(path.join(dir, '.env.example'));
     const none = run(['scan', dir, '--json']);
-    assert.deepStrictEqual(JSON.parse(none.stdout), { ok: true, vars: ['USED_KEY'] });
+    assert.deepStrictEqual(JSON.parse(none.stdout), {
+      ok: true,
+      vars: ['USED_KEY'],
+      locations: { USED_KEY: [{ file: 'app.js', line: 1 }] },
+    });
     assert.strictEqual(none.stderr, '');
     assert.strictEqual(run(['scan', dir]).stderr, '');
   } finally {
@@ -2731,7 +2759,7 @@ assert.deepStrictEqual(
       const json = run('--json');
       assert.strictEqual(json.status, 0);
       assert.strictEqual(json.stderr, '');
-      assert.strictEqual(json.stdout, '{"ok":true,"vars":[]}\n');
+      assert.strictEqual(json.stdout, '{"ok":true,"vars":[],"locations":{}}\n');
     }
     fs.writeFileSync(path.join(dir, 'app.js'), 'process.env.SYNTHETIC_KEY;\n');
     const plain = run();
@@ -2741,7 +2769,10 @@ assert.deepStrictEqual(
     const json = run('--json');
     assert.strictEqual(json.status, 0);
     assert.strictEqual(json.stderr, '');
-    assert.strictEqual(json.stdout, '{"ok":true,"vars":["SYNTHETIC_KEY"]}\n');
+    assert.strictEqual(
+      json.stdout,
+      '{"ok":true,"vars":["SYNTHETIC_KEY"],"locations":{"SYNTHETIC_KEY":[{"file":"app.js","line":1}]}}\n',
+    );
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
@@ -7093,7 +7124,14 @@ assert.deepStrictEqual(scanCode("const env = process.env; env['DB.PORT']; env[`M
 
   const json = runStdin(['scan', '--stdin', '--json'], code);
   assert.strictEqual(json.status, 0, json.stderr);
-  assert.deepStrictEqual(JSON.parse(json.stdout), { ok: true, vars: ['ALPHA', 'BETA'] });
+  assert.deepStrictEqual(JSON.parse(json.stdout), {
+    ok: true,
+    vars: ['ALPHA', 'BETA'],
+    locations: {
+      ALPHA: [{ file: '-', line: 3 }],
+      BETA: [{ file: '-', line: 1 }],
+    },
+  });
 
   const empty = runStdin(['scan', '--stdin'], '');
   assert.strictEqual(empty.status, 0);
@@ -7103,6 +7141,192 @@ assert.deepStrictEqual(scanCode("const env = process.env; env['DB.PORT']; env[`M
   const withDir = runStdin(['scan', '--stdin', __dirname], code);
   assert.strictEqual(withDir.status, 2);
   assert.match(withDir.stderr, /--stdin cannot be combined with a directory argument/);
+}
+
+// Issue #335: scan --json reports where each variable is used; plain output and
+// vars/unused stay stable. Library helpers drive the CLI rather than a second walk.
+{
+  const { spawnSync } = require('node:child_process');
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const path = require('node:path');
+  const cli = path.join(__dirname, 'cli.js');
+  const run = (args) => spawnSync(process.execPath, [cli, ...args], { encoding: 'utf8' });
+
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'env-saaf-335-locations-'));
+  try {
+    fs.mkdirSync(path.join(dir, 'src'));
+    // SHARED appears later in a.js than in b.js so file-major sort (a then b) differs from line-only sort.
+    fs.writeFileSync(path.join(dir, 'src', 'a.js'), '\n\n\n\nconst x = process.env.SHARED;\nconst y = process.env.ONLY_A;\n');
+    fs.writeFileSync(path.join(dir, 'src', 'b.js'), 'const z = process.env.SHARED;\n');
+    fs.writeFileSync(path.join(dir, '.env.example'), 'SHARED=\nONLY_A=\nSTALE=\n');
+
+    const detailed = scanDirLocations(dir);
+    assert.deepStrictEqual(detailed.vars, scanDir(dir));
+    assert.deepStrictEqual(detailed.vars, ['ONLY_A', 'SHARED']);
+    assert.deepStrictEqual(detailed.locations.SHARED, [
+      { file: 'src/a.js', line: 5 },
+      { file: 'src/b.js', line: 1 },
+    ]);
+    assert.deepStrictEqual(detailed.locations.ONLY_A, [{ file: 'src/a.js', line: 6 }]);
+
+    const plain = run(['scan', dir]);
+    assert.strictEqual(plain.status, 0);
+    assert.strictEqual(plain.stdout, 'ONLY_A\nSHARED\n');
+    assert.match(plain.stderr, /UNUSED: STALE/);
+
+    const json = run(['scan', dir, '--json']);
+    assert.strictEqual(json.status, 0);
+    assert.deepStrictEqual(JSON.parse(json.stdout), {
+      ok: true,
+      vars: ['ONLY_A', 'SHARED'],
+      unused: ['STALE'],
+      locations: detailed.locations,
+    });
+
+    const fromCode = scanCodeLocations('process.env.PORT;\nprocess.env.HOST;\n');
+    assert.deepStrictEqual(fromCode.vars, ['HOST', 'PORT']);
+    assert.deepStrictEqual(fromCode.locations, {
+      HOST: [{ file: '-', line: 2 }],
+      PORT: [{ file: '-', line: 1 }],
+    });
+
+    // Multi-line destructure: each binding keeps its own 1-based line (index math).
+    const destructured = scanCodeLocations('const {\n  ALPHA,\n  BETA\n} = process.env;\n');
+    assert.deepStrictEqual(destructured.locations, {
+      ALPHA: [{ file: '-', line: 2 }],
+      BETA: [{ file: '-', line: 3 }],
+    });
+    const quoted = scanCodeLocations("const {\n  X,\n  Y,\n  Z,\n  W,\n  'DB.HOST': host\n} = process.env;\n");
+    assert.deepStrictEqual(quoted.locations['DB.HOST'], [{ file: '-', line: 6 }]);
+    assert.deepStrictEqual(quoted.vars, ['DB.HOST', 'W', 'X', 'Y', 'Z']);
+
+    // Same key twice: locations stay sorted by line even when later uses come last.
+    const repeated = scanCodeLocations('process.env.Z;\nprocess.env.A;\nprocess.env.Z;\n');
+    assert.deepStrictEqual(repeated.locations.Z, [
+      { file: '-', line: 1 },
+      { file: '-', line: 3 },
+    ]);
+
+    // Prototype-sensitive keys must not crash either locations builder.
+    const protoKeys = 'process.env.constructor;\nprocess.env.__proto__;\nprocess.env.toString;\n';
+    const protoScan = scanCodeLocations(protoKeys);
+    assert.deepStrictEqual(protoScan.vars, ['__proto__', 'constructor', 'toString']);
+    assert.deepStrictEqual(protoScan.locations.constructor, [{ file: '-', line: 1 }]);
+    assert.deepStrictEqual(protoScan.locations.__proto__, [{ file: '-', line: 2 }]);
+    assert.deepStrictEqual(protoScan.locations.toString, [{ file: '-', line: 3 }]);
+    assert.ok(Object.prototype.hasOwnProperty.call(protoScan.locations, '__proto__'));
+    assert.ok(Object.prototype.hasOwnProperty.call(protoScan.locations, 'constructor'));
+    assert.ok(Object.prototype.hasOwnProperty.call(protoScan.locations, 'toString'));
+
+    // Bare CR (and CRLF) line breaks: 1-based lines without double-counting CRLF.
+    const bareCr = scanCodeLocations('process.env.A;\rprocess.env.B;\r');
+    assert.deepStrictEqual(bareCr.locations.A, [{ file: '-', line: 1 }]);
+    assert.deepStrictEqual(bareCr.locations.B, [{ file: '-', line: 2 }]);
+    const crlf = scanCodeLocations('process.env.A;\r\nprocess.env.B;\r\n');
+    assert.deepStrictEqual(crlf.locations.A, [{ file: '-', line: 1 }]);
+    assert.deepStrictEqual(crlf.locations.B, [{ file: '-', line: 2 }]);
+
+    // Directory builder: same prototype keys via synthetic files only.
+    const protoDir = fs.mkdtempSync(path.join(os.tmpdir(), 'env-saaf-335-proto-'));
+    try {
+      fs.writeFileSync(path.join(protoDir, 'c.js'), 'process.env.constructor;\n');
+      fs.writeFileSync(path.join(protoDir, 'p.js'), 'process.env.__proto__;\n');
+      fs.writeFileSync(path.join(protoDir, 't.js'), 'process.env.toString;\n');
+      const dirProto = scanDirLocations(protoDir);
+      assert.deepStrictEqual(dirProto.vars, ['__proto__', 'constructor', 'toString']);
+      assert.deepStrictEqual(dirProto.locations.constructor, [{ file: 'c.js', line: 1 }]);
+      assert.deepStrictEqual(dirProto.locations.__proto__, [{ file: 'p.js', line: 1 }]);
+      assert.deepStrictEqual(dirProto.locations.toString, [{ file: 't.js', line: 1 }]);
+      const dirJson = run(['scan', protoDir, '--json']);
+      assert.strictEqual(dirJson.status, 0);
+      const dirParsed = JSON.parse(dirJson.stdout);
+      assert.deepStrictEqual(dirParsed.vars, ['__proto__', 'constructor', 'toString']);
+      assert.deepStrictEqual(dirParsed.locations.constructor, [{ file: 'c.js', line: 1 }]);
+      assert.deepStrictEqual(dirParsed.locations.__proto__, [{ file: 'p.js', line: 1 }]);
+      assert.deepStrictEqual(dirParsed.locations.toString, [{ file: 't.js', line: 1 }]);
+      assert.strictEqual(run(['scan', protoDir]).stdout, '__proto__\nconstructor\ntoString\n');
+    } finally {
+      fs.rmSync(protoDir, { recursive: true, force: true });
+    }
+
+    // Stdin --json: prototype keys and bare-CR line numbers through the CLI helper path.
+    const runStdin = (args, input) => spawnSync(process.execPath, [cli, ...args], {
+      encoding: 'utf8',
+      input,
+    });
+    const stdinProto = runStdin(['scan', '--stdin', '--json'], protoKeys);
+    assert.strictEqual(stdinProto.status, 0, stdinProto.stderr);
+    const stdinProtoJson = JSON.parse(stdinProto.stdout);
+    assert.strictEqual(stdinProtoJson.ok, true);
+    assert.deepStrictEqual(stdinProtoJson.vars, ['__proto__', 'constructor', 'toString']);
+    assert.deepStrictEqual(stdinProtoJson.locations.constructor, [{ file: '-', line: 1 }]);
+    assert.deepStrictEqual(stdinProtoJson.locations.__proto__, [{ file: '-', line: 2 }]);
+    assert.deepStrictEqual(stdinProtoJson.locations.toString, [{ file: '-', line: 3 }]);
+    const stdinCr = runStdin(['scan', '--stdin', '--json'], 'process.env.A;\rprocess.env.B;\r');
+    assert.strictEqual(stdinCr.status, 0, stdinCr.stderr);
+    const stdinCrLoc = JSON.parse(stdinCr.stdout).locations;
+    assert.deepStrictEqual(stdinCrLoc.A, [{ file: '-', line: 1 }]);
+    assert.deepStrictEqual(stdinCrLoc.B, [{ file: '-', line: 2 }]);
+
+    // Line comments end at LF, CRLF, and bare CR; a following read must stay visible.
+    const afterComment = (nl) => scanCodeLocations(`// heading${nl}process.env.PORT;`);
+    assert.deepStrictEqual(afterComment('\n').locations.PORT, [{ file: '-', line: 2 }]);
+    assert.deepStrictEqual(afterComment('\r\n').locations.PORT, [{ file: '-', line: 2 }]);
+    assert.deepStrictEqual(afterComment('\r').locations.PORT, [{ file: '-', line: 2 }]);
+    assert.deepStrictEqual(afterComment('\r').vars, ['PORT']);
+    // Comment body itself is still filtered (no false positive from the comment text).
+    assert.deepStrictEqual(scanCodeLocations('// process.env.HIDDEN\nprocess.env.PORT;\n').vars, ['PORT']);
+
+    // Collating-equal but distinct paths (NFC vs NFD): ordinal tie-break is stable
+    // without writing those names to disk (Windows may normalize file names).
+    {
+      const nfc = 'caf\u00e9.js';
+      const nfd = 'cafe\u0301.js';
+      assert.notStrictEqual(nfc, nfd);
+      assert.strictEqual(nfc.localeCompare(nfd), 0);
+      const expectedFirst = nfc < nfd ? nfc : nfd;
+      const expectedSecond = nfc < nfd ? nfd : nfc;
+      const realReaddir = fs.readdirSync;
+      const realRead = fs.readFileSync;
+      const virtualDir = fs.mkdtempSync(path.join(os.tmpdir(), 'env-saaf-335-nfc-'));
+      try {
+        const serve = (names) => {
+          fs.readdirSync = (d, opts) => {
+            if (path.resolve(d) === path.resolve(virtualDir)) {
+              return names.map((name) => ({
+                name,
+                isDirectory: () => false,
+                isFile: () => true,
+                isSymbolicLink: () => false,
+              }));
+            }
+            return realReaddir(d, opts);
+          };
+          fs.readFileSync = (p, enc) => {
+            const base = path.basename(p);
+            if (base === nfc || base === nfd) return 'process.env.SHARED;\n';
+            return realRead(p, enc);
+          };
+          try {
+            return scanDirLocations(virtualDir).locations.SHARED.map((e) => e.file);
+          } finally {
+            fs.readdirSync = realReaddir;
+            fs.readFileSync = realRead;
+          }
+        };
+        // Reverse enumeration must still yield the same ordinal order.
+        assert.deepStrictEqual(serve([nfc, nfd]), [expectedFirst, expectedSecond]);
+        assert.deepStrictEqual(serve([nfd, nfc]), [expectedFirst, expectedSecond]);
+      } finally {
+        fs.readdirSync = realReaddir;
+        fs.readFileSync = realRead;
+        fs.rmSync(virtualDir, { recursive: true, force: true });
+      }
+    }
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 }
 
 // Issue #343: a rule description reaches the example comment and the JSON Schema
