@@ -79,6 +79,171 @@ const { loadEnv, validateEnv, validateSchema, EnvSaafError, parseEnvFile, scanCo
   assert.deepStrictEqual(rule, { type: 'duration', min: '30s', max: '1h30m' });
 }
 
+// Issue #427: duration-array bounds follow scalar duration semantics, per item.
+{
+  const rule = Object.freeze({ type: 'array', of: 'duration', min: '2h', max: '1d' });
+  const schema = Object.freeze({ TS: rule });
+  assert.deepStrictEqual(validateEnv(schema, { TS: '3h,4h' }).TS, [10800000, 14400000]);
+  assert.deepStrictEqual(validateEnv(schema, { TS: '2h,1d' }).TS, [7200000, 86400000]);
+  for (const raw of ['7199999,7200000', '7200000,86400001']) {
+    assert.throws(() => validateEnv(schema, { TS: raw }), /expected a duration 2h–1d/);
+  }
+  for (const [raw, index] of [['1h,3h', 0], ['3h,25h', 1]]) {
+    assert.throws(() => validateEnv(schema, { TS: raw }),
+      err => err instanceof EnvSaafError && err.errors[0].startsWith(`TS[${index}]: expected a duration 2h–1d`));
+  }
+  for (const bounds of [
+    { min: 7200000, max: 86400000 }, { min: '2h', max: 86400000 },
+    { min: 7200000, max: '1d' }, { min: '1h30m', max: '2h' },
+    { min: '0', max: '0.5ms' }, { min: -1, max: 0 },
+  ]) {
+    const scalar = { T: { type: 'duration', ...bounds } };
+    const array = { TS: { type: 'array', of: 'duration', ...bounds } };
+    for (const raw of ['0', '0.5ms', '1ms', '1h30m', '2h', '3h', '1d', '25h']) {
+      const a = validateEnv(scalar, { T: raw }, { throwOnError: false });
+      const b = validateEnv(array, { TS: [raw] }, { throwOnError: false });
+      assert.strictEqual(b.errors.length, a.errors.length, `${JSON.stringify(bounds)} / ${raw}`);
+      if (!a.errors.length) assert.deepStrictEqual(b.env.TS, [a.env.T]);
+    }
+  }
+  for (const bound of ['soon', '', '1h30', '1h2h', '-1s', '1e3', true, null, {}, [], Infinity, NaN]) {
+    for (const opt of ['min', 'max']) {
+      assert.throws(() => validateEnv({ TS: { type: 'array', of: 'duration', [opt]: bound } }, {}, { throwOnError: false }), /Invalid schema/);
+    }
+  }
+  for (const [min, max] of [['2m', '30s'], ['2m', 30000], [120000, '30s']]) {
+    assert.throws(() => validateSchema({ TS: { type: 'array', of: 'duration', min, max } }), /must not exceed/);
+  }
+  assert.deepStrictEqual(validateEnv({ TS: { ...rule, default: ['2h', 10800000] } }, {}).TS, [7200000, 10800000]);
+  assert.throws(() => validateEnv({ TS: { ...rule, default: ['2h', '1h'] } }, {}), /TS\[1\]/);
+  const grouped = { API: { prefix: 'API_', schema } };
+  assert.deepStrictEqual(validateEnv(grouped, { API_TS: '2h,3h' }), { API: { TS: [7200000, 10800000] } });
+  assert.throws(() => validateEnv(grouped, { API_TS: '2h,1h' }), /API_TS\[1\]/);
+  const delimited = { TS: { ...rule, separator: ';', skipEmpty: true, minItems: 2, unique: true } };
+  assert.deepStrictEqual(validateEnv(delimited, { TS: '; 2h ;; 3h;' }).TS, [7200000, 10800000]);
+  assert.throws(() => validateEnv(delimited, { TS: ';2h;;1h;' }), /TS\[1\]/);
+  assert.throws(() => validateEnv(delimited, { TS: '2h;120m' }), /duplicate value/);
+  assert.throws(() => validateEnv(delimited, { TS: '2h;' }), /at least 2 items/);
+  const masked = validateEnv({ TS: { ...rule, sensitive: true } }, { TS: '3h,123456789ms' }, { throwOnError: false });
+  assert.strictEqual(masked.errors.length, 1);
+  assert.match(masked.errors[0], /TS\[1\]/);
+  assert.ok(!masked.errors[0].includes('123456789'));
+  assert.strictEqual(masked.details[0].key, 'TS[1]');
+  assert.deepStrictEqual(rule, { type: 'array', of: 'duration', min: '2h', max: '1d' });
+
+  // Bounds run before user hooks, with the same transform semantics as scalars.
+  const calls = [];
+  const hooked = { TS: { ...rule,
+    validate: values => { calls.push(values); return true; },
+    transform: values => values.map(value => value * 100),
+  } };
+  assert.throws(() => validateEnv(hooked, { TS: '1h' }), /expected a duration/);
+  assert.deepStrictEqual(calls, []);
+  assert.deepStrictEqual(validateEnv(hooked, { TS: '2h' }).TS, [720000000]);
+  assert.deepStrictEqual(calls, [[7200000]]);
+
+  // Loading still attributes an indexed bound error to the original file.
+  const fs = require('node:fs'), os = require('node:os'), path = require('node:path');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'env-saaf-duration-array-'));
+  try {
+    const file = path.join(dir, '.env');
+    fs.writeFileSync(file, 'TS=2h,1h\n');
+    assert.throws(() => loadEnv(schema, { path: file, env: {} }),
+      err => err instanceof EnvSaafError && err.details[0].key === 'TS[1]' && err.details[0].source === file);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+
+  // Independent numeric expectations also catch matching bugs in the parser and generator.
+  for (const [bounds, lo, hi] of [
+    [{ min: '2h', max: '1d' }, 7200000, 86400000],
+    [{ min: '1h30m' }, 5400000, Infinity],
+    [{ max: '250ms' }, 0, 250],
+    [{ min: 0, max: 0 }, 0, 0],
+    [{ min: '0.25ms', max: 0.75 }, 0.25, 0.75],
+    [{ min: 1e-8, max: 2e-8 }, 1e-8, 2e-8],
+    [{ min: 1e22, max: 2e22 }, 1e22, 2e22],
+    [{ min: 2925377492792.9043, max: 31233203729007.668 }, 2925377492792.9043, 31233203729007.668],
+  ]) {
+    for (const extra of [{}, { minItems: 6 }, { unique: true }, { unique: true, minItems: lo === hi ? 1 : 6 }, { separator: ';', maxItems: 2 }, { separator: 'm' }]) {
+      const s = { TS: { type: 'array', of: 'duration', ...bounds, ...extra } };
+      const example = parseEnvFile(generateExample(s));
+      const values = validateEnv(s, example).TS;
+      assert.ok(values.length >= (extra.minItems || 1));
+      if (extra.maxItems !== undefined) assert.ok(values.length <= extra.maxItems);
+      for (const value of values) assert.ok(value >= lo && value <= hi, `${value} outside ${lo}–${hi}`);
+      if (extra.unique) assert.strictEqual(new Set(values).size, values.length);
+    }
+  }
+  const choices = { TS: { ...rule, choices: [1000, 7200000, 10800000, 10800000, 90000000], unique: true, minItems: 2 } };
+  assert.deepStrictEqual(validateEnv(choices, parseEnvFile(generateExample(choices))).TS, [7200000, 10800000]);
+  assert.throws(() => validateEnv(choices, { TS: '2h,4h' }), /expected one of/);
+  // String and numeric choices share the same bounded, coerced value space.
+  // Keep the first readable spelling while deduplicating equivalent durations.
+  for (const [allowed, extra, expected, spelling] of [
+    [['1h', '3h'], { minItems: 2 }, [10800000, 10800000], '3h,3h'],
+    [[7200000, '3h'], { unique: true, minItems: 2 }, [7200000, 10800000], '2h,3h'],
+    [['120m', '2h', 7200000, '180m', '25h'], { unique: true, minItems: 2 }, [7200000, 10800000], '120m,180m'],
+    [['120m', '180m'], { minItems: 4, maxItems: 4 }, [7200000, 10800000, 7200000, 10800000], '120m,180m,120m,180m'],
+    [['2H', '3h'], { maxItems: 1 }, [7200000], '2H'],
+    [['1h 30m', '2 H', '3h'], { minItems: 2 }, [7200000, 10800000], '2 H,3h'],
+  ]) {
+    const s = Object.freeze({ TS: Object.freeze({ ...rule, choices: Object.freeze(allowed), ...extra }) });
+    const example = parseEnvFile(generateExample(s));
+    assert.strictEqual(example.TS, spelling);
+    assert.deepStrictEqual(validateEnv(s, example).TS, expected);
+  }
+  const stringChoices = { TS: { ...rule, choices: ['120m', '3h'], separator: '2', unique: true, minItems: 2 } };
+  assert.deepStrictEqual(validateEnv(stringChoices, parseEnvFile(generateExample(stringChoices))).TS, [7200000, 10800000]);
+  const choiceOverlap = { TS: { type: 'array', of: 'duration', min: 1000, max: 1000, choices: ['1s'], separator: '1s1', minItems: 3 } };
+  assert.deepStrictEqual(validateEnv(choiceOverlap, parseEnvFile(generateExample(choiceOverlap))).TS, [1000, 1000, 1000]);
+  assert.deepStrictEqual(toJsonSchema(stringChoices).properties.TS,
+    { type: 'array', items: { type: 'number', minimum: 7200000, maximum: 86400000, enum: [7200000, 10800000] }, minItems: 2, uniqueItems: true });
+  // The spacing between doubles changes at 1: interpolation alone can miss an item.
+  const narrow = { TS: { type: 'array', of: 'duration', min: 0.9999999999999998, max: 1.0000000000000004, unique: true, minItems: 5, maxItems: 5 } };
+  assert.deepStrictEqual(validateEnv(narrow, parseEnvFile(generateExample(narrow))).TS,
+    [0.9999999999999998, 0.9999999999999999, 1, 1.0000000000000002, 1.0000000000000004]);
+  for (const unique of [false, true]) {
+    const s = { TS: { type: 'array', of: 'duration', min: 400, max: 500.5, separator: '.', unique, minItems: 3, maxItems: 3 } };
+    const values = validateEnv(s, parseEnvFile(generateExample(s))).TS;
+    assert.strictEqual(values.length, 3);
+    for (const value of values) assert.ok(value >= 400 && value <= 500.5);
+  }
+  // Bounds and uniqueness apply after splitting: a numeric separator must not
+  // turn an example into extra, empty or duplicate items.
+  for (const [bounds, separator, witness] of [
+    [{ min: 0, max: 7200000 }, '2', '500ms230s215m'],
+    [{ min: '4h', max: '8h' }, '4', '5h46h47h'],
+    [{ min: '1m', max: '3m' }, 'mm', '60000mm120000mm180000'],
+  ]) {
+    for (const unique of [false, true]) {
+      const s = { TS: { type: 'array', of: 'duration', ...bounds, separator, unique, minItems: 3, maxItems: 3 } };
+      assert.strictEqual(validateEnv(s, { TS: witness }).TS.length, 3);
+      assert.strictEqual(validateEnv(s, parseEnvFile(generateExample(s))).TS.length, 3);
+    }
+  }
+  const choiceSpelling = { TS: { type: 'array', of: 'duration', min: '4h', max: '8h', choices: [14400000], separator: '4', minItems: 2 } };
+  assert.deepStrictEqual(validateEnv(choiceSpelling, parseEnvFile(generateExample(choiceSpelling))).TS, [14400000, 14400000]);
+  const overlapping = { TS: { type: 'array', of: 'duration', min: 1000, max: 1000, separator: '1s1', minItems: 3 } };
+  assert.deepStrictEqual(validateEnv(overlapping, parseEnvFile(generateExample(overlapping))).TS, [1000, 1000, 1000]);
+  assert.deepStrictEqual(toJsonSchema(grouped).properties.API.properties.TS,
+    { type: 'array', items: { type: 'number', minimum: 7200000, maximum: 86400000 } });
+  assert.deepStrictEqual(toJsonSchema({ TS: { ...rule, minItems: 2, unique: true, choices: [7200000, 10800000] } }).properties.TS,
+    { type: 'array', items: { type: 'number', minimum: 7200000, maximum: 86400000, enum: [7200000, 10800000] }, minItems: 2, uniqueItems: true });
+
+  // Other arrays retain their existing bound behavior, and default/secret precedence stays intact.
+  for (const of of ['int', 'number', 'string']) {
+    assert.throws(() => validateSchema({ A: { type: 'array', of, min: '2h' } }), /must be a number/);
+  }
+  assert.deepStrictEqual(validateEnv({ A: { type: 'array', of: 'int', min: 5 } }, { A: '1,2' }).A, [1, 2]);
+  assert.strictEqual(parseEnvFile(generateExample({ TS: { type: 'array', of: 'duration' } })).TS, '500ms,30s,15m');
+  const precedence = parseEnvFile(generateExample({
+    TS: { ...rule, default: ['4h', '3h'] }, SECRET_LIST: { ...rule, sensitive: true },
+  }));
+  assert.strictEqual(precedence.TS, '4h,3h');
+  assert.strictEqual(precedence.SECRET_LIST, '');
+}
+
 // Issue #341: duration bounds name their units; other numeric messages stay the same.
 {
   for (const type of ['number', 'int', 'port']) {
