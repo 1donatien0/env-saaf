@@ -7595,6 +7595,39 @@ const loadEnvSourceErrorsTest = (async () => {
     } catch (err) { expectWeird(err); }
   }
 
+  // 12. Non-enumerable ambient PORT does not win over a file value (spread
+  // ignores it), so loadEnv must still name the file - both loaders.
+  {
+    const neFile = path.join(dir, 'nonenum.env');
+    fs.writeFileSync(neFile, 'PORT=bad\n');
+    const nonEnumEnv = Object.defineProperty({}, 'PORT', {
+      value: '3000',
+      enumerable: false,
+      configurable: true,
+      writable: true,
+    });
+    const expectFileWins = (err) => {
+      assert.ok(err instanceof EnvSaafError);
+      assert.strictEqual(
+        err.errors[0],
+        `PORT (from ${neFile}): expected a port (0-65535, e.g. 3000), got "bad"`
+      );
+      assert.deepStrictEqual(err.details[0], {
+        key: 'PORT',
+        message: 'expected a port (0-65535, e.g. 3000), got "bad"',
+        source: neFile,
+      });
+    };
+    try {
+      loadEnv({ PORT: { type: 'port', required: true } }, { path: neFile, env: nonEnumEnv });
+      assert.fail('expected non-enumerable ambient sync loadEnv to throw');
+    } catch (err) { expectFileWins(err); }
+    try {
+      await loadEnvAsync({ PORT: { type: 'port', required: true } }, { path: neFile, env: nonEnumEnv });
+      assert.fail('expected non-enumerable ambient async loadEnvAsync to throw');
+    } catch (err) { expectFileWins(err); }
+  }
+
   fs.rmSync(dir, { recursive: true, force: true });
 })();
 

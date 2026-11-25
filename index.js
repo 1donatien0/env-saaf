@@ -1461,15 +1461,17 @@ function* loadEnvSteps(schema, options) {
       throw new Error(`env-saaf: .env file not found: ${fileList.join(', ')} (required variables missing: ${needed.join(', ')})`);
     }
   }
-  const merged = override ? { ...env, ...fileEnv } : { ...fileEnv, ...env };
+  // Same enumerable own-key copy object spread uses for ambient. Non-enumerable
+  // ambient props (and inherited ones) do not participate in the merge, so
+  // provenance must not treat them as ambient wins via hasOwnProperty on `env`.
+  const ambient = { ...env };
+  const merged = override ? { ...ambient, ...fileEnv } : { ...fileEnv, ...ambient };
   // Issue #350: report a source only for values that actually came from a
   // file after ambient/override precedence. Ambient-winning keys keep today's
   // message shape with no `source` field.
   const sources = Object.create(null);
   for (const key of Object.keys(fileSources)) {
-    if (override) {
-      sources[key] = fileSources[key];
-    } else if (!Object.prototype.hasOwnProperty.call(env, key)) {
+    if (override || !Object.prototype.hasOwnProperty.call(ambient, key)) {
       sources[key] = fileSources[key];
     }
   }
