@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Fixed: `host` accepts and preserves a single trailing DNS root dot on a hostname, while still rejecting leading dots and empty labels (fixes #413).
+
 - Added: `options.rules` on `validateEnv`, `loadEnv`, and `loadEnvAsync` for
   schema-level cross-field validation hooks. Accepts a function or array of
   functions receiving the frozen coerced result object and returning an error
