@@ -117,8 +117,11 @@ try {
     });
     const parsed = JSON.parse(run(['check', dir, '--schema', 'env.schema.js', '--json'], dir).stdout);
     assert.deepStrictEqual(Object.keys(parsed).sort(), [
-      'envExtra', 'envMissing', 'extra', 'invalid', 'missing', 'ok', 'unused',
+      'documentedNotInSchema', 'envExtra', 'envMissing', 'extra', 'invalid', 'missing', 'ok',
+      'schemaNotDocumented', 'unused',
     ]);
+    assert.deepStrictEqual(parsed.schemaNotDocumented, []);
+    assert.deepStrictEqual(parsed.documentedNotInSchema, ['DOCUMENTED_USED', 'DOCUMENTED_UNUSED', 'MISSING_IN_ENV']);
     assert.strictEqual(parsed.ok, false);
     assert.deepStrictEqual(parsed.missing, ['UNDOCUMENTED']);
     assert.deepStrictEqual(parsed.extra, ['DOCUMENTED_UNUSED', 'MISSING_IN_ENV']);
@@ -173,17 +176,56 @@ try {
     assert.ok(Array.isArray(parsed.invalid) && parsed.invalid.length === 1 && /PORT/.test(parsed.invalid[0]));
   }
 
+  // --- check --schema: schema vs example drift, both directions (#358) -----
+  {
+    const schema = "module.exports = {\n"
+      + "  A: { type: 'string' },\n"
+      + "  B: { type: 'string', default: 'x' },\n"
+      + "  DB: { prefix: 'DB_', schema: { HOST: { type: 'string' }, PORT: { type: 'port', default: 3000 } } },\n"
+      + "};\n";
+    const dir = mkProject({
+      'src/app.js': 'console.log(process.env.A, process.env.DB_HOST, process.env.C);\n',
+      '.env.example': 'A=\nDB_HOST=\nC=\n',
+      'env.schema.js': schema,
+    });
+    const r = run(['check', dir, '--schema', 'env.schema.js'], dir);
+    assert.strictEqual(r.status, 1);
+    assert.match(r.stdout, /NOT DOCUMENTED: B \(in schema, missing from \.env\.example\)/);
+    assert.match(r.stdout, /NOT DOCUMENTED: DB_PORT \(in schema, missing from \.env\.example\)/);
+    assert.match(r.stdout, /NOT IN SCHEMA: C \(in \.env\.example, not declared in the schema\)/);
+    const j = JSON.parse(run(['check', dir, '--schema', 'env.schema.js', '--json'], dir).stdout);
+    assert.deepStrictEqual(j.schemaNotDocumented.sort(), ['B', 'DB_PORT']);
+    assert.deepStrictEqual(j.documentedNotInSchema, ['C']);
+
+    // No drift: a grouped key documented in the example matches the schema.
+    const clean = mkProject({
+      'src/app.js': 'console.log(process.env.A, process.env.DB_HOST);\n',
+      '.env.example': 'A=\nDB_HOST=\n',
+      'env.schema.js': "module.exports = { A: { type: 'string' }, DB: { prefix: 'DB_', schema: { HOST: { type: 'string' } } } };\n",
+    });
+    const ok = run(['check', clean, '--schema', 'env.schema.js', '--json'], clean);
+    assert.strictEqual(ok.status, 0, ok.stdout + ok.stderr);
+    const parsed = JSON.parse(ok.stdout);
+    assert.deepStrictEqual(parsed.schemaNotDocumented, []);
+    assert.deepStrictEqual(parsed.documentedNotInSchema, []);
+
+    // Without --schema the JSON shape is unchanged.
+    const noSchema = JSON.parse(run(['check', dir, '--json'], dir).stdout);
+    assert.ok(!('schemaNotDocumented' in noSchema) && !('documentedNotInSchema' in noSchema));
+  }
+
   // --- check --json-schema: stdout is the draft 2020-12 JSON Schema for the --schema file (issue #268)
   {
     const { toJsonSchema } = require('./index');
     const schemaText = "module.exports = {\n"
       + "  PORT: { type: 'port', required: true },\n"
+      + "  DATABASE_URL: { type: 'url' },\n"
       + "  MODE: { type: 'string', choices: ['dev', 'prod'], default: 'dev' },\n"
       + "  DB: { prefix: 'DB_', schema: { HOST: { type: 'host', required: true }, PORT: { type: 'port', default: 5432 } } },\n"
       + "};\n";
     const dir = mkProject({
-      'src/app.js': SRC_WITH_USAGE,
-      '.env.example': EXAMPLE_BOTH,
+      'src/app.js': 'console.log(process.env.PORT, process.env.DATABASE_URL, process.env.MODE, process.env.DB_HOST, process.env.DB_PORT);\n',
+      '.env.example': 'PORT=\nDATABASE_URL=\nMODE=\nDB_HOST=\nDB_PORT=\n',
       'env.schema.js': schemaText,
     });
     const expected = toJsonSchema(require(path.join(dir, 'env.schema.js')));

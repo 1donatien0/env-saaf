@@ -2577,6 +2577,9 @@ assert.deepStrictEqual(
       invalid: ['PORT: expected a port (0-65535, e.g. 3000), got "not-a-port"'],
       envExtra: [],
       envMissing: [],
+      // Issue #358: --schema also diffs the schema against the example file.
+      schemaNotDocumented: [],
+      documentedNotInSchema: [],
     });
 
     // Valid values pass, and presence-only (no --schema) never flags values.
