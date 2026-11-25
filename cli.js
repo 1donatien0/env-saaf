@@ -2,7 +2,7 @@
 'use strict';
 /**
  * env-saaf CLI
- *   env-saaf check [dir] [--file name] [--schema file] [--json] [--json-schema] [--watch] — scan code for process.env usage, compare with
+ *   env-saaf check [dir] [--file name] [--schema file] [--values file] [--json] [--json-schema] [--watch] — scan code for process.env usage, compare with
  *                           .env.example (or the --file given); exit 1 if anything
  *                           used is not documented. --schema also validates the values
  *                           of the real .env file against the schema the file exports
@@ -52,7 +52,7 @@ if (argv.includes('--version') || argv.includes('-v')) {
 // Output is already plain in every mode, including when NO_COLOR is set.
 while (argv[0] === '--no-color') argv.shift();
 const cmd = argv[0];
-const USAGE = 'Usage: env-saaf check [dir] [--file name] [--schema file] [--exclude pattern] [--json] [--json-schema] [--watch] | env-saaf scan [dir | --stdin] [--file name] [--exclude pattern] [--json] [--watch] | env-saaf print [dir] [--schema file] [--file name] [--json] | env-saaf example [dir] [--write[=file]] [--force] [--schema file] | env-saaf init [dir] [--schema file] [--force] [--from-example[=file]]\n'
+const USAGE = 'Usage: env-saaf check [dir] [--file name] [--schema file] [--values file] [--exclude pattern] [--json] [--json-schema] [--watch] | env-saaf scan [dir | --stdin] [--file name] [--exclude pattern] [--json] [--watch] | env-saaf print [dir] [--schema file] [--file name] [--json] | env-saaf example [dir] [--write[=file]] [--force] [--schema file] | env-saaf init [dir] [--schema file] [--force] [--from-example[=file]]\n'
   + 'Global options: --no-color, --version / -v (before or after the command).';
 // --help / -h / help: print usage and exit 0 (asking for help is not an error — this used to exit 2)
 if (cmd === '--help' || cmd === '-h' || cmd === 'help') {
@@ -80,6 +80,8 @@ let forceOpt = false;
 // Issue #230: --watch ('check' and 'scan' only) re-runs the command when watched inputs change.
 let watchOpt = false;
 let stdinOpt = false;
+// Issue #352: check --schema --values validates another file's values.
+let valuesOpt = null;
 // Issue #355: repeatable --exclude patterns for scan and check.
 const excludeOpts = [];
 
@@ -113,6 +115,8 @@ for (let i = 1; i < argv.length; i++) {
   else if (a.startsWith('--file=')) { fileOpt = a.slice('--file='.length); fileExplicit = true; }
   else if (a === '--schema' && argv[i + 1]) schemaOpt = argv[++i];
   else if (a.startsWith('--schema=')) schemaOpt = a.slice('--schema='.length);
+  else if (a === '--values' && argv[i + 1]) valuesOpt = argv[++i];
+  else if (a.startsWith('--values=')) valuesOpt = a.slice('--values='.length);
   else if (a === '--exclude' && argv[i + 1]) excludeOpts.push(argv[++i]);
   else if (a.startsWith('--exclude=')) excludeOpts.push(a.slice('--exclude='.length));
   else if (a === '--json') jsonMode = true;
@@ -126,7 +130,7 @@ for (let i = 1; i < argv.length; i++) {
   else if (a.startsWith('--from-example=')) fromExampleOpt = a.slice('--from-example='.length) || '.env.example';
   else if (a === '--groups') groupsOpt = true;
   else if (a === '--no-color') { /* global flag, allowed on every command */ }
-  else if (a === '--file' || a === '--schema' || a === '--exclude') valuelessFlags.push(a);
+  else if (a === '--file' || a === '--schema' || a === '--values' || a === '--exclude') valuelessFlags.push(a);
   else if (a.startsWith('--')) unknownFlags.push(a);
   else positional.push(a);
 }
@@ -145,7 +149,7 @@ if (fromExampleOpt !== null) {
 // like `--jsoon` in CI produced text output where JSON was expected. Fail
 // fast with exit 2, in the same message shape as other usage errors.
 const COMMAND_FLAGS = {
-  check: ['--file', '--schema', '--exclude', '--json', '--json-schema', '--watch'],
+  check: ['--file', '--schema', '--values', '--exclude', '--json', '--json-schema', '--watch'],
   scan: ['--file', '--exclude', '--json', '--watch', '--stdin'],
   print: ['--schema', '--file', '--json'],
   example: ['--write', '--force', '--schema'],
@@ -161,6 +165,7 @@ if (COMMAND_FLAGS[cmd]) {
   if (forceOpt) seenFlags.add('--force');
   if (watchOpt) seenFlags.add('--watch');
   if (stdinOpt) seenFlags.add('--stdin');
+  if (valuesOpt !== null) seenFlags.add('--values');
   if (excludeOpts.length) seenFlags.add('--exclude');
   if (fromExampleOpt !== null) seenFlags.add('--from-example');
   if (groupsOpt) seenFlags.add('--groups');
@@ -172,6 +177,7 @@ if (COMMAND_FLAGS[cmd]) {
     if (bad) flagError = `flag ${bad} is not supported for ${cmd}`;
     else if (stdinOpt && positional.length > 0) flagError = '--stdin cannot be combined with a directory argument';
     else if (stdinOpt && watchOpt) flagError = '--stdin cannot be combined with --watch';
+    else if (valuesOpt !== null && !schemaOpt) flagError = '--values needs --schema <file>';
   }
   if (flagError) {
     const message = `env-saaf: ${flagError}`;
@@ -686,7 +692,19 @@ async function runCheck() {
     const declared = flattenedSchemaKeys(schema);
     schemaNotDocumented = declared.filter((key) => !documented.includes(key));
     documentedNotInSchema = documented.filter((key) => !declared.includes(key));
-    const targetName = fileExplicit ? fileOpt : (envFileFound ? '.env' : null);
+    // Issue #352: --values names another file to validate (for example
+    // .env.production); an explicit --file still names the template.
+    let targetName = fileExplicit ? fileOpt : (envFileFound ? '.env' : null);
+    if (valuesOpt !== null) {
+      const valuesPath = path.join(dir, valuesOpt);
+      if (!fs.existsSync(valuesPath) || !fs.statSync(valuesPath).isFile()) {
+        const message = `env-saaf: --values ${valuesOpt} not found in ${dir}`;
+        if (jsonMode) console.log(JSON.stringify({ ok: false, error: message }));
+        else console.error(message);
+        fatalExit(2);
+      }
+      targetName = valuesOpt;
+    }
     if (targetName) {
       const values = readEnvFile(path.join(dir, targetName));
       try {
@@ -711,7 +729,8 @@ async function runCheck() {
   const ok = scaffoldAhead || (usedNotDocumented.length === 0 && documentedNotUsed.length === 0
     && envExtra.length === 0 && envMissing.length === 0 && invalid.length === 0
     && schemaNotDocumented.length === 0 && documentedNotInSchema.length === 0);
-  const skippedValues = schemaOpt && !fileExplicit && !envFileFound;
+  // Issue #352: --values validates its own file, so a missing .env is not a skip then.
+  const skippedValues = schemaOpt && !fileExplicit && !envFileFound && valuesOpt === null;
   if (skippedValues && !jsonMode) {
     console.log('env-saaf: no .env file found — values were not validated.');
   }
@@ -728,6 +747,7 @@ async function runCheck() {
       envExtra,
       envMissing,
     };
+    if (valuesOpt !== null) result.valuesFile = valuesOpt;
     if (schemaOpt) {
       result.schemaNotDocumented = schemaNotDocumented;
       result.documentedNotInSchema = documentedNotInSchema;
@@ -742,7 +762,7 @@ async function runCheck() {
     documentedNotUsed.forEach(k => console.log(`UNUSED: ${k} (in ${fileOpt}, never used in code)`));
     envExtra.forEach(k => console.log(`EXTRA in .env: ${k} (not in ${fileOpt})`));
     envMissing.forEach(k => console.log(`MISSING in .env: ${k} (in ${fileOpt}, not set locally)`));
-    invalid.forEach(e => console.log(`INVALID: ${e}`));
+    invalid.forEach(e => console.log(`INVALID${valuesOpt !== null ? ` in ${valuesOpt}` : ''}: ${e}`));
     schemaNotDocumented.forEach(k => console.log(`NOT DOCUMENTED: ${k} (in schema, missing from ${fileOpt})`));
     documentedNotInSchema.forEach(k => console.log(`NOT IN SCHEMA: ${k} (in ${fileOpt}, not declared in the schema)`));
     if (!usedNotDocumented.length && !documentedNotUsed.length && !envExtra.length && !envMissing.length && !invalid.length

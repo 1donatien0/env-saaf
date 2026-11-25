@@ -49,6 +49,11 @@
   instead of living only as README snippets. Both fail with the env-saaf message
   when a required value is missing (fixes #364).
 
+- Added: `check --schema <file> --values <env-file>` validates another
+  environment file (`.env.production`, `.env.staging`) and reports its
+  `INVALID` entries, with the file named in `--json` (`valuesFile`). A missing
+  values file or `--values` without `--schema` is a usage error (exit 2)
+  (fixes #352).
 - Added: repeatable `--exclude <pattern>` on `scan` and `check`, backed by
   `scanDir(dir, { exclude })`. A bare name excludes that directory anywhere and
   a path supports `*` and `**`, so vendored or generated code no longer adds
