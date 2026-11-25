@@ -134,7 +134,66 @@ for (let i = 1; i < argv.length; i++) {
   else if (a.startsWith('--')) unknownFlags.push(a);
   else positional.push(a);
 }
-const dir = positional[0] || process.cwd();
+let dir = positional[0] || process.cwd();
+// Issue #354: project config — the CLI reads defaults from the `env-saaf` key
+// in the project's package.json, so `check` / `scan` / `print` / `example` /
+// `init` do not repeat the same --schema / --file on every invocation.
+// Precedence: an explicit flag (or directory argument) always wins over the
+// config; the config wins over the built-in defaults. Config paths are
+// resolved relative to the directory the command runs on, exactly like the
+// flags are. Unknown keys are a usage error (exit 2), like the library's
+// unknown-option errors, so a typo'd key cannot silently do nothing. A
+// missing package.json simply means "no config"; a malformed one is an
+// error, because a config the user meant to apply must not be skipped.
+const CONFIG_KEYS = ['schema', 'file', 'dir'];
+if (['check', 'scan', 'print', 'example', 'init'].includes(cmd)) {
+  const configDir = positional[0] || process.cwd();
+  const pkgPath = path.join(configDir, 'package.json');
+  let pkg = null;
+  // existsSync first: a missing package.json means "no config", and a
+  // directory argument that is actually a file (scan accepts one — issue
+  // #418) has no package.json to read either.
+  if (fs.existsSync(pkgPath)) {
+    try {
+      pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
+    } catch (e) {
+      // A malformed package.json is an error: a config the user meant to
+      // apply must not be silently skipped. A file that vanished between the
+      // check and the read is treated as no config; any other read failure
+      // names the directory.
+      if (e.code !== 'ENOENT' && e.code !== 'ENOTDIR') {
+        const message = `env-saaf: cannot read project config in ${configDir}: ${e.message}`;
+        if (jsonMode) console.log(JSON.stringify({ ok: false, error: message }));
+        else console.error(message);
+        process.exit(2);
+      }
+    }
+  }
+  const config = pkg && pkg['env-saaf'];
+  if (config !== undefined && config !== null) {
+    let configError = null;
+    if (typeof config !== 'object' || Array.isArray(config)) {
+      configError = 'the "env-saaf" key in package.json must be an object, e.g. { "schema": "config/env.schema.js" }';
+    } else {
+      const unknown = Object.keys(config).filter(k => !CONFIG_KEYS.includes(k));
+      if (unknown.length) {
+        configError = `unknown key${unknown.length === 1 ? '' : 's'} in the "env-saaf" config of package.json: ${unknown.join(', ')} (supported: ${CONFIG_KEYS.join(', ')})`;
+      } else {
+        const bad = Object.entries(config).find(([, v]) => typeof v !== 'string' || v === '');
+        if (bad) configError = `the "env-saaf.${bad[0]}" value in package.json must be a non-empty string`;
+      }
+    }
+    if (configError) {
+      const message = `env-saaf: ${configError}`;
+      if (jsonMode) console.log(JSON.stringify({ ok: false, error: message }));
+      else console.error(message);
+      process.exit(2);
+    }
+    if (positional[0] === undefined && config.dir !== undefined) dir = path.resolve(configDir, config.dir);
+    if (schemaOpt === null && config.schema !== undefined) schemaOpt = config.schema;
+    if (!fileExplicit && config.file !== undefined) { fileOpt = config.file; fileExplicit = true; }
+  }
+}
 // Issue #232: with a bare `--from-example`, a second positional names the
 // example file instead of being mistaken for the directory.
 let exampleOpt = null;
