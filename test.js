@@ -2538,12 +2538,17 @@ assert.deepStrictEqual(
     const skipped = spawnSync(process.execPath, [cli, 'check', dir, '--schema', 'env.schema.js'], { encoding: 'utf8' });
     assert.strictEqual(skipped.status, 0);
     assert.ok(!skipped.stdout.includes('INVALID'));
+    assert.ok(skipped.stdout.includes('no .env file found — values were not validated'), skipped.stdout);
+    const skippedJson = spawnSync(process.execPath, [cli, 'check', dir, '--schema', 'env.schema.js', '--json'], { encoding: 'utf8' });
+    assert.strictEqual(skippedJson.status, 0);
+    assert.strictEqual(JSON.parse(skippedJson.stdout).envFileFound, false);
 
     // An explicit --file names the file to validate.
     fs.writeFileSync(path.join(dir, '.env.example'), 'PORT=\nDEBUG=\n');
     fs.writeFileSync(path.join(dir, 'custom.env'), 'PORT=not-a-port\nDEBUG=yes\n');
     const custom = spawnSync(process.execPath, [cli, 'check', dir, '--schema', 'env.schema.js', '--file', 'custom.env'], { encoding: 'utf8' });
     assert.strictEqual(custom.status, 1);
+    assert.ok(!custom.stdout.includes('values were not validated'), custom.stdout);
     assert.ok(custom.stdout.includes('INVALID: PORT: expected a port (0-65535, e.g. 3000), got "not-a-port"'), custom.stdout);
 
     // A schema file that cannot be loaded is a usage error (exit 2), not a finding.
