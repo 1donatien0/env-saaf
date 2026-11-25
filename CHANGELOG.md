@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Added: `options.rules` on `validateEnv`, `loadEnv`, and `loadEnvAsync` for
+  schema-level cross-field validation hooks. Accepts a function or array of
+  functions receiving the frozen coerced result object and returning an error
+  string, an array of error strings, or nothing; runs only when earlier checks
+  produced a complete error-free snapshot and aggregates errors into
+  `EnvSaafError`, `details`, and `{ throwOnError: false }` results (fixes #346).
+
 - Added: the CLI reads defaults from an `env-saaf` key in the project's
   `package.json` (`schema`, `file` and `dir`), so `check` / `scan` / `print` /
   `example` / `init` no longer repeat the same flags; explicit flags always

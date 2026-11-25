@@ -300,3 +300,88 @@ validateEnv({ A: { conflictsWith: 123 } });
 // @ts-expect-error conflictsWith list entries must be strings
 validateEnv({ A: { conflictsWith: [123] } });
 void [exApiKey, exOauthFile, exDbUrl, exDbPort];
+
+// Issue #346: `options.rules` types coerced snapshot values across validateEnv, loadEnv, and loadEnvAsync.
+import { LoadEnvOptions, ValidateOptions, ValidationRule } from './index';
+
+const crossRuleSchema = {
+  CACHE_TTL: { type: 'duration', default: '5m' },
+  SESSION_TTL: { type: 'duration', required: true },
+  WORKERS: { type: 'int', default: 2 },
+  SENTRY_DSN: { type: 'url' },
+  TAGS: { type: 'array', of: 'string', default: ['a'] as string[] },
+  UPPER: { type: 'string', default: 'ok', transform: (s: string) => s.length },
+  DB: {
+    prefix: 'DB_',
+    schema: {
+      MIN_POOL: { type: 'int', default: 1 },
+      MAX_POOL: { type: 'int', default: 10 },
+    },
+  },
+} as const;
+
+const standaloneRule: ValidationRule<typeof crossRuleSchema> = (cfg) => {
+  const ttlDiff: number = cfg.SESSION_TTL - cfg.CACHE_TTL;
+  const workers: number = cfg.WORKERS;
+  const dsn: string | undefined = cfg.SENTRY_DSN;
+  const tags: string[] = cfg.TAGS;
+  const upperLen: number = cfg.UPPER;
+  const dbMax: number | undefined = cfg.DB?.MAX_POOL;
+  // @ts-expect-error unknown key is rejected on the typed snapshot
+  void cfg.NOT_DECLARED;
+  // @ts-expect-error snapshot passed to rules is read-only
+  cfg.WORKERS = 8;
+  void [workers, dsn, tags, upperLen, dbMax];
+  return ttlDiff > 0 ? undefined : 'CACHE_TTL must be smaller than SESSION_TTL';
+};
+
+const crossChecked = validateEnv(
+  crossRuleSchema,
+  { SESSION_TTL: '30m' },
+  {
+    rules: [
+      standaloneRule,
+      (cfg) => (cfg.DB && cfg.DB.MIN_POOL > cfg.DB.MAX_POOL ? ['DB_MIN_POOL must not exceed DB_MAX_POOL'] : null),
+      () => { /* void return */ },
+    ] as const,
+  },
+);
+const crossSessionTtl: number = crossChecked.SESSION_TTL;
+const crossUpper: number = crossChecked.UPPER;
+
+const crossCollected = validateEnv(
+  crossRuleSchema,
+  { SESSION_TTL: '30m' },
+  {
+    throwOnError: false,
+    rules: (cfg) => (cfg.CACHE_TTL >= cfg.SESSION_TTL ? 'bad ttl' : undefined),
+  },
+);
+const crossCollectedErrors: string[] = crossCollected.errors;
+const crossCollectedTtl: number = crossCollected.env.CACHE_TTL;
+
+const crossLoaded: number = loadEnv(crossRuleSchema, {
+  path: '.env',
+  rules: (cfg) => (cfg.WORKERS < 1 ? 'need workers' : undefined),
+}).WORKERS;
+
+const crossLoadedAsync: Promise<number> = loadEnvAsync(crossRuleSchema, {
+  paths: ['.env'],
+  rules: [standaloneRule],
+}).then((r) => r.SESSION_TTL);
+
+// Unparameterized ValidateOptions and LoadEnvOptions stay assignable to concrete schemas.
+const genericValidateOpts: ValidateOptions = { strict: true };
+const genericLoadOpts: LoadEnvOptions = { path: '.env', strict: false };
+validateEnv(crossRuleSchema, { SESSION_TTL: '30m' }, genericValidateOpts);
+void loadEnv(crossRuleSchema, genericLoadOpts);
+
+// @ts-expect-error rules must be a function or list of functions
+validateEnv({ PORT: { type: 'port' } }, {}, { rules: 123 });
+// @ts-expect-error rules list entries must be functions
+validateEnv({ PORT: { type: 'port' } }, {}, { rules: [123] });
+// @ts-expect-error rule hook cannot return a number
+validateEnv({ PORT: { type: 'port' } }, {}, { rules: () => 42 });
+// @ts-expect-error rule hook cannot return a boolean instead of an error message
+validateEnv({ PORT: { type: 'port' } }, {}, { rules: () => false });
+void [crossSessionTtl, crossUpper, crossCollectedErrors, crossCollectedTtl, crossLoaded, crossLoadedAsync];
