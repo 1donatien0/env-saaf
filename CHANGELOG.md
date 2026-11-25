@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Fixed: `scanCode` (and `scanCodeLocations`) now follows destructured `process.env` aliases such as `const { env } = process` and `const { env: myEnv } = process`, while ignoring other destructured `process` bindings like `argv` (fixes #425).
+
 - Added: seeded property-based tests for `validateEnv` (`test-validate-fuzz.js`,
   part of `npm test`) covering all 18 scalar types and `array`, checking
   coercion idempotence, `.env.example` round-trips, inclusive `min`/`max`

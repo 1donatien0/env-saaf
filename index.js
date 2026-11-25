@@ -2043,6 +2043,41 @@ function lineNumberAt(text, index) {
   return line;
 }
 
+function findMatchingBrace(codeView, openIndex) {
+  let depth = 1;
+  for (let i = openIndex + 1; i < codeView.length; i++) {
+    if (codeView[i] === '{') depth++;
+    else if (codeView[i] === '}') {
+      depth--;
+      if (depth === 0) return i;
+    }
+  }
+  return -1;
+}
+
+function splitTopLevel(text, delimiter) {
+  const parts = [];
+  let start = 0;
+  let braces = 0;
+  let parens = 0;
+  let brackets = 0;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (c === '{') braces++;
+    else if (c === '}') braces = Math.max(0, braces - 1);
+    else if (c === '(') parens++;
+    else if (c === ')') parens = Math.max(0, parens - 1);
+    else if (c === '[') brackets++;
+    else if (c === ']') brackets = Math.max(0, brackets - 1);
+    else if (c === delimiter && braces === 0 && parens === 0 && brackets === 0) {
+      parts.push({ text: text.slice(start, i), start });
+      start = i + 1;
+    }
+  }
+  parts.push({ text: text.slice(start), start });
+  return parts;
+}
+
 /**
  * Every env read in source text with its character index (same lexical rules as
  * scanCode). Hits keep encounter order so callers can attach file/line metadata.
@@ -2107,20 +2142,16 @@ function collectEnvReads(text) {
     }
   }
   const aliases = new Map();
-  const declaration = /(?<![$\p{ID_Continue}.])(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=/gu;
   const trivia = /(?:\s|\/\*(?:[^*]|\*(?!\/))*\*\/|\/\/[^\r\n\u2028\u2029]*)*/y;
-  const source = /(?:process\.env|import\.meta\.env)/y;
   const continuation = /(?!\+\+|--)(?:[.([+*\/%&|^?=<>-]|\x60|!=|(?:in|instanceof)\b)/y;
-  for (const m of src.matchAll(declaration)) {
-    const afterEquals = m.index + m[0].length;
-    if (!isCode(m.index, afterEquals) || aliases.has(m[1])) continue;
+  const matchAliasSourceEnd = (afterEquals, sourceRe) => {
     // Skip comments without hiding strings or consuming the next declaration.
     trivia.lastIndex = afterEquals;
     trivia.exec(src);
     const sourceStart = trivia.lastIndex;
-    source.lastIndex = sourceStart;
-    if (!source.test(src) || !isCode(sourceStart, source.lastIndex)) continue;
-    const end = source.lastIndex;
+    sourceRe.lastIndex = sourceStart;
+    if (!sourceRe.test(src) || !isCode(sourceStart, sourceRe.lastIndex)) return -1;
+    const end = sourceRe.lastIndex;
     trivia.lastIndex = end;
     const [spacing] = trivia.exec(src);
     const next = trivia.lastIndex;
@@ -2128,7 +2159,54 @@ function collectEnvReads(text) {
     // A line break ends the initializer only when the expression cannot continue.
     if (next === src.length || /[;,}]/.test(src[next]) ||
         (/[\r\n\u2028\u2029]/.test(spacing) && !continuation.test(src))) {
-      aliases.set(m[1], end);
+      return end;
+    }
+    return -1;
+  };
+
+  const declaration = /(?<![$\p{ID_Continue}.])(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=/gu;
+  const directSource = /(?:process\.env|import\.meta\.env)/y;
+  for (const m of src.matchAll(declaration)) {
+    const afterEquals = m.index + m[0].length;
+    if (!isCode(m.index, afterEquals) || aliases.has(m[1])) continue;
+    const end = matchAliasSourceEnd(afterEquals, directSource);
+    if (end !== -1) aliases.set(m[1], end);
+  }
+
+  // Issue #425: `const { env } = process` and `const { env: myEnv } = process`
+  // create file-local aliases for `process.env` under the same boundary rules.
+  const destructureAlias = /(?<![$\p{ID_Continue}.])(?:const|let|var)\s*\{/gu;
+  const processSource = /process/y;
+  for (const m of src.matchAll(destructureAlias)) {
+    const openBrace = m.index + m[0].length - 1;
+    if (!isCode(m.index, openBrace + 1)) continue;
+    const closeBrace = findMatchingBrace(codeView, openBrace);
+    if (closeBrace === -1) continue;
+    trivia.lastIndex = closeBrace + 1;
+    trivia.exec(src);
+    const eqIndex = trivia.lastIndex;
+    if (src[eqIndex] !== '=' || src[eqIndex + 1] === '=' || src[eqIndex + 1] === '>') continue;
+    if (!isCode(eqIndex, eqIndex + 1)) continue;
+    const end = matchAliasSourceEnd(eqIndex + 1, processSource);
+    if (end === -1) continue;
+
+    const bodyStart = openBrace + 1;
+    const body = codeView.slice(bodyStart, closeBrace);
+    for (const part of splitTopLevel(body, ',')) {
+      const pattern = splitTopLevel(part.text, '=')[0].text;
+      const segments = splitTopLevel(pattern, ':');
+      let aliasName = '';
+      if (segments.length === 1) {
+        if (segments[0].text.trim() === 'env') aliasName = 'env';
+      } else if (segments.length === 2) {
+        const keyText = segments[0].text.trim();
+        const rawKey = src.slice(bodyStart + part.start + segments[0].start,
+          bodyStart + part.start + segments[0].start + segments[0].text.length);
+        const isEnvKey = keyText === 'env' || /^\s*(['"])env\1\s*$/.test(rawKey);
+        const target = segments[1].text.trim();
+        if (isEnvKey && /^[A-Za-z_$][\w$]*$/.test(target)) aliasName = target;
+      }
+      if (aliasName && !aliases.has(aliasName)) aliases.set(aliasName, end);
     }
   }
   if (aliases.size) {
