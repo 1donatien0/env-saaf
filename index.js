@@ -48,6 +48,7 @@ const TYPE_EXAMPLES = {
   uuid: '550e8400-e29b-41d4-a716-446655440000',
   hex: 'deadbeef',
   ipv4: '192.168.0.1',
+  ipv6: '::1',
   semver: '1.2.3',
   base64: 'aGVsbG8=',
   port: '3000',
@@ -64,7 +65,7 @@ const KNOWN_TYPES = new Set(Object.keys(TYPE_EXAMPLES));
 // (`pattern`, `minLength`, `maxLength`) are rejected up front on any other
 // type so they cannot sit silently ignored as dead config (issue #211).
 const STRING_TYPES = new Set([
-  'string', 'email', 'url', 'file', 'uuid', 'hex', 'ipv4', 'semver', 'base64', 'host',
+  'string', 'email', 'url', 'file', 'uuid', 'hex', 'ipv4', 'ipv6', 'semver', 'base64', 'host',
 ]);
 const KNOWN_RULE_OPTIONS = new Set([
   'type',
@@ -667,6 +668,15 @@ function coerce(key, raw, type, trim = true, protocols, sensitive = false, of = 
       const badOctet = parts.some(p => !/^(0|[1-9][0-9]*)$/.test(p) || Number(p) > 255);
       if (parts.length !== 4 || badOctet) {
         throw new Error(`${key}: expected a valid IPv4 address (e.g. ${TYPE_EXAMPLES.ipv4}), got "${shown}"`);
+      }
+      return s;
+    }
+    case 'ipv6': {
+      // Whatever `host` already accepts as IPv6 (issue #342): compressed
+      // forms, IPv4-mapped addresses and a scoped zone such as fe80::1%eth0.
+      const s = String(v);
+      if (net.isIP(s) !== 6) {
+        throw new Error(`${key}: expected a valid IPv6 address (e.g. ${TYPE_EXAMPLES.ipv6}), got "${shown}"`);
       }
       return s;
     }
@@ -1840,6 +1850,7 @@ const ARRAY_ITEM_EXAMPLES = {
   uuid: ['550e8400-e29b-41d4-a716-446655440000', '6ba7b810-9dad-11d1-80b4-00c04fd430c8', '7c9e6679-7425-40de-944b-e07fc1f90ae7'],
   hex: ['deadbeef', 'cafebabe', '0123abcd'],
   ipv4: ['192.168.0.1', '10.0.0.1', '172.16.0.1'],
+  ipv6: ['::1', '2001:db8::1', 'fe80::1%eth0'],
   semver: ['1.0.0', '2.0.0', '0.1.0'],
   base64: ['aGVsbG8=', 'd29ybGQ=', 'Zm9vYmFy'],
   port: ['3000', '8080', '5432'],
@@ -1976,7 +1987,7 @@ function boundedStringPlaceholder(type, example, rule, limit) {
 function scalarPlaceholder(rule, stringGrowth) {
   const type = rule.type === undefined ? 'string' : rule.type;
   const placeholder = type === 'port' ? '3000' : type === 'url' ? 'https://example.com'
-    : type === 'ipv4' ? '192.168.0.1' : type === 'semver' ? '1.0.0'
+    : type === 'ipv4' ? '192.168.0.1' : type === 'ipv6' ? '::1' : type === 'semver' ? '1.0.0'
     : type === 'date' ? '2026-01-31' : type === 'duration' ? '15m' : type === 'host' ? 'localhost'
     : type === 'file' ? './config.json'
     : type === 'email' ? 'user@example.com' : type === 'uuid' ? '550e8400-e29b-41d4-a716-446655440000'
@@ -2093,7 +2104,7 @@ function jsonSchemaForScalar(type, protocols) {
     case 'json': return {};
     case 'date': return { type: 'string', anyOf: [{ format: 'date' }, { format: 'date-time' }] };
     case 'host': return { type: 'string', anyOf: [{ format: 'hostname' }, { format: 'ipv4' }, { format: 'ipv6' }] };
-    case 'email': case 'uuid': case 'ipv4': return { type: 'string', format: type };
+    case 'email': case 'uuid': case 'ipv4': case 'ipv6': return { type: 'string', format: type };
     case 'hex': return { type: 'string', pattern: '^[0-9a-fA-F]+$' };
     case 'semver': return { type: 'string', pattern: SEMVER_RE.source };
     case 'url': {

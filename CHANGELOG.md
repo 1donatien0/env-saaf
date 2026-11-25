@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Added: an `ipv6` type. It accepts what `net.isIP` reports as IPv6 (compressed
+  forms, IPv4-mapped addresses, `fe80::1%eth0`), joins the string-valued types
+  for `minLength`/`maxLength`/`pattern`, emits `format: 'ipv6'` from
+  `toJsonSchema` and a valid `::1` example (fixes #342).
+
 - Added: runnable `examples/fastify/` and `examples/nextjs/` projects, matching
   the Express example's layout, so the Fastify and Next.js recipes are exercised
   instead of living only as README snippets. Both fail with the env-saaf message

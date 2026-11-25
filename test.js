@@ -7081,6 +7081,29 @@ assert.deepStrictEqual(scanCode("const env = process.env; env['DB.PORT']; env[`M
   assert.match(withDir.stderr, /--stdin cannot be combined with a directory argument/);
 }
 
+// Issue #342: the ipv6 type
+{
+  assert.deepStrictEqual(
+    validateEnv({ A: { type: 'ipv6' }, B: { type: 'ipv6' }, C: { type: 'ipv6' } },
+      { A: '::1', B: '2001:db8::1', C: 'fe80::1%eth0' }),
+    { A: '::1', B: '2001:db8::1', C: 'fe80::1%eth0' },
+  );
+  assert.deepStrictEqual(validateEnv({ A: { type: 'ipv6' } }, { A: '::ffff:192.168.0.1' }).A, '::ffff:192.168.0.1');
+  for (const bad of ['192.168.0.1', 'example.com', 'gggg::1', '::1::2']) {
+    assert.throws(() => validateEnv({ A: { type: 'ipv6', required: true } }, { A: bad }),
+      /expected a valid IPv6 address/, bad);
+  }
+  // String-type options apply, as they do for ipv4.
+  assert.throws(() => validateEnv({ A: { type: 'ipv6', pattern: '^fe80:' } }, { A: '::1' }), /expected to match/);
+  assert.strictEqual(validateEnv({ A: { type: 'ipv6', minLength: 3 } }, { A: '::1' }).A, '::1');
+
+  assert.deepStrictEqual(toJsonSchema({ A: { type: 'ipv6' } }).properties.A, { type: 'string', format: 'ipv6' });
+  const example = generateExample({ A: { type: 'ipv6' } });
+  assert.ok(example.includes('A=::1'), example);
+  // The generated example itself validates.
+  assert.strictEqual(validateEnv({ A: { type: 'ipv6' } }, { A: '::1' }).A, '::1');
+}
+
 Promise.all([watchModeTest, watchModeErrorPathTest, watchModeEsmSchemaTest, loadEnvAsyncTest, formatErrorThrowingHookTest])
   .then(() => console.log('env-saaf v1.5.0: all tests passed'))
   .catch((err) => { console.error(err); process.exit(1); });
