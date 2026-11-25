@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Fixed: `scanDir` follows a directory reached through a symbolic link (once
+  per real path), so a package linked into a workspace is scanned; a symlink
+  cycle can no longer hang the walk (fixes #339).
+
 - Added: runnable `examples/fastify/` and `examples/nextjs/` projects, matching
   the Express example's layout, so the Fastify and Next.js recipes are exercised
   instead of living only as README snippets. Both fail with the env-saaf message
