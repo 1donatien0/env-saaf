@@ -99,38 +99,42 @@ try {
     const dir = mkProject({ 'src/app.js': 'console.log(process.env.PORT);\n', '.env.example': 'PORT=\n' });
     const parsed = JSON.parse(run(['check', dir, '--json'], dir).stdout);
     assert.deepStrictEqual(parsed, {
-      ok: true, missing: [], extra: [], unused: [], invalid: [], envExtra: [], envMissing: [],
+      ok: true, missing: [], extra: [], unused: [], invalid: [], secrets: [], envExtra: [], envMissing: [],
     });
     assert.strictEqual(typeof parsed.ok, 'boolean');
-    for (const field of ['missing', 'extra', 'unused', 'invalid', 'envExtra', 'envMissing']) {
+    for (const field of ['missing', 'extra', 'unused', 'invalid', 'secrets', 'envExtra', 'envMissing']) {
       assert.ok(Array.isArray(parsed[field]), `${field} must be an array`);
     }
   }
 
   {
     // One finding of each kind, so no field can be dropped or renamed unnoticed.
+    const syntheticExampleSecret = ['sk', 'proj', 'A1b2C3d4E5f6G7h8I9j0K1l2M3n4'].join('-');
     const dir = mkProject({
-      'src/app.js': 'console.log(process.env.PORT, process.env.DOCUMENTED_USED, process.env.UNDOCUMENTED);\n',
-      '.env.example': 'PORT=\nDOCUMENTED_USED=\nDOCUMENTED_UNUSED=\nMISSING_IN_ENV=\n',
-      '.env': 'DOCUMENTED_USED=1\nPORT=not-a-port\nEXTRA_IN_ENV=2\n',
+      'src/app.js': 'console.log(process.env.PORT, process.env.DOCUMENTED_USED, process.env.LEAKED_KEY, process.env.UNDOCUMENTED);\n',
+      '.env.example': `PORT=\nDOCUMENTED_USED=\nLEAKED_KEY=${syntheticExampleSecret}\nDOCUMENTED_UNUSED=\nMISSING_IN_ENV=\n`,
+      '.env': 'DOCUMENTED_USED=1\nLEAKED_KEY=1\nPORT=not-a-port\nEXTRA_IN_ENV=2\n',
       'env.schema.js': "module.exports = { PORT: { type: 'port' } };\n",
     });
-    const parsed = JSON.parse(run(['check', dir, '--schema', 'env.schema.js', '--json'], dir).stdout);
+    const out = run(['check', dir, '--schema', 'env.schema.js', '--json'], dir).stdout;
+    assert.ok(!out.includes(syntheticExampleSecret), 'example secret value must never appear in --json output');
+    const parsed = JSON.parse(out);
     assert.deepStrictEqual(Object.keys(parsed).sort(), [
       'documentedNotInSchema', 'envExtra', 'envMissing', 'extra', 'invalid', 'missing', 'ok',
-      'schemaNotDocumented', 'unused',
+      'schemaNotDocumented', 'secrets', 'unused',
     ]);
     assert.deepStrictEqual(parsed.schemaNotDocumented, []);
-    assert.deepStrictEqual(parsed.documentedNotInSchema, ['DOCUMENTED_USED', 'DOCUMENTED_UNUSED', 'MISSING_IN_ENV']);
+    assert.deepStrictEqual(parsed.documentedNotInSchema, ['DOCUMENTED_USED', 'LEAKED_KEY', 'DOCUMENTED_UNUSED', 'MISSING_IN_ENV']);
     assert.strictEqual(parsed.ok, false);
     assert.deepStrictEqual(parsed.missing, ['UNDOCUMENTED']);
     assert.deepStrictEqual(parsed.extra, ['DOCUMENTED_UNUSED', 'MISSING_IN_ENV']);
     assert.deepStrictEqual(parsed.unused, ['DOCUMENTED_UNUSED', 'MISSING_IN_ENV']);
+    assert.deepStrictEqual(parsed.secrets, ['LEAKED_KEY']);
     assert.deepStrictEqual(parsed.envExtra, ['EXTRA_IN_ENV']);
     assert.deepStrictEqual(parsed.envMissing, ['DOCUMENTED_UNUSED', 'MISSING_IN_ENV']);
     assert.strictEqual(parsed.invalid.length, 1);
     assert.match(parsed.invalid[0], /PORT/);
-    for (const field of ['missing', 'extra', 'unused', 'invalid', 'envExtra', 'envMissing']) {
+    for (const field of ['missing', 'extra', 'unused', 'invalid', 'secrets', 'envExtra', 'envMissing']) {
       for (const item of parsed[field]) assert.strictEqual(typeof item, 'string', `${field} holds strings`);
     }
   }
@@ -1333,7 +1337,7 @@ try {
     const fileCheckJson = run(['check', 'src/server.js', '--json'], dir);
     assert.strictEqual(fileCheckJson.status, 0);
     assert.deepStrictEqual(JSON.parse(fileCheckJson.stdout), {
-      ok: true, missing: [], extra: [], unused: [], invalid: [], envExtra: [], envMissing: [],
+      ok: true, missing: [], extra: [], unused: [], invalid: [], secrets: [], envExtra: [], envMissing: [],
     });
 
     // Undocumented key in the checked single file still fails check with exit 1.
@@ -2008,6 +2012,315 @@ try {
           });
         } finally {
           if (exited === null) await stopWatcher(child);
+        }
+      })());
+    }
+  }
+
+  // --- issue #416: check flags secret-looking values in .env.example ----------
+  {
+    const { spawn } = require('node:child_process');
+    const { generateExample } = require('./index');
+
+    // Seeded generator builds synthetic credential strings dynamically at runtime.
+    const makeRng = (seed) => {
+      let s = seed >>> 0;
+      return () => {
+        s = (s + 0x6D2B79F5) >>> 0;
+        let t = Math.imul(s ^ (s >>> 15), s | 1);
+        t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+        return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+      };
+    };
+    const pickChars = (rand, alphabet, len) => {
+      let out = '';
+      for (let i = 0; i < len; i++) out += alphabet[Math.floor(rand() * alphabet.length)];
+      return out;
+    };
+    const rand = makeRng(416001);
+    const ALNUM = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+    const UPPER_ALNUM = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+    const HEX = '0123456789abcdef';
+    const B64 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+    const B64URL = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_';
+
+    const syntheticSecrets = {
+      OPENAI_KEY: ['sk', 'proj', pickChars(rand, ALNUM, 28)].join('-'),
+      ANTHROPIC_KEY: ['sk', 'ant', 'api03', pickChars(rand, ALNUM, 26)].join('-'),
+      STRIPE_KEY: ['sk', 'live', pickChars(rand, ALNUM, 24)].join('_'),
+      AWS_ACCESS_KEY_ID: 'AKIA' + pickChars(rand, UPPER_ALNUM, 16),
+      DATABASE_URL: ['postgres://user:', 'pass', '@localhost:5432/app'].join(''),
+      REDIS_URL: `redis://:${pickChars(rand, ALNUM, 14)}@cache.internal:6379/0`,
+      HEX_TOKEN_40: pickChars(rand, HEX, 40),
+      HEX_TOKEN_64: pickChars(rand, HEX, 64),
+      GITHUB_TOKEN: ['ghp', pickChars(rand, ALNUM, 36)].join('_'),
+      SLACK_TOKEN: ['xoxb', '1234567890', pickChars(rand, ALNUM, 24)].join('-'),
+      JWT_TOKEN: ['eyJhbGciOiJIUzI1NiJ9', 'eyJzdWIiOiJ1c2VyXzEyMyJ9', pickChars(rand, B64URL, 32)].join('.'),
+      PEM_KEY: ['-----BEGIN RSA', 'PRIVATE KEY-----\\n', pickChars(rand, B64, 48), '\\n-----END RSA', 'PRIVATE KEY-----'].join(' '),
+      HIGH_ENTROPY_B64: pickChars(rand, B64, 30) + '==',
+      HIGH_ENTROPY_MIXED: pickChars(rand, ALNUM, 32),
+      HIGH_ENTROPY_LOWER: Array.from({ length: 16 }, () => (
+        'abcdefghjkmnpqrstuvwxyz'[Math.floor(rand() * 23)] + '23456789'[Math.floor(rand() * 8)]
+      )).join(''),
+      JSON_SECRET: JSON.stringify({ nested: { token: ['sk', pickChars(rand, ALNUM, 22)].join('-') } }),
+      LIST_SECRET: ['placeholder', ['sk', pickChars(rand, ALNUM, 22)].join('-')].join(','),
+      BEARER_SECRET: 'Bearer ' + ['sk', pickChars(rand, ALNUM, 22)].join('-'),
+      URL_QUERY_SECRET: 'https://api.example.com/v1?api_key=' + ['sk', pickChars(rand, ALNUM, 22)].join('-'),
+      URL_PATH_SECRET: 'https://hooks.example.com/services/' + pickChars(rand, ALNUM, 28),
+    };
+
+    const assertNoLeak = (output, map, label) => {
+      for (const [k, raw] of Object.entries(map)) {
+        assert.ok(!output.includes(raw), `${label}: leaked secret value for ${k}`);
+        if (raw.length >= 20 && !raw.includes('://') && !raw.startsWith('{') && !raw.includes(',') && !raw.includes('PRIVATE KEY')) {
+          assert.ok(!output.includes(raw.slice(-8)), `${label}: leaked secret tail for ${k}`);
+        }
+      }
+    };
+
+    // 1. Secret shapes in .env.example fail check (exit 1), name keys, mask values, and surface `secrets` in --json.
+    const secretKeys = Object.keys(syntheticSecrets);
+    const secretCode = secretKeys.map(k => `void process.env.${k};`).join('\n') + '\n';
+    const secretExample = secretKeys.map(k => `${k}=${JSON.stringify(syntheticSecrets[k])}`).join('\n') + '\n';
+    const badDir = mkProject({ 'src/app.js': secretCode, '.env.example': secretExample });
+
+    const textCheck = run(['check', badDir], badDir);
+    assert.strictEqual(textCheck.status, 1, `${textCheck.stdout}${textCheck.stderr}`);
+    assert.strictEqual(textCheck.stderr, '');
+    assertNoLeak(textCheck.stdout + textCheck.stderr, syntheticSecrets, 'text check');
+    for (const k of secretKeys) {
+      assert.match(
+        textCheck.stdout,
+        new RegExp(`^SECRET in \\.env\\.example: ${k} \\(value \\[REDACTED\\] looks like a real secret; use an empty value or placeholder\\)$`, 'm'),
+        `expected SECRET line for ${k}`,
+      );
+    }
+
+    const jsonCheck = run(['check', badDir, '--json'], badDir);
+    assert.strictEqual(jsonCheck.status, 1);
+    assert.strictEqual(jsonCheck.stderr, '');
+    assertNoLeak(jsonCheck.stdout, syntheticSecrets, 'json check');
+    const jsonParsed = JSON.parse(jsonCheck.stdout);
+    assert.strictEqual(jsonParsed.ok, false);
+    assert.deepStrictEqual(jsonParsed.secrets, secretKeys);
+
+    // Intra-file ${VAR} expansion inside .env.example also flags derived keys without leaking values.
+    const interpSecret = ['sk', 'live', pickChars(rand, ALNUM, 24)].join('_');
+    const interpDir = mkProject({
+      'src/app.js': 'void (process.env.RAW_PART && process.env.DERIVED_KEY);\n',
+      '.env.example': `RAW_PART=${interpSecret}\nDERIVED_KEY=\${RAW_PART}\n`,
+    });
+    const interpRes = run(['check', interpDir, '--json'], interpDir);
+    assert.strictEqual(interpRes.status, 1);
+    assertNoLeak(interpRes.stdout + interpRes.stderr, { RAW_PART: interpSecret }, 'intra-file interpolation');
+    assert.deepStrictEqual(JSON.parse(interpRes.stdout).secrets, ['RAW_PART', 'DERIVED_KEY']);
+
+    // 2. Empty values, common placeholders, non-secret formats, ambient process.env, real .env secrets, and generateExample pass.
+    const placeholderEntries = [
+      ['EMPTY_KEY', ''],
+      ['WHITESPACE_KEY', '"   "'],
+      ['YOUR_KEY_HERE', 'your-key-here'],
+      ['YOUR_VALUE_HERE', 'your_value_here'],
+      ['YOUR_UPPER_HERE', 'YOUR_API_KEY_HERE'],
+      ['ANGLE_REDACTED', '<redacted>'],
+      ['BRACKET_REDACTED', '[REDACTED]'],
+      ['XXX_SHORT', 'xxx'],
+      ['XXX_LONG', 'xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx'],
+      ['CHANGEME', 'changeme'],
+      ['PROSE_PLACEHOLDER', 'replace-with-a-secret-at-least-32-characters-long'],
+      ['GENERIC_TOKEN_NAME', 'secret_token'],
+      ['PREFIXED_PLACEHOLDER', 'sk-your-key-here'],
+      ['PREFIXED_UPPER_PLACEHOLDER', 'sk-YOUR_KEY_HERE'],
+      ['PREFIXED_SUFFIX_HERE', 'sk-api-token-here'],
+      ['PREFIXED_PAIR_REPEAT', 'sk-abababababababab'],
+      ['PREFIXED_XXX', 'sk-xxxxxxxxxxxxxxxxxxxx'],
+      ['DB_LOCAL', 'postgres://localhost:5432/app'],
+      ['DB_USER_NO_PASS', 'postgres://user@localhost:5432/app'],
+      ['DB_EMPTY_PASS', 'postgres://user:@localhost:5432/app'],
+      ['DB_REDACTED_PASS', 'postgres://user:<redacted>@localhost:5432/app'],
+      ['DB_CHANGEME_PASS', 'postgres://user:changeme@localhost:5432/app'],
+      ['DB_PLACEHOLDER_PASS', 'postgres://user:your-password-here@localhost:5432/app'],
+      ['DB_XXX_PASS', 'postgres://user:xxx@localhost:5432/app'],
+      ['HTTPS_API_URL', 'https://api.staging.example.com/v1/webhooks/callback'],
+      ['UUID_SAMPLE', '550e8400-e29b-41d4-a716-446655440000'],
+      ['SHORT_HEX', 'deadbeefcafebabe'],
+      ['ZEROS_HEX_40', '0000000000000000000000000000000000000000'],
+      ['GEN_HEX_40', 'deadbeef00000000000000000000000000000000'],
+      ['SEQ_HEX_40', '0123456789abcdef0123456789abcdef01234567'],
+      ['LOW_DIV_HEX_40', '0123012301230123012301230123012301230123'],
+      ['ALPHABET_SEQ', 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789'],
+      ['BEARER_PLACEHOLDER', '"Bearer your-key-here"'],
+      ['B64_SAMPLE', 'aGVsbG8='],
+      ['B64_PADDING', 'A'.repeat(44)],
+      ['SAFE_JSON', '\'{"featureFlags":{"beta":true,"maxRetries":3}}\''],
+      ['SAFE_URL_LIST', 'https://a.example,https://b.example,https://c.example'],
+      ['AMBIENT_REF', '${AMBIENT_ONLY_SECRET}'],
+    ];
+    const cleanCode = placeholderEntries.map(([k]) => `void process.env.${k};`).join('\n') + '\n';
+    const cleanExample = placeholderEntries.map(([k, v]) => `${k}=${v}`).join('\n') + '\n';
+    const localRealEnv = placeholderEntries.map(([k]) => `${k}=${syntheticSecrets.OPENAI_KEY}`).join('\n') + '\n';
+    const cleanDir = mkProject({
+      'src/app.js': cleanCode,
+      '.env.example': cleanExample,
+      '.env': localRealEnv,
+    });
+
+    const cleanSpawn = spawnSync(process.execPath, [CLI, 'check', cleanDir], {
+      cwd: cleanDir,
+      encoding: 'utf8',
+      env: { ...cleanEnv(), AMBIENT_ONLY_SECRET: syntheticSecrets.AWS_ACCESS_KEY_ID },
+    });
+    assert.ifError(cleanSpawn.error);
+    assert.strictEqual(cleanSpawn.status, 0, `${cleanSpawn.stdout}${cleanSpawn.stderr}`);
+    assert.match(cleanSpawn.stdout, /all clean/);
+    assertNoLeak(cleanSpawn.stdout + cleanSpawn.stderr, syntheticSecrets, 'clean check with ambient & .env');
+
+    const cleanJsonSpawn = spawnSync(process.execPath, [CLI, 'check', cleanDir, '--json'], {
+      cwd: cleanDir,
+      encoding: 'utf8',
+      env: { ...cleanEnv(), AMBIENT_ONLY_SECRET: syntheticSecrets.AWS_ACCESS_KEY_ID },
+    });
+    assert.strictEqual(cleanJsonSpawn.status, 0);
+    assert.deepStrictEqual(JSON.parse(cleanJsonSpawn.stdout).secrets, []);
+
+    // All built-in generateExample outputs (including bounded 40-char hex, 44-char base64, and uuid/base64 arrays) pass.
+    const genSchema = {
+      STR: { type: 'string' },
+      STR_BOUNDED: { type: 'string', minLength: 48, maxLength: 64 },
+      PORT: { type: 'port' },
+      URL_PLAIN: { type: 'url' },
+      URL_BOUNDED: { type: 'url', minLength: 48, maxLength: 64 },
+      EMAIL_BOUNDED: { type: 'email', minLength: 32, maxLength: 48 },
+      HOST_BOUNDED: { type: 'host', minLength: 40, maxLength: 56 },
+      SEMVER_BOUNDED: { type: 'semver', minLength: 24, maxLength: 32 },
+      UUID_ONE: { type: 'uuid' },
+      UUID_ARR: { type: 'array', of: 'uuid', minItems: 4 },
+      HEX_PLAIN: { type: 'hex' },
+      HEX_40: { type: 'hex', length: 40, minLength: 40, maxLength: 40 },
+      B64_PLAIN: { type: 'base64' },
+      B64_44: { type: 'base64', minLength: 44, maxLength: 44 },
+      B64_ARR: { type: 'array', of: 'base64', minItems: 5 },
+      IPV6_ARR: { type: 'array', of: 'ipv6' },
+      JSON_ARR: { type: 'array', of: 'json' },
+      API_KEY: { type: 'string', required: true },
+      SESSION_SECRET: { type: 'string', sensitive: true },
+    };
+    const generatedText = generateExample(genSchema);
+    const genDir = mkProject({
+      'src/app.js': Object.keys(genSchema).map(k => `void process.env.${k};`).join('\n') + '\n',
+      '.env.example': generatedText,
+    });
+    const genRes = run(['check', genDir, '--json'], genDir);
+    assert.strictEqual(genRes.status, 0, `${genRes.stdout}${genRes.stderr}`);
+    assert.deepStrictEqual(JSON.parse(genRes.stdout).secrets, []);
+
+    // 3. Scaffold-ahead exception (no code usage yet), --file / package.json file, single-file check, and --file + --schema redaction.
+    const scaffoldSecretDir = mkProject({
+      'README.md': '# new project\n',
+      '.env.example': `PORT=3000\nSTRIPE_SECRET=${syntheticSecrets.STRIPE_KEY}\n`,
+    });
+    const scaffoldText = run(['check', scaffoldSecretDir], scaffoldSecretDir);
+    assert.strictEqual(scaffoldText.status, 1);
+    assert.match(scaffoldText.stdout, /SECRET in \.env\.example: STRIPE_SECRET/);
+    assert.doesNotMatch(scaffoldText.stdout, /no process\.env usage found/);
+    assertNoLeak(scaffoldText.stdout + scaffoldText.stderr, syntheticSecrets, 'scaffold secret text');
+    const scaffoldJson = JSON.parse(run(['check', scaffoldSecretDir, '--json'], scaffoldSecretDir).stdout);
+    assert.strictEqual(scaffoldJson.ok, false);
+    assert.deepStrictEqual(scaffoldJson.secrets, ['STRIPE_SECRET']);
+    assert.strictEqual(scaffoldJson.note, undefined);
+
+    const sampleDir = mkProject({
+      'package.json': '{"name":"sample-cfg","env-saaf":{"file":".env.sample"}}\n',
+      'src/app.js': 'void process.env.WEBHOOK_ENDPOINT;\n',
+      '.env.sample': `WEBHOOK_ENDPOINT=${syntheticSecrets.OPENAI_KEY}\n`,
+      'env.schema.js': "module.exports = { WEBHOOK_ENDPOINT: { type: 'url', required: true } };\n",
+    });
+    const sampleText = run(['check', 'src/app.js', '--schema', 'env.schema.js'], sampleDir);
+    assert.strictEqual(sampleText.status, 1);
+    assert.match(sampleText.stdout, /SECRET in \.env\.sample: WEBHOOK_ENDPOINT/);
+    assertNoLeak(sampleText.stdout + sampleText.stderr, syntheticSecrets, 'custom --file + --schema text');
+    const sampleJsonOut = run(['check', 'src/app.js', '--schema', 'env.schema.js', '--json'], sampleDir).stdout;
+    assertNoLeak(sampleJsonOut, syntheticSecrets, 'custom --file + --schema json');
+    assert.deepStrictEqual(JSON.parse(sampleJsonOut).secrets, ['WEBHOOK_ENDPOINT']);
+
+    // 4. Watch mode (text and --json): detects a secret added to .env.example and recovers when replaced with a placeholder.
+    const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+    const stopChild = (child) => new Promise((resolve, reject) => {
+      child.once('exit', (code, signal) => {
+        try {
+          if (process.platform === 'win32') assert.strictEqual(signal, 'SIGINT');
+          else assert.strictEqual(code, 0);
+          resolve();
+        } catch (e) {
+          reject(e);
+        }
+      });
+      child.kill('SIGINT');
+    });
+
+    for (const useJson of [false, true]) {
+      asyncChecks.push((async () => {
+        const wDir = mkProject({
+          'src/app.js': 'void process.env.API_KEY;\n',
+          '.env.example': 'API_KEY=\n',
+        });
+        const args = useJson ? [CLI, 'check', wDir, '--json', '--watch'] : [CLI, 'check', wDir, '--watch'];
+        const child = spawn(process.execPath, args, {
+          cwd: wDir,
+          env: cleanEnv(),
+          stdio: ['ignore', 'pipe', 'pipe'],
+        });
+        let stdout = '';
+        let stderr = '';
+        let exited = null;
+        child.stdout.setEncoding('utf8');
+        child.stderr.setEncoding('utf8');
+        child.stdout.on('data', (d) => { stdout += d; });
+        child.stderr.on('data', (d) => { stderr += d; });
+        child.on('exit', (code, signal) => { exited = { code, signal }; });
+        const waitFor = async (pred, what, timeoutMs = 8000) => {
+          const start = Date.now();
+          while (!pred()) {
+            if (Date.now() - start > timeoutMs) {
+              throw new Error(`timed out waiting for ${what}; stdout:\n${stdout}\nstderr:\n${stderr}`);
+            }
+            await sleep(50);
+          }
+        };
+        const runCount = () => (stderr.match(/check finished, exit/g) || []).length;
+
+        try {
+          await waitFor(() => /check finished, exit 0/.test(stderr) && runCount() >= 1, 'initial clean watch');
+          fs.writeFileSync(path.join(wDir, '.env.example'), `API_KEY=${syntheticSecrets.HEX_TOKEN_40}\n`);
+          await waitFor(
+            () => /check finished, exit 1/.test(stderr) && runCount() >= 2,
+            'secret added in watch mode',
+          );
+          assert.strictEqual(exited, null, 'watcher must stay alive after secret finding');
+          assertNoLeak(stdout + stderr, syntheticSecrets, useJson ? 'watch --json' : 'watch text');
+          if (useJson) {
+            const lines = stdout.trim().split(/\r?\n/).map(line => JSON.parse(line));
+            const failing = lines[lines.length - 1];
+            assert.strictEqual(failing.ok, false);
+            assert.deepStrictEqual(failing.secrets, ['API_KEY']);
+          } else {
+            assert.match(stdout, /SECRET in \.env\.example: API_KEY/);
+          }
+
+          const beforeRecover = runCount();
+          fs.writeFileSync(path.join(wDir, '.env.example'), 'API_KEY=your-key-here\n');
+          await waitFor(
+            () => runCount() > beforeRecover && /check finished, exit 0\s*$/.test(stderr),
+            'watch recovery after placeholder fix',
+          );
+          if (useJson) {
+            const lines = stdout.trim().split(/\r?\n/).map(line => JSON.parse(line));
+            const recovered = lines[lines.length - 1];
+            assert.strictEqual(recovered.ok, true);
+            assert.deepStrictEqual(recovered.secrets, []);
+          }
+        } finally {
+          if (exited === null) await stopChild(child);
         }
       })());
     }

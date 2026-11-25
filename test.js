@@ -1689,6 +1689,7 @@ assert.ok(!ex.includes('sk_live'));
       extra: [],
       unused: [],
       invalid: [],
+      secrets: [],
       envExtra: ['DATABSE_URL'],
       envMissing: ['DATABASE_URL'],
     });
@@ -1709,6 +1710,7 @@ assert.ok(!ex.includes('sk_live'));
       extra: [],
       unused: [],
       invalid: [],
+      secrets: [],
       envExtra: [],
       envMissing: [],
     });
@@ -2818,6 +2820,7 @@ assert.deepStrictEqual(
       extra: [],
       unused: [],
       invalid: ['PORT: expected a port (0-65535, e.g. 3000), got "not-a-port"'],
+      secrets: [],
       envExtra: [],
       envMissing: [],
       // Issue #358: --schema also diffs the schema against the example file.

@@ -4,7 +4,9 @@
  * env-saaf CLI
  *   env-saaf check [dir] [--file name] [--schema file] [--values file] [--json] [--json-schema] [--watch] — scan code for process.env usage, compare with
  *                           .env.example (or the --file given); exit 1 if anything
- *                           used is not documented. --schema also validates the values
+ *                           used is not documented or if an example value looks like a
+ *                           real secret (key named, value never printed; issue #416).
+ *                           --schema also validates the values
  *                           of the real .env file against the schema the file exports
  *                           (issue #90); --json emits machine-readable output. --json-schema
  *                           prints the schema file as a draft 2020-12 JSON Schema
@@ -38,6 +40,7 @@
  *                           DB_PORT) are folded into a grouped schema (issue #263)
  */
 const fs = require('node:fs');
+const net = require('node:net');
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
 const { types: { isModuleNamespaceObject } } = require('node:util');
@@ -511,6 +514,171 @@ function flattenedSchemaKeys(schema, prefix = '') {
   return keys;
 }
 
+// Issue #416: detect values in .env.example that look like real secrets rather
+// than placeholders, without ever echoing the value. Empty values, obvious
+// placeholders and every shape `generateExample` itself emits must pass.
+const PLACEHOLDER_WORDS = new Set([
+  'changeme', 'placeholder', 'redacted', 'example', 'sample', 'dummy',
+  'todo', 'fixme', 'none', 'unset', 'empty', 'null', 'secret', 'password',
+  'passwd', 'token', 'apikey', 'credentials', 'credential',
+]);
+const KNOWN_SECRET_PREFIXES = [
+  /^sk-(?:proj-|ant-(?:api\d+-)?|live-|test-)?([A-Za-z0-9_-]{12,})$/,
+  /^(?:[sr]k_(?:live|test)_|whsec_)([A-Za-z0-9_-]{12,})$/,
+  /^(?:gh[pousr]_|github_pat_)([A-Za-z0-9_]{20,})$/,
+  /^xox[baprs]-([0-9A-Za-z-]{16,})$/,
+  /^AIza([0-9A-Za-z_-]{30,})$/,
+  /^SG\.([A-Za-z0-9_-]{16,}\.[A-Za-z0-9_-]{16,})$/,
+  /^(?:npm_|hf_)([A-Za-z0-9]{20,})$/,
+  /^glpat-([A-Za-z0-9_-]{16,})$/,
+];
+
+function shannonEntropy(str) {
+  const counts = new Map();
+  for (const ch of str) counts.set(ch, (counts.get(ch) || 0) + 1);
+  let entropy = 0;
+  for (const count of counts.values()) {
+    const p = count / str.length;
+    entropy -= p * Math.log2(p);
+  }
+  return entropy;
+}
+
+function isPlaceholderToken(v) {
+  if (/^(?:<[^>]+>|\[[^\]]+\]|\$\{[^}]+\})$/.test(v)) return true;
+  if (new Set(v).size <= 2) return true;
+  const lower = v.toLowerCase();
+  if (PLACEHOLDER_WORDS.has(lower)) return true;
+  if (/^[a-z0-9_-]+$/.test(v) || /^[A-Z0-9_-]+$/.test(v)) {
+    const noRandomSegment = v.split(/[-_]/).every(seg => seg.length < 16 || /^[a-z]+$/i.test(seg));
+    if (noRandomSegment) {
+      if (/^(?:your|my|insert|enter|put|fill|set|add|paste|replace|change)[-_][a-z0-9_-]+$/.test(lower)) return true;
+      if (/^[a-z0-9_-]+[-_](?:here|placeholder|redacted|changeme|example|sample|dummy)$/.test(lower)) return true;
+    }
+  }
+  return false;
+}
+
+function isHexPlaceholder(v) {
+  const lower = v.toLowerCase();
+  const stripped = lower
+    .replace(/deadbeef|cafebabe|feedface|badc0ffe|0123456789abcdef|abcdef0123456789/g, '')
+    .replace(/^(.)\1+$/, '');
+  if (stripped.length < 16) return true;
+  return shannonEntropy(lower) < 3.0;
+}
+
+function isSecretToken(v) {
+  for (const re of KNOWN_SECRET_PREFIXES) {
+    const m = re.exec(v);
+    if (m && !isPlaceholderToken(m[1])) return true;
+  }
+  if (/^(?:AKIA|ASIA)[0-9A-Z]{16}$/.test(v) && new Set(v.slice(4)).size >= 4) return true;
+  if (/^eyJ[A-Za-z0-9_-]{8,}\.eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}$/.test(v)) return true;
+  if (isPlaceholderToken(v)) return false;
+  if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(v)) return false;
+  if (/^[+-]?\d[\d_]*(?:\.\d[\d_]*)?$/.test(v)) return false;
+  if (/^(?:\d+(?:\.\d+)?(?:ms|s|m|h|d|w))+$/i.test(v)) return false;
+  if (/^\d{4}-\d{2}-\d{2}(?:T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?$/.test(v)) return false;
+  if (/^v?\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]{1,15})?$/.test(v)) return false;
+  if (net.isIP(v.replace(/%[A-Za-z0-9._-]+$/, '')) !== 0) return false;
+  if (/^[^\s@]+@[^\s@]+\.[a-z]{2,}$/i.test(v)) return false;
+  if (/^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,}\.?$/i.test(v)) return false;
+  if (/^\.\.?\/[A-Za-z0-9._/-]+$/.test(v) || /^\/[a-z0-9._-]+(?:\/[a-z0-9._-]+)+$/.test(v)) return false;
+  if ((/^[a-z]+(?:[-_][a-z0-9]+)+$/.test(v) || /^[A-Z]+(?:[-_][A-Z0-9]+)+$/.test(v))
+    && v.split(/[-_]/).every(seg => seg.length < 20 || /^[a-z]+$/i.test(seg))) {
+    return false;
+  }
+  if (/^[0-9a-f]{32,}$/i.test(v)) return !isHexPlaceholder(v);
+  if (v.length < 20 || !/^[A-Za-z0-9+/=._~-]+$/.test(v) || new Set(v).size < 10) return false;
+  const hasLower = /[a-z]/.test(v);
+  const hasUpper = /[A-Z]/.test(v);
+  const hasDigit = /\d/.test(v);
+  const hasB64Sym = /[+/=]/.test(v);
+  const entropy = shannonEntropy(v);
+  if ((hasLower && hasUpper && (hasDigit || hasB64Sym)) || ((hasLower || hasUpper) && hasDigit && hasB64Sym)) {
+    const strippedSeq = v.replace(/ABCDEFGHIJKLMNOPQRSTUVWXYZ|abcdefghijklmnopqrstuvwxyz|0123456789/g, '');
+    if (strippedSeq.length < 16) return false;
+    return entropy >= 3.75;
+  }
+  if ((hasLower !== hasUpper) && hasDigit && /^[A-Za-z0-9]+$/.test(v) && v.length >= 24) {
+    const transitions = (v.match(/[A-Za-z]\d|\d[A-Za-z]/g) || []).length;
+    return transitions >= 6 && entropy >= 3.6;
+  }
+  return false;
+}
+
+function isSecretExampleValue(raw, depth = 0) {
+  if (depth > 6 || typeof raw !== 'string') return false;
+  const v = raw.trim();
+  if (v.length === 0) return false;
+  if (/-----BEGIN (?:[A-Z0-9 ]+ )?PRIVATE KEY-----/.test(v)) return true;
+  const authMatch = /^(?:Bearer|Basic)\s+(\S+)$/i.exec(v);
+  if (authMatch) return isSecretExampleValue(authMatch[1], depth + 1);
+  if ((v.startsWith('{') && v.endsWith('}')) || (v.startsWith('[') && v.endsWith(']'))) {
+    try {
+      const parsed = JSON.parse(v);
+      if (parsed !== null && typeof parsed === 'object') {
+        const stack = [parsed];
+        while (stack.length > 0) {
+          const cur = stack.pop();
+          const items = Array.isArray(cur) ? cur : Object.values(cur);
+          for (const item of items) {
+            if (typeof item === 'string') {
+              if (isSecretExampleValue(item, depth + 1)) return true;
+            } else if (item !== null && typeof item === 'object') {
+              stack.push(item);
+            }
+          }
+        }
+        return false;
+      }
+    } catch { /* not valid JSON — fall through */ }
+  }
+  if (!/\s/.test(v) && /^[a-z][a-z0-9+.-]*:\/\//i.test(v)) {
+    const authority = /^[a-z][a-z0-9+.-]*:\/\/([^/?#@]*)@([^/?#]+)/i.exec(v);
+    if (authority) {
+      const userinfo = authority[1];
+      const colon = userinfo.indexOf(':');
+      if (colon !== -1) {
+        let pass = userinfo.slice(colon + 1);
+        try { pass = decodeURIComponent(pass); } catch { /* keep raw */ }
+        if (pass.length > 0 && !isPlaceholderToken(pass)) return true;
+      }
+    }
+    try {
+      const parsed = new URL(v);
+      for (const [, paramVal] of parsed.searchParams) {
+        if (isSecretExampleValue(paramVal, depth + 1)) return true;
+      }
+      for (const seg of parsed.pathname.split('/')) {
+        if (seg && isSecretToken(seg)) return true;
+      }
+    } catch { /* non-WHATWG URL placeholder already checked above */ }
+    return false;
+  }
+  if (!/\s/.test(v) && /[,;|]/.test(v)) {
+    const parts = v.split(/[,;|]/);
+    if (parts.length >= 2) return parts.some(part => isSecretExampleValue(part, depth + 1));
+  }
+  return isSecretToken(v);
+}
+
+// Parse the template without consulting ambient process.env so `${API_KEY}` in
+// .env.example never inherits a live credential from the caller's shell.
+function readExampleValuesIsolated(filePath, fallbackEntries) {
+  const input = fs.readFileSync(filePath, 'utf8');
+  const savedEnv = process.env;
+  process.env = {};
+  try {
+    return parseEnvFile(input);
+  } catch {
+    return fallbackEntries;
+  } finally {
+    process.env = savedEnv;
+  }
+}
+
 function readEnvFile(filePath) {
   const input = fs.readFileSync(filePath, 'utf8');
   try {
@@ -819,7 +987,10 @@ async function runCheck() {
     }
     fatalExit(2);
   }
-  const documented = Object.keys(readEnvFile(examplePath));
+  const exampleEntries = readEnvFile(examplePath);
+  const documented = Object.keys(exampleEntries);
+  const isolatedExample = readExampleValuesIsolated(examplePath, exampleEntries);
+  const secrets = documented.filter(k => isSecretExampleValue(isolatedExample[k]));
   const used = scanFile !== null
     ? scanCode(readScanFile())
     : scanDir(dir, { exclude: excludeOpts });
@@ -870,8 +1041,22 @@ async function runCheck() {
       try {
         validateEnv(schema, values);
       } catch (e) {
-        if (e instanceof EnvSaafError) invalid = e.errors;
-        else throw e;
+        if (e instanceof EnvSaafError) {
+          invalid = e.errors;
+          // Never echo a secret-flagged template value through schema errors when validating --file itself.
+          if (targetName === fileOpt && secrets.length > 0) {
+            const secretValues = secrets.map(k => isolatedExample[k]).filter(Boolean);
+            invalid = invalid.map((msg) => {
+              let safe = msg;
+              for (const rawSecret of secretValues) {
+                if (safe.includes(rawSecret)) safe = safe.split(rawSecret).join('[REDACTED]');
+              }
+              return safe;
+            });
+          }
+        } else {
+          throw e;
+        }
       }
     }
   }
@@ -883,11 +1068,12 @@ async function runCheck() {
   // fails the check exactly as before (#113 is unchanged for a project that
   // already reads at least one variable).
   const scaffoldAhead = used.length === 0 && documentedNotUsed.length > 0
-    && usedNotDocumented.length === 0 && envExtra.length === 0 && envMissing.length === 0 && invalid.length === 0
+    && usedNotDocumented.length === 0 && secrets.length === 0
+    && envExtra.length === 0 && envMissing.length === 0 && invalid.length === 0
     && schemaNotDocumented.length === 0 && documentedNotInSchema.length === 0;
   const scaffoldNote = `no process.env usage found in code yet — ${documentedNotUsed.length} ${documentedNotUsed.length === 1 ? 'key' : 'keys'} in ${fileOpt} ${documentedNotUsed.length === 1 ? 'is' : 'are'} not used by any code yet`;
   const ok = scaffoldAhead || (usedNotDocumented.length === 0 && documentedNotUsed.length === 0
-    && envExtra.length === 0 && envMissing.length === 0 && invalid.length === 0
+    && secrets.length === 0 && envExtra.length === 0 && envMissing.length === 0 && invalid.length === 0
     && schemaNotDocumented.length === 0 && documentedNotInSchema.length === 0);
   // Issue #352: --values validates its own file, so a missing .env is not a skip then.
   const skippedValues = schemaOpt && !fileExplicit && !envFileFound && valuesOpt === null;
@@ -904,6 +1090,7 @@ async function runCheck() {
       extra: scaffoldAhead ? [] : documentedNotUsed,
       unused: scaffoldAhead ? [] : documentedNotUsed,
       invalid,
+      secrets,
       envExtra,
       envMissing,
     };
@@ -920,12 +1107,13 @@ async function runCheck() {
   } else {
     usedNotDocumented.forEach(k => console.log(`MISSING in ${fileOpt}: ${k} (used in code)`));
     documentedNotUsed.forEach(k => console.log(`UNUSED: ${k} (in ${fileOpt}, never used in code)`));
+    secrets.forEach(k => console.log(`SECRET in ${fileOpt}: ${k} (value [REDACTED] looks like a real secret; use an empty value or placeholder)`));
     envExtra.forEach(k => console.log(`EXTRA in .env: ${k} (not in ${fileOpt})`));
     envMissing.forEach(k => console.log(`MISSING in .env: ${k} (in ${fileOpt}, not set locally)`));
     invalid.forEach(e => console.log(`INVALID${valuesOpt !== null ? ` in ${valuesOpt}` : ''}: ${e}`));
     schemaNotDocumented.forEach(k => console.log(`NOT DOCUMENTED: ${k} (in schema, missing from ${fileOpt})`));
     documentedNotInSchema.forEach(k => console.log(`NOT IN SCHEMA: ${k} (in ${fileOpt}, not declared in the schema)`));
-    if (!usedNotDocumented.length && !documentedNotUsed.length && !envExtra.length && !envMissing.length && !invalid.length
+    if (!usedNotDocumented.length && !documentedNotUsed.length && !secrets.length && !envExtra.length && !envMissing.length && !invalid.length
       && !schemaNotDocumented.length && !documentedNotInSchema.length) {
       console.log(`env-saaf: all clean — code and ${fileOpt} match.`);
     }
