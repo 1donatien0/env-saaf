@@ -277,3 +277,26 @@ const mixedValue: string | number = maskValue({} as string | number);
 // @ts-expect-error numbers are no longer stringified
 const notString: string = maskValue(42);
 void [keptNumber, keptUndefined, keptDate, optionalMasked, tupleMasked, dateMasked, regexpMasked, mixedValue, notString];
+
+// Issue #345: `conflictsWith` accepts a single key or a string/readonly-tuple list while keeping inferred return types.
+const exclusiveEnv = validateEnv({
+  API_KEY: { type: 'string', conflictsWith: 'OAUTH_TOKEN_FILE' },
+  OAUTH_TOKEN_FILE: { type: 'file' },
+  DATABASE_URL: { type: 'url', conflictsWith: ['DB_HOST', 'DB_PORT'] },
+  DB: {
+    prefix: 'DB_',
+    schema: {
+      HOST: { type: 'host', conflictsWith: 'DATABASE_URL' },
+      PORT: { type: 'port', default: 5432 },
+    },
+  },
+} as const, {});
+const exApiKey: string | undefined = exclusiveEnv.API_KEY;
+const exOauthFile: string | undefined = exclusiveEnv.OAUTH_TOKEN_FILE;
+const exDbUrl: string | undefined = exclusiveEnv.DATABASE_URL;
+const exDbPort: number | undefined = exclusiveEnv.DB?.PORT;
+// @ts-expect-error conflictsWith must be a string or string list
+validateEnv({ A: { conflictsWith: 123 } });
+// @ts-expect-error conflictsWith list entries must be strings
+validateEnv({ A: { conflictsWith: [123] } });
+void [exApiKey, exOauthFile, exDbUrl, exDbPort];

@@ -99,6 +99,7 @@ const KNOWN_RULE_OPTIONS = new Set([
   'required',
   'description',
   'requiredIf',
+  'conflictsWith',
   'default',
   'choices',
   'min',
@@ -225,6 +226,23 @@ function compilePattern(pattern, key, errors, patterns) {
   }
 }
 
+// Issue #345: `conflictsWith` accepts one non-empty key name or a non-empty
+// list of non-empty key names. Indexed iteration rejects sparse array holes.
+function normalizeConflictsWith(conflictsWith) {
+  if (conflictsWith === undefined) return [];
+  if (typeof conflictsWith === 'string') {
+    return conflictsWith.trim() === '' ? null : [conflictsWith];
+  }
+  if (!Array.isArray(conflictsWith) || conflictsWith.length === 0) return null;
+  const list = [];
+  for (let i = 0; i < conflictsWith.length; i++) {
+    const entry = conflictsWith[i];
+    if (typeof entry !== 'string' || entry.trim() === '') return null;
+    list.push(entry);
+  }
+  return list;
+}
+
 // Validate the shape of the schema itself, independent of any env values.
 // These checks used to live only inside the per-key coercion loop, so an
 // invalid rule on an absent optional key was never reached and slipped through
@@ -233,7 +251,7 @@ function validateSchema(schema) {
   validateSchemaRules(schema, msg => console.warn(msg));
 }
 
-function validateSchemaRules(schema, warn, patterns = new Map(), prefix = '', ancestors = new Set()) {
+function validateSchemaRules(schema, warn, patterns = new Map(), prefix = '', ancestors = new Set(), isRoot = true) {
   if (ancestors.has(schema)) throw invalidSchema([`${prefix}: group "schema" contains a circular reference`]);
   ancestors = new Set(ancestors).add(schema);
   const errors = [];
@@ -264,7 +282,7 @@ function validateSchemaRules(schema, warn, patterns = new Map(), prefix = '', an
         if (innerKeys.length === 0) errors.push(`${key}: group "schema" must not be empty`);
         if (typeof rule.prefix === 'string' && rule.prefix.trim() !== '') {
           try {
-            validateSchemaRules(inner, () => {}, patterns, prefix + rule.prefix, ancestors);
+            validateSchemaRules(inner, () => {}, patterns, prefix + rule.prefix, ancestors, false);
           } catch (e) {
             if (e instanceof EnvSaafError) errors.push(...e.errors);
             else throw e;
@@ -472,6 +490,21 @@ function validateSchemaRules(schema, warn, patterns = new Map(), prefix = '', an
     if (rule.required && rule.default !== undefined) {
       errors.push(`${key}: "required" and "default" cannot be used together (remove one of them)`);
     }
+    // Issue #345: validate `conflictsWith` shape and self-references up front;
+    // undeclared targets are checked against the complete flattened root schema
+    // below so inner group rules can reference top-level or sibling-group keys.
+    if (rule.conflictsWith !== undefined) {
+      const conflicts = normalizeConflictsWith(rule.conflictsWith);
+      if (conflicts === null) {
+        errors.push(`${key}: "conflictsWith" must be a non-empty string or a non-empty array of non-empty strings`);
+      } else {
+        for (const target of new Set(conflicts)) {
+          if (target === key) {
+            errors.push(`${key}: "conflictsWith" must name a different key, not itself`);
+          }
+        }
+      }
+    }
     if (rule.of !== undefined && (typeof rule.of !== 'string' || !KNOWN_TYPES.has(rule.of) || rule.of === 'array')) {
       errors.push(`${key}: "of" must be a valid item type (e.g. 'string', 'number', 'url')`);
     }
@@ -547,6 +580,21 @@ function validateSchemaRules(schema, warn, patterns = new Map(), prefix = '', an
         errors.push(`${fkey}: alias "${alias}" is already used by "${flatAliasOwners.get(alias)}"`);
       } else {
         flatAliasOwners.set(alias, fkey);
+      }
+    }
+  }
+  // Issue #345: reject `conflictsWith` targets that are not declared anywhere
+  // in the root flattened schema (unlike `requiredIf`, external undeclared
+  // variables are not allowed here).
+  if (isRoot) {
+    for (const [fkey, frule] of Object.entries(flat)) {
+      if (!frule || frule.conflictsWith === undefined) continue;
+      const conflicts = normalizeConflictsWith(frule.conflictsWith);
+      if (conflicts === null) continue;
+      for (const target of new Set(conflicts)) {
+        if (target !== fkey && !flatKeys.has(target)) {
+          errors.push(`${fkey}: "conflictsWith" references undeclared key "${target}"`);
+        }
       }
     }
   }
@@ -1021,6 +1069,8 @@ function validateEnvCore(schema, env, options, valueSources) {
     }
   }
   const pendingRequiredIf = [];
+  const presentKeys = new Set();
+  const presentSources = new Map();
   for (const [key, rule] of Object.entries(flat)) {
     let raw = env[key];
     // Issue #276: in a hand-built env object, `null` counts as "not set"
@@ -1099,6 +1149,8 @@ function validateEnvCore(schema, env, options, valueSources) {
         continue;
       }
     }
+    presentKeys.add(key);
+    presentSources.set(key, valueSource());
     const sensitive = rule.sensitive === true;
     const shown = sensitive ? maskValue(raw) : raw;
     const type = rule.type || 'string';
@@ -1287,7 +1339,27 @@ function validateEnvCore(schema, env, options, valueSources) {
       out[key] = val;
     } catch (e) { pushErr(e.message, valueSource()); }
   }
-  // Pass 2 (issue #51): evaluate `requiredIf` after Pass 1 has coerced values
+  // Pass 2a (issue #345): evaluate `conflictsWith` across resolved keys (aliases
+  // and defaults count as set). Symmetric even when declared on one side only,
+  // de-duplicated for reciprocal declarations, and free of secret/raw values.
+  const conflictedKeys = new Set();
+  const reportedConflicts = new Set();
+  for (const [key, rule] of Object.entries(flat)) {
+    if (!presentKeys.has(key) || rule.conflictsWith === undefined) continue;
+    for (const other of normalizeConflictsWith(rule.conflictsWith)) {
+      if (!presentKeys.has(other)) continue;
+      const pairKey = [key, other].sort().map(k => JSON.stringify(k)).join(':');
+      if (reportedConflicts.has(pairKey)) continue;
+      reportedConflicts.add(pairKey);
+      conflictedKeys.add(key);
+      conflictedKeys.add(other);
+      pushErr(`${key}: conflicts with ${other} (cannot set both)`, presentSources.get(key));
+    }
+  }
+  for (const key of conflictedKeys) {
+    delete out[key];
+  }
+  // Pass 2b (issue #51): evaluate `requiredIf` after Pass 1 has coerced values
   // and applied defaults across the whole schema, so declaration order never
   // matters. If the referenced key is not declared in the schema, fall back to
   // the raw `env` object so external flags like NODE_ENV still work.

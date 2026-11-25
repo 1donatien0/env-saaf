@@ -7636,6 +7636,396 @@ const loadEnvSourceErrorsTest = (async () => {
   fs.rmSync(dir, { recursive: true, force: true });
 })();
 
-Promise.all([watchModeTest, watchModeErrorPathTest, watchModeEsmSchemaTest, loadEnvAsyncTest, formatErrorThrowingHookTest, loadEnvSourceErrorsTest])
+// Issue #345: `conflictsWith` rejects mutually exclusive variables when both resolve as set.
+const conflictsWithTest = (async () => {
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const path = require('node:path');
+  const { spawnSync } = require('node:child_process');
+  const {
+    loadEnv, loadEnvAsync, validateEnv, validateSchema,
+    toJsonSchema, generateExample, EnvSaafError,
+  } = require('./index');
+
+  // 1. Up-front schema validation: malformed shapes, self-references, and undeclared keys.
+  const sparse = Array(1);
+  const sparseMid = ['B', , 'C']; // eslint-disable-line no-sparse-arrays
+  for (const bad of ['', '   ', [], [''], ['   '], ['B', ''], [123], [null], [undefined], sparse, sparseMid, null, 123, true, false, {}]) {
+    for (const check of [
+      s => validateSchema(s),
+      s => toJsonSchema(s),
+      s => validateEnv(s, {}, { throwOnError: false }),
+    ]) {
+      assert.throws(
+        () => check({ A: { type: 'string', conflictsWith: bad }, B: {}, C: {} }),
+        err => err instanceof EnvSaafError
+          && err.message.startsWith('Invalid schema:')
+          && err.errors.length === 1
+          && err.errors[0] === 'A: "conflictsWith" must be a non-empty string or a non-empty array of non-empty strings'
+          && err.details[0].key === 'A',
+        `expected schema shape error for conflictsWith=${JSON.stringify(bad)}`,
+      );
+    }
+  }
+
+  // Self-conflict: single, list, duplicated self, and inside a group.
+  for (const [schema, expectedKey] of [
+    [{ A: { conflictsWith: 'A' } }, 'A'],
+    [{ A: { conflictsWith: ['B', 'A'] }, B: {} }, 'A'],
+    [{ A: { conflictsWith: ['A', 'A'] } }, 'A'],
+    [{ DB: { prefix: 'DB_', schema: { HOST: { type: 'host', conflictsWith: 'DB_HOST' } } } }, 'DB_HOST'],
+  ]) {
+    assert.throws(
+      () => validateEnv(schema, {}, { throwOnError: false }),
+      err => err instanceof EnvSaafError
+        && err.errors.length === 1
+        && err.errors[0] === `${expectedKey}: "conflictsWith" must name a different key, not itself`,
+    );
+  }
+
+  // Undeclared target: flat, list, unprefixed inner group name, alias name instead of canonical key,
+  // and Object.prototype property names when not declared in the schema.
+  for (const [schema, key, badTarget] of [
+    [{ A: { conflictsWith: 'NO_SUCH_KEY' } }, 'A', 'NO_SUCH_KEY'],
+    [{ A: { conflictsWith: ['B', 'MISSING_KEY'] }, B: {} }, 'A', 'MISSING_KEY'],
+    [{ DB: { prefix: 'DB_', schema: { HOST: { conflictsWith: 'PORT' }, PORT: { type: 'port' } } } }, 'DB_HOST', 'PORT'],
+    [{ A: { aliases: ['OLD_A'] }, B: { conflictsWith: 'OLD_A' } }, 'B', 'OLD_A'],
+    [{ A: { conflictsWith: 'toString' } }, 'A', 'toString'],
+    [{ A: { conflictsWith: 'constructor' } }, 'A', 'constructor'],
+    [{ A: { conflictsWith: '__proto__' } }, 'A', '__proto__'],
+  ]) {
+    assert.throws(
+      () => validateEnv(schema, {}, { throwOnError: false }),
+      err => err instanceof EnvSaafError
+        && err.errors.length === 1
+        && err.errors[0] === `${key}: "conflictsWith" references undeclared key "${badTarget}"`,
+      `expected undeclared error for ${key} -> ${badTarget}`,
+    );
+  }
+
+  // Prototype property names ARE accepted when genuinely declared as schema keys.
+  const protoSchema = {
+    ['__proto__']: { type: 'string', conflictsWith: 'toString' },
+    toString: { type: 'string', conflictsWith: 'constructor' },
+    constructor: { type: 'string' },
+  };
+  assert.doesNotThrow(() => validateSchema(protoSchema));
+  assert.throws(
+    () => validateEnv(protoSchema, Object.assign(Object.create(null), { ['__proto__']: 'a', toString: 'b' })),
+    err => err instanceof EnvSaafError
+      && err.errors.length === 1
+      && err.errors[0] === '__proto__: conflicts with toString (cannot set both)',
+  );
+
+  // Group container rules reject `conflictsWith` directly on the group object; null rules do not crash root checks.
+  assert.doesNotThrow(() => validateSchema({ N: null, A: { conflictsWith: 'N' } }));
+  assert.throws(
+    () => validateSchema({ A: {}, DB: { prefix: 'DB_', conflictsWith: 'A', schema: { HOST: {} } } }),
+    err => err instanceof EnvSaafError
+      && err.errors.includes('DB: group rules only support "prefix" and "schema" (unexpected "conflictsWith")'),
+  );
+
+  // 2. Single, one-sided (both declaration orders), and reciprocal declarations; set/missing/empty/null cases.
+  const tokFile = path.join(__dirname, 'package.json');
+  const oneSidedFirst = {
+    API_KEY: { type: 'string', conflictsWith: 'OAUTH_TOKEN_FILE' },
+    OAUTH_TOKEN_FILE: { type: 'file' },
+  };
+  const oneSidedSecond = {
+    API_KEY: { type: 'string' },
+    OAUTH_TOKEN_FILE: { type: 'file', conflictsWith: 'API_KEY' },
+  };
+  const reciprocal = {
+    API_KEY: { type: 'string', conflictsWith: 'OAUTH_TOKEN_FILE' },
+    OAUTH_TOKEN_FILE: { type: 'file', conflictsWith: ['API_KEY', 'API_KEY'] },
+  };
+
+  for (const s of [oneSidedFirst, oneSidedSecond, reciprocal]) {
+    // Neither set (or empty string / null / undefined) passes.
+    assert.deepStrictEqual(validateEnv(s, {}), {});
+    assert.deepStrictEqual(validateEnv(s, { API_KEY: '', OAUTH_TOKEN_FILE: '' }), {});
+    assert.deepStrictEqual(validateEnv(s, { API_KEY: null, OAUTH_TOKEN_FILE: undefined }), {});
+    // Either key alone passes (even when the other is explicitly '' or null).
+    assert.deepStrictEqual(validateEnv(s, { API_KEY: 'sk_test_only', OAUTH_TOKEN_FILE: '' }), { API_KEY: 'sk_test_only' });
+    assert.deepStrictEqual(validateEnv(s, { API_KEY: '', OAUTH_TOKEN_FILE: tokFile }), { OAUTH_TOKEN_FILE: tokFile });
+  }
+
+  // Both set fails with a single diagnostic naming both keys (never duplicating on reciprocal).
+  for (const [s, first, second] of [
+    [oneSidedFirst, 'API_KEY', 'OAUTH_TOKEN_FILE'],
+    [oneSidedSecond, 'OAUTH_TOKEN_FILE', 'API_KEY'],
+    [reciprocal, 'API_KEY', 'OAUTH_TOKEN_FILE'],
+  ]) {
+    const secretVal = 'sk_live_super_secret_987654321';
+    assert.throws(
+      () => validateEnv(s, { API_KEY: secretVal, OAUTH_TOKEN_FILE: tokFile }),
+      err => err instanceof EnvSaafError
+        && err.errors.length === 1
+        && err.errors[0] === `${first}: conflicts with ${second} (cannot set both)`
+        && err.details.length === 1
+        && err.details[0].key === first
+        && err.details[0].message === `conflicts with ${second} (cannot set both)`
+        // Secrecy: values (and even masked forms or file paths) never appear in conflict diagnostics.
+        && !err.message.includes(secretVal)
+        && !err.message.includes('sk***21')
+        && !err.message.includes(tokFile),
+    );
+  }
+
+  // Sensitive keys likewise never leak raw or masked values in conflict diagnostics.
+  {
+    const sensitiveSecret = 'top-secret-token-value';
+    assert.throws(
+      () => validateEnv(
+        {
+          PRIMARY_SECRET: { type: 'string', sensitive: true, conflictsWith: 'FALLBACK_SECRET' },
+          FALLBACK_SECRET: { type: 'string', sensitive: true },
+        },
+        { PRIMARY_SECRET: sensitiveSecret, FALLBACK_SECRET: 'another-secret-value' },
+      ),
+      err => err instanceof EnvSaafError
+        && err.errors.length === 1
+        && err.errors[0] === 'PRIMARY_SECRET: conflicts with FALLBACK_SECRET (cannot set both)'
+        && !err.message.includes(sensitiveSecret)
+        && !err.message.includes('another-secret-value')
+        && !err.message.includes('***'),
+    );
+  }
+
+  // Whitespace-only input on a string rule counts as provided (unlike ''), so it conflicts.
+  assert.throws(
+    () => validateEnv({ A: { type: 'string', conflictsWith: 'B' }, B: { type: 'string' } }, { A: '   ', B: 'ok' }),
+    err => err instanceof EnvSaafError && err.errors[0] === 'A: conflicts with B (cannot set both)',
+  );
+
+  // 3. List form + grouped / nested-grouped schemas using full flattened names.
+  const backendSchema = Object.freeze({
+    DATABASE_URL: Object.freeze({ type: 'url', conflictsWith: Object.freeze(['DB_HOST', 'DB_PORT', 'APP_CACHE_URL']) }),
+    DB: Object.freeze({
+      prefix: 'DB_',
+      schema: Object.freeze({
+        HOST: Object.freeze({ type: 'host' }),
+        PORT: Object.freeze({ type: 'port' }),
+      }),
+    }),
+    APP: Object.freeze({
+      prefix: 'APP_',
+      schema: Object.freeze({
+        CACHE: Object.freeze({
+          prefix: 'CACHE_',
+          schema: Object.freeze({
+            URL: Object.freeze({ type: 'url', conflictsWith: 'DATABASE_URL' }),
+          }),
+        }),
+      }),
+    }),
+  });
+
+  // URL alone passes; split DB group + nested APP.CACHE group together (without DATABASE_URL) pass.
+  assert.deepStrictEqual(
+    validateEnv(backendSchema, { DATABASE_URL: 'https://db.example.com' }),
+    { DATABASE_URL: 'https://db.example.com' },
+  );
+  assert.deepStrictEqual(
+    validateEnv(backendSchema, { DB_HOST: 'localhost', DB_PORT: '5432', APP_CACHE_URL: 'https://cache.example.com' }),
+    { DB: { HOST: 'localhost', PORT: 5432 }, APP: { CACHE: { URL: 'https://cache.example.com' } } },
+  );
+  // Setting DATABASE_URL alongside multiple list targets reports each conflicting pair once (reciprocal APP_CACHE_URL de-duped).
+  assert.throws(
+    () => validateEnv(backendSchema, {
+      DATABASE_URL: 'https://db.example.com',
+      DB_HOST: 'localhost',
+      DB_PORT: '5432',
+      APP_CACHE_URL: 'https://cache.example.com',
+    }),
+    err => err instanceof EnvSaafError
+      && JSON.stringify(err.errors) === JSON.stringify([
+        'DATABASE_URL: conflicts with DB_HOST (cannot set both)',
+        'DATABASE_URL: conflicts with DB_PORT (cannot set both)',
+        'DATABASE_URL: conflicts with APP_CACHE_URL (cannot set both)',
+      ]),
+  );
+
+  // One-sided conflict declared ONLY inside a group against another group or top-level key.
+  {
+    const innerOnly = {
+      LEGACY_DSN: { type: 'url' },
+      DB: { prefix: 'DB_', schema: { HOST: { type: 'host', conflictsWith: 'LEGACY_DSN' } } },
+    };
+    assert.deepStrictEqual(validateEnv(innerOnly, { LEGACY_DSN: 'https://db.example.com' }), { LEGACY_DSN: 'https://db.example.com' });
+    assert.deepStrictEqual(validateEnv(innerOnly, { DB_HOST: 'localhost' }), { DB: { HOST: 'localhost' } });
+    assert.throws(
+      () => validateEnv(innerOnly, { LEGACY_DSN: 'https://db.example.com', DB_HOST: 'localhost' }),
+      err => err instanceof EnvSaafError
+        && err.errors.length === 1
+        && err.errors[0] === 'DB_HOST: conflicts with LEGACY_DSN (cannot set both)'
+        && err.details[0].key === 'DB_HOST',
+    );
+  }
+
+  // 4. Resolved aliases and defaults (including falsy defaults) count as set; warnings are preserved.
+  {
+    const aliasSchema = {
+      API_KEY: { type: 'string', aliases: ['LEGACY_API_KEY'], conflictsWith: 'BEARER_TOKEN' },
+      BEARER_TOKEN: { type: 'string', aliases: ['OLD_BEARER_TOKEN'] },
+    };
+    const warnings = [];
+    // Alias on one side only passes and emits its deprecation warning.
+    assert.deepStrictEqual(
+      validateEnv(aliasSchema, { LEGACY_API_KEY: 'k1' }, { onWarn: m => warnings.push(m) }),
+      { API_KEY: 'k1' },
+    );
+    assert.deepStrictEqual(warnings, ['env-saaf: LEGACY_API_KEY is deprecated; use API_KEY instead']);
+
+    // Alias on A + alias on B fails symmetrically under canonical names while preserving both deprecation warnings.
+    const bothWarnings = [];
+    assert.throws(
+      () => validateEnv(
+        aliasSchema,
+        { API_KEY: '', LEGACY_API_KEY: 'k1', OLD_BEARER_TOKEN: 'b1' },
+        { onWarn: m => bothWarnings.push(m) },
+      ),
+      err => err instanceof EnvSaafError
+        && err.errors.length === 1
+        && err.errors[0] === 'API_KEY: conflicts with BEARER_TOKEN (cannot set both)'
+        && !err.message.includes('k1')
+        && !err.message.includes('b1'),
+    );
+    assert.deepStrictEqual(bothWarnings, [
+      'env-saaf: LEGACY_API_KEY is deprecated; use API_KEY instead',
+      'env-saaf: OLD_BEARER_TOKEN is deprecated; use BEARER_TOKEN instead',
+    ]);
+
+    // Empty alias does NOT count as set.
+    assert.deepStrictEqual(
+      validateEnv(aliasSchema, { LEGACY_API_KEY: '', BEARER_TOKEN: 'b1' }, { onWarn: () => {} }),
+      { BEARER_TOKEN: 'b1' },
+    );
+  }
+
+  // Defaults (including falsy false, 0, '', null) count as set and conflict when the other key is also set.
+  for (const [ruleA, envB] of [
+    [{ type: 'boolean', default: false, conflictsWith: 'B' }, { B: '1' }],
+    [{ type: 'port', default: 0, conflictsWith: 'B' }, { B: '1' }],
+    [{ type: 'string', default: '', conflictsWith: 'B' }, { B: '1' }],
+    [{ type: 'json', default: null, conflictsWith: 'B' }, { B: '1' }],
+  ]) {
+    const defSchema = { A: ruleA, B: { type: 'string' } };
+    // Without B, A resolves to its default and passes.
+    const solo = validateEnv(defSchema, {});
+    assert.strictEqual(Object.prototype.hasOwnProperty.call(solo, 'A'), true);
+    // With B set, both A (from default) and B (from env) are set -> fails!
+    assert.throws(
+      () => validateEnv(defSchema, envB),
+      err => err instanceof EnvSaafError
+        && err.errors.length === 1
+        && err.errors[0] === 'A: conflicts with B (cannot set both)',
+    );
+    // One-sided reverse: B declares conflictsWith: 'A', A has the falsy default.
+    const revSchema = { A: { type: ruleA.type, default: ruleA.default }, B: { type: 'string', conflictsWith: 'A' } };
+    assert.throws(
+      () => validateEnv(revSchema, envB),
+      err => err instanceof EnvSaafError
+        && err.errors.length === 1
+        && err.errors[0] === 'B: conflicts with A (cannot set both)',
+    );
+  }
+
+  // Both keys having defaults conflicts even on an empty env `{}`.
+  assert.throws(
+    () => validateEnv({ A: { default: 'x', conflictsWith: 'B' }, B: { default: 'y' } }, {}),
+    err => err instanceof EnvSaafError && err.errors[0] === 'A: conflicts with B (cannot set both)',
+  );
+
+  // 5. Non-throwing mode (`throwOnError: false`), `requiredIf` interaction, `toJsonSchema` & `generateExample`.
+  {
+    const nonThrowSchema = {
+      A: { type: 'string' },
+      B: { type: 'string', conflictsWith: 'A' },
+      DEPENDENT: { type: 'string', requiredIf: { key: 'A', equals: 'trigger' } },
+      PORT: { type: 'port', default: 3000 },
+    };
+    const collected = validateEnv(nonThrowSchema, { A: 'trigger', B: 'other' }, { throwOnError: false });
+    // Both conflicted keys are omitted symmetrically from `env`; unrelated valid keys stay, and
+    // `requiredIf` does not fire spuriously on conflicted `A`.
+    assert.deepStrictEqual(collected.env, { PORT: 3000 });
+    assert.deepStrictEqual(collected.errors, ['B: conflicts with A (cannot set both)']);
+    assert.deepStrictEqual(collected.details, [{ key: 'B', message: 'conflicts with A (cannot set both)' }]);
+
+    const exported = toJsonSchema(backendSchema);
+    assertDraft202012Schema(exported);
+    assert.ok(generateExample(oneSidedFirst).includes('API_KEY='));
+  }
+
+  // 6. `loadEnv`, `loadEnvAsync` (with #350 file source attribution) and CLI `check --schema`.
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'env-saaf-345-'));
+  try {
+    const envFile = path.join(dir, '.env');
+    const schemaFile = path.join(dir, 'env.schema.js');
+    fs.writeFileSync(
+      schemaFile,
+      "module.exports = { API_KEY: { type: 'string', sensitive: true, conflictsWith: 'AUTH_TOKEN' }, AUTH_TOKEN: { type: 'string', sensitive: true } };\n",
+    );
+    fs.writeFileSync(path.join(dir, '.env.example'), 'API_KEY=\nAUTH_TOKEN=\n');
+    fs.writeFileSync(path.join(dir, 'app.js'), 'void (process.env.API_KEY || process.env.AUTH_TOKEN);\n');
+
+    // Only one set in .env -> loadEnv, loadEnvAsync, and CLI check --schema all pass.
+    fs.writeFileSync(envFile, 'API_KEY=live_secret_key\nAUTH_TOKEN=\n');
+    const schema = require(schemaFile);
+    assert.deepStrictEqual(loadEnv(schema, { path: envFile, env: {} }), { API_KEY: 'live_secret_key' });
+    assert.deepStrictEqual(await loadEnvAsync(schema, { path: envFile, env: {} }), { API_KEY: 'live_secret_key' });
+    const okCli = spawnSync(process.execPath, [path.join(__dirname, 'cli.js'), 'check', dir, '--schema', 'env.schema.js', '--json'], { encoding: 'utf8' });
+    assert.strictEqual(okCli.status, 0, okCli.stderr);
+    assert.strictEqual(JSON.parse(okCli.stdout).ok, true);
+
+    // Both set in .env -> loadEnv and loadEnvAsync attribute winning file source without leaking secrets; CLI exits 1.
+    fs.writeFileSync(envFile, 'API_KEY=live_secret_key\nAUTH_TOKEN=live_token_val\n');
+    for (const runLoad of [
+      () => {
+        try { loadEnv(schema, { path: envFile, env: {} }); assert.fail('expected loadEnv to throw'); }
+        catch (e) { return e; }
+      },
+      async () => {
+        try { await loadEnvAsync(schema, { path: envFile, env: {} }); assert.fail('expected loadEnvAsync to throw'); }
+        catch (e) { return e; }
+      },
+    ]) {
+      const err = await runLoad();
+      assert.ok(err instanceof EnvSaafError);
+      assert.deepStrictEqual(err.errors, [
+        `API_KEY (from ${envFile}): conflicts with AUTH_TOKEN (cannot set both)`,
+      ]);
+      assert.deepStrictEqual(err.details, [{
+        key: 'API_KEY',
+        message: 'conflicts with AUTH_TOKEN (cannot set both)',
+        source: envFile,
+      }]);
+      assert.ok(!err.message.includes('live_secret_key'));
+      assert.ok(!err.message.includes('live_token_val'));
+    }
+
+    // Default-origin key conflicting with a file key does not falsely blame the file on the defaulted key.
+    try {
+      loadEnv(
+        { MODE_A: { default: 'on', conflictsWith: 'AUTH_TOKEN' }, AUTH_TOKEN: { type: 'string' } },
+        { path: envFile, env: {} },
+      );
+      assert.fail('expected default + file conflict to throw');
+    } catch (err) {
+      assert.deepStrictEqual(err.errors, ['MODE_A: conflicts with AUTH_TOKEN (cannot set both)']);
+      assert.deepStrictEqual(err.details, [{ key: 'MODE_A', message: 'conflicts with AUTH_TOKEN (cannot set both)' }]);
+    }
+
+    const badCli = spawnSync(process.execPath, [path.join(__dirname, 'cli.js'), 'check', dir, '--schema', 'env.schema.js', '--json'], { encoding: 'utf8' });
+    assert.strictEqual(badCli.status, 1);
+    const badJson = JSON.parse(badCli.stdout);
+    assert.strictEqual(badJson.ok, false);
+    assert.deepStrictEqual(badJson.invalid, ['API_KEY: conflicts with AUTH_TOKEN (cannot set both)']);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+})();
+
+Promise.all([watchModeTest, watchModeErrorPathTest, watchModeEsmSchemaTest, loadEnvAsyncTest, formatErrorThrowingHookTest, loadEnvSourceErrorsTest, conflictsWithTest])
   .then(() => console.log('env-saaf v1.5.0: all tests passed'))
   .catch((err) => { console.error(err); process.exit(1); });
