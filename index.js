@@ -69,6 +69,7 @@ const STRING_TYPES = new Set([
 const KNOWN_RULE_OPTIONS = new Set([
   'type',
   'required',
+  'description',
   'requiredIf',
   'default',
   'choices',
@@ -248,6 +249,9 @@ function validateSchemaRules(schema, warn, patterns = new Map(), prefix = '', an
       if (!KNOWN_RULE_OPTIONS.has(opt)) {
         errors.push(`${key}: unknown option "${opt}"`);
       }
+    }
+    if (rule.description !== undefined && typeof rule.description !== 'string') {
+      errors.push(`${key}: "description" must be a string`);
     }
     if (rule.type !== undefined && !KNOWN_TYPES.has(rule.type)) {
       errors.push(`${key}: unknown type "${rule.type}"`);
@@ -2045,6 +2049,10 @@ function generateExample(schema) {
     // Issue #206: note aliases and requiredIf in the comment, so the
     // generated file documents the fallbacks and conditions a reader needs.
     let comment = `# type: ${rule.type || 'string'}${rule.required ? ', required' : ''}${rule.choices ? ', one of: ' + rule.choices.join('|') : ''}`;
+    // Issue #343: the rule's own text leads the comment a reader sees.
+    if (typeof rule.description === 'string' && rule.description.trim() !== '') {
+      comment = `# ${rule.description.trim()}; ${comment.slice(2)}`;
+    }
     // Issue #223: name the item type on array rules, so the generated file
     // documents what each comma-separated item must look like.
     if (rule.type === 'array') comment += `, items: ${rule.of || 'string'}`;
@@ -2204,6 +2212,9 @@ function jsonSchemaForRule(key, rule, required) {
   if (type === 'hex' && rule.length !== undefined) {
     property.minLength = Math.max(rule.length, property.minLength ?? 0);
     property.maxLength = Math.min(rule.length, property.maxLength ?? Infinity);
+  }
+  if (typeof rule.description === 'string' && rule.description.trim() !== '') {
+    property.description = rule.description.trim();
   }
   const pattern = rule.pattern;
   if (typeof pattern === 'string' || (pattern && !pattern.flags)) {

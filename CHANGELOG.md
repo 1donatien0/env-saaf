@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Added: an optional `description` string on any rule. It is validated, leads
+  the generated `.env.example` comment and becomes the JSON Schema property
+  `description`; it never affects validation (fixes #343).
+
 - Added: runnable `examples/fastify/` and `examples/nextjs/` projects, matching
   the Express example's layout, so the Fastify and Next.js recipes are exercised
   instead of living only as README snippets. Both fail with the env-saaf message
