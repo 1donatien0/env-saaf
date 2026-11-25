@@ -203,10 +203,15 @@ export type EnvResult<S extends EnvSchema> = string extends keyof S
  * env name the message is about, or `''` for errors that are not tied to a key
  * (e.g. an unknown option). `message` is the printable text without the
  * `key: ` prefix, so it is safe to translate or map back to a form field.
+ * When `loadEnv` / `loadEnvAsync` report a bad value that came from a file,
+ * `source` is that file path (issue #350); ambient and `validateEnv`-only
+ * diagnostics omit the field.
  */
 export interface ErrorDetail {
   key: string;
   message: string;
+  /** Winning `.env` path when the bad value came from a loaded file. */
+  source?: string;
 }
 
 export class EnvSaafError extends Error {
