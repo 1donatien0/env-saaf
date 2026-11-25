@@ -479,6 +479,12 @@ setTimeout(refresh, env.CACHE_TTL); // 900000 for '15m'
 
 `duration` parses a human duration (`500ms`, `30s`, `15m`, `2h`, `1d`, `1w`) into a number of milliseconds; compound values sum their parts, so `1h30m` is 5,400,000 ms and `2d12h` is 216,000,000 ms (every part needs a unit — `1h30` is rejected); a bare number is already milliseconds, so `'250'` and `250` both mean 250 ms. Each unit may appear at most once in a compound value; repeats such as `1h1h` or `1s500ms250ms` are rejected. Units are case-insensitive and decimals are allowed (`1.5h` is 5,400,000 ms); `w` is a week of 7 days, so `1w` is 604,800,000 ms. Unknown units (`15min`, `15sec`), negatives and malformed values are rejected with an error naming the key. A number given as a `default` is taken as milliseconds, and `min`/`max` work on the millisecond result like on any other number. `generateExample` suggests `15m` for the type.
 
+Duration `choices` may mix human duration strings and numeric milliseconds. For
+example, `{ type: 'duration', choices: ['15m', 1800000] }` accepts `15m` or `30m`
+and rejects `45m`. Equivalent spellings such as `900s` also match `15m`. This
+works for `array` rules with `of: 'duration'` too. JSON Schema exports the choices
+as millisecond numbers, while generated examples keep the original spelling.
+
 ### `host` type — a hostname or IP address, no scheme or port
 
 ```js
@@ -1069,8 +1075,8 @@ console.log(JSON.stringify(schema, null, 2));
 Numeric, length and item bounds become JSON Schema keywords. Arrays describe
 their coerced items, durations are milliseconds, and dates serialize to ISO
 date-time strings (the schema also accepts the `date` format). The `json` type
-allows any JSON shape. JSON-compatible `choices` become `enum` values without
-re-coercion. Representable defaults are exported in coerced form as annotations;
+allows any JSON shape. JSON-compatible `choices` become `enum` values; duration
+strings are normalized to milliseconds. Representable defaults are exported in coerced form as annotations;
 JSON Schema does not fill in missing values. Avoid putting secrets in schema
 defaults, choices or condition values that will be shared.
 

@@ -30,6 +30,7 @@ export interface EnvRule {
   deprecated?: boolean | string;
   /** A default may be an already-parsed object or array for `type: 'json'` or `type: 'array'`, or a `Date` for `type: 'date'`. */
   default?: string | number | boolean | Date | Record<string, unknown> | unknown[] | null;
+  /** Allowed coerced values. Duration choices may also be human duration strings (e.g. '15m'), including for array items. */
   choices?: Array<string | number | boolean>;
   /**
    * Allowed range for numeric values (`number`, `int`, `port`, `duration`).

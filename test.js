@@ -5099,8 +5099,8 @@ assert.deepStrictEqual(
     err => err instanceof EnvSaafError && err.errors.includes(never('P', '"3000"', 'port')),
   );
   assert.throws(
-    () => validateSchema({ T: { type: 'duration', choices: ['5s'] } }),
-    err => err instanceof EnvSaafError && err.errors.includes(never('T', '"5s"', 'duration')),
+    () => validateSchema({ T: { type: 'duration', choices: ['15x'] } }),
+    err => err instanceof EnvSaafError && err.errors.includes(never('T', '"15x"', 'duration')),
   );
   // Schema errors throw even when the key is absent and even with { throwOnError: false }.
   assert.throws(
@@ -5121,6 +5121,51 @@ assert.deepStrictEqual(
   }));
   // Non-finite numbers stay valid: toJsonSchema() drops them from the generated `enum`.
   assert.doesNotThrow(() => validateSchema({ COUNT: { type: 'int', choices: [2, Infinity, 0, NaN] } }));
+}
+
+// Issue #426: duration choices use the same millisecond values as runtime input.
+{
+  const choices = Object.freeze(['15m', '30m']);
+  const rule = Object.freeze({ type: 'duration', choices });
+  const schema = Object.freeze({ T: rule });
+  assert.doesNotThrow(() => validateSchema(schema));
+  for (const [raw, expected] of [['15m', 900000], ['30m', 1800000], ['900s', 900000], [900000, 900000]]) {
+    assert.strictEqual(validateEnv(schema, { T: raw }).T, expected);
+  }
+  assert.throws(() => validateEnv(schema, { T: '45m' }), /T: expected one of \[15m, 30m\], got "45m"/);
+  assert.deepStrictEqual(validateEnv(schema, { T: '45m' }, { throwOnError: false }).env, {});
+  assert.strictEqual(validateEnv({ T: { ...rule, default: '15m' } }, {}).T, 900000);
+  assert.strictEqual(validateEnv({ T: { type: 'duration', choices: [900000] } }, { T: '15m' }).T, 900000);
+  assert.throws(() => validateEnv({ T: { type: 'duration', choices: [900000] } }, { T: '30m' }), /expected one of/);
+  for (const choice of ['1h30m', '1.5H', '5400000']) {
+    assert.strictEqual(validateEnv({ T: { type: 'duration', choices: [choice] } }, { T: '90m' }).T, 5400000);
+  }
+  for (const choice of ['15x', '-1s', '', true]) {
+    assert.throws(() => validateEnv({ T: { type: 'duration', choices: [choice] } }, {}, { throwOnError: false }),
+      err => err instanceof EnvSaafError && /choices.*can never match type 'duration'/.test(err.message));
+  }
+
+  const arraySchema = { T: { type: 'array', of: 'duration', choices: ['15m', 1800000] } };
+  assert.deepStrictEqual(validateEnv(arraySchema, { T: '900s,30m' }).T, [900000, 1800000]);
+  assert.throws(() => validateEnv(arraySchema, { T: '15m,45m' }), /expected one of.*\(item 1\)/);
+  const grouped = { CACHE: { prefix: 'CACHE_', schema } };
+  assert.strictEqual(validateEnv(grouped, { CACHE_T: '15m' }).CACHE.T, 900000);
+
+  // Examples retain their readable spelling; JSON Schema describes coerced values.
+  assert.match(generateExample(schema), /^T=15m$/m);
+  assert.strictEqual(validateEnv(schema, parseEnvFile(generateExample(schema))).T, 900000);
+  assert.deepStrictEqual(validateEnv(arraySchema, parseEnvFile(generateExample(arraySchema))).T, [900000, 1800000]);
+  assert.deepStrictEqual(toJsonSchema(schema).properties.T.enum, [900000, 1800000]);
+  assert.deepStrictEqual(toJsonSchema(arraySchema).properties.T.items.enum, [900000, 1800000]);
+  assert.deepStrictEqual(toJsonSchema({ T: { type: 'duration', choices: ['15m', '900s', 900000, Infinity] } }).properties.T.enum, [900000]);
+  assert.deepStrictEqual(choices, ['15m', '30m']);
+
+  // Reusing a schema after editing its choices must not use a stale normalization.
+  const editable = { T: { type: 'duration', choices: ['15m'] } };
+  assert.strictEqual(validateEnv(editable, { T: '15m' }).T, 900000);
+  editable.T.choices[0] = '30m';
+  assert.strictEqual(validateEnv(editable, { T: '30m' }).T, 1800000);
+  assert.throws(() => validateEnv(editable, { T: '15m' }), /expected one of \[30m\]/);
 }
 
 // Issue #287: groups compose prefixes and nest results at every level.
