@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Docs: list the shared conflictsWith and description options in the four translated READMEs.
+
 - Added: `scan` and `check` accept a single readable code file argument (`env-saaf scan src/server.js`, `env-saaf check src/server.js`), applying the same code-extension filter and comment/literal masking without scanning sibling files, and preserving the given file path in `scan --json` `locations` (fixes #418).
 
 - Fixed: `scanCode` (and `scanCodeLocations`) now follows destructured `process.env` aliases such as `const { env } = process` and `const { env: myEnv } = process`, while ignoring other destructured `process` bindings like `argv` (fixes #425).
