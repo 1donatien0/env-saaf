@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Added: `conflictsWith` rule option (a key name or list of key names) to
+  reject mutually exclusive variables when both are set after aliases and
+  defaults resolve, including across grouped schemas. Checks are symmetric for
+  one-sided declarations, de-duplicated when reciprocal, value-free in
+  diagnostics, and validated up front against self-references and undeclared
+  keys in `validateSchema` (fixes #345).
+
 - Added: `deprecated` rules warn when a variable is set and annotate generated examples with an optional migration hint (fixes #344).
 
 - Added: `loadEnv` / `loadEnvAsync` validation errors name the winning `.env`

@@ -58,7 +58,7 @@ const env = validateEnv({
    7. **`choices`** (per item for array rules), then **`pattern`**.
    8. **`validate(value, env)`** receives the coerced value.
    9. **`transform(value)`** runs only for a supplied value, never a default; its result is re-checked against the declared `type`.
-5. **`requiredIf`** is a second pass over all keys, after every value has been coerced and defaulted, so declaration order never matters.
+5. **`conflictsWith` and `requiredIf`** run in a second pass over all keys, after every value has been coerced and defaulted, so declaration order never matters.
 6. The result is **re-nested** for groups and **frozen**, then returned or thrown as one `EnvSaafError`.
 
 The order explains the three surprises people hit most:
@@ -92,7 +92,7 @@ Environment inputs are strings. Output below is before an optional `transform`.
 | `host` | Hostname (`db.internal`, `localhost`) or IPv4/IPv6 address; no scheme, path or port | `string` | `trim`, `minLength`, `maxLength`, `pattern` |
 | `array` | Delimited list split by `separator` (default `,`) with each item coerced as `of` (default `string`). Empty items are rejected. Accepts array defaults. | Typed array (`T[]`) | `of`, `separator`, `trim`, `protocols` (when `of: 'url'`), `minItems`, `maxItems`, `unique` |
 
-All types support `required`, `requiredIf`, `default`, `description`, `validate`, `transform`, `sensitive` and `aliases`. A `description` string documents the variable: it leads the comment `generateExample` writes for the key and becomes the property's `description` in `toJsonSchema`, without changing validation. Setting `sensitive: true` always masks the key's value in validation errors and CLI output, whatever its name (e.g. `SESSION_ID`, `LICENSE_KEY`), and leaves its placeholder empty in `generateExample`. Setting `aliases: ['OLD_NAME']` accepts deprecated variable names as fallbacks and emits a warning (see below). Custom `validate(value, env)` functions run after coercion and built-in checks (including on defaults), before `transform`. Transforms run on provided values after validation. Missing optional keys are omitted and defaults are validated. A key with a `default` can never be missing, so `required: true` together with a `default` is rejected as a schema error. The `choices` option matches coerced strings, numbers or booleans. A parsed JSON value can match a choice when it has one of those three types. String input is trimmed by default. Setting `trim: false` leaves whitespace in place for string-like types. For `number` and `int`, whitespace around a numeric value is accepted either way, but whitespace-only text is rejected by default and converts to `0` with `trim: false`. Boolean matching always ignores surrounding whitespace. The `length` option applies only to `hex`. The `pattern`, `minLength` and `maxLength` options apply only to string-valued types (`string`, `email`, `url`, `file`, `uuid`, `hex`, `ipv4`, `semver`, `base64`, `host`) and are rejected up front on any other type. See the sections below for examples.
+All types support `required`, `requiredIf`, `conflictsWith`, `default`, `description`, `validate`, `transform`, `sensitive` and `aliases`. A `description` string documents the variable: it leads the comment `generateExample` writes for the key and becomes the property's `description` in `toJsonSchema`, without changing validation. Setting `sensitive: true` always masks the key's value in validation errors and CLI output, whatever its name (e.g. `SESSION_ID`, `LICENSE_KEY`), and leaves its placeholder empty in `generateExample`. Setting `aliases: ['OLD_NAME']` accepts deprecated variable names as fallbacks and emits a warning (see below). Custom `validate(value, env)` functions run after coercion and built-in checks (including on defaults), before `transform`. Transforms run on provided values after validation. Missing optional keys are omitted and defaults are validated. A key with a `default` can never be missing, so `required: true` together with a `default` is rejected as a schema error. The `choices` option matches coerced strings, numbers or booleans. A parsed JSON value can match a choice when it has one of those three types. String input is trimmed by default. Setting `trim: false` leaves whitespace in place for string-like types. For `number` and `int`, whitespace around a numeric value is accepted either way, but whitespace-only text is rejected by default and converts to `0` with `trim: false`. Boolean matching always ignores surrounding whitespace. The `length` option applies only to `hex`. The `pattern`, `minLength` and `maxLength` options apply only to string-valued types (`string`, `email`, `url`, `file`, `uuid`, `hex`, `ipv4`, `semver`, `base64`, `host`) and are rejected up front on any other type. See the sections below for examples.
 
 ### Conditional requirements (`requiredIf`)
 
@@ -121,6 +121,34 @@ including inside groups. Check the name for a typo. External flags such as
 not fail validation. `validateEnv` and `loadEnv` use their existing `onWarn` hook;
 standalone `validateSchema(schema)` writes these warnings to `console.warn`.
 Without a hook, runtime validation also uses `console.warn`.
+
+### Mutually exclusive variables (`conflictsWith`)
+
+Reject configurations that set two incompatible variables at the same time, such as alternative credentials or a connection URL alongside split host/port variables:
+
+```js
+const { validateEnv } = require('env-saaf');
+
+const env = validateEnv({
+  API_KEY:          { type: 'string', sensitive: true, conflictsWith: 'OAUTH_TOKEN_FILE' },
+  OAUTH_TOKEN_FILE: { type: 'file' },
+  DATABASE_URL:     { type: 'url', conflictsWith: ['DB_HOST', 'DB_PORT'] },
+  DB: {
+    prefix: 'DB_',
+    schema: {
+      HOST: { type: 'host' },
+      PORT: { type: 'port' },
+    },
+  },
+});
+```
+
+- Pass a single key name (`'OAUTH_TOKEN_FILE'`) or a list of key names (`['DB_HOST', 'DB_PORT']`).
+- Conflicts run in the second pass after `aliases` and `default` values are resolved, so a value supplied through an alias or a `default` counts as set (`''`, `null` and `undefined` without a `default` count as unset).
+- Either side alone passes; when both keys are set, validation fails with `<KEY>: conflicts with <OTHER> (cannot set both)`. Diagnostics name only the conflicting keys and never echo values.
+- The check is symmetric even when declared on only one key, and reciprocal declarations (`A` naming `B` and `B` naming `A`) report a single conflict error rather than a duplicate.
+- Inside grouped schemas, `conflictsWith` uses full flattened env names (`DB_HOST`, `DATABASE_URL`).
+- `validateSchema` rejects a `conflictsWith` that names an undeclared key, the key itself, or an empty/non-string entry.
 
 ### Non-throwing mode — collect errors instead of throwing
 
@@ -271,7 +299,7 @@ const env = validateEnv(
 
 - The result nests under the group key: `{ DB: { HOST, PORT } }`. If no inner key is present, the group key is omitted, just like an absent optional flat key.
 - The returned result and each group object are frozen. Rule values keep their existing mutability, including parsed JSON, arrays, and objects supplied by defaults or transforms.
-- `strict`, `aliases`, `requiredIf` and `default` all work inside groups; inside a group, `aliases` and `requiredIf.key` use **full env var names** (e.g. `aliases: ['DATABASE_HOST']`, `requiredIf: { key: 'NODE_ENV', equals: 'production' }`, or another group's `'DB_HOST'`).
+- `strict`, `aliases`, `requiredIf`, `conflictsWith` and `default` all work inside groups; inside a group, `aliases`, `requiredIf.key` and `conflictsWith` use **full env var names** (e.g. `aliases: ['DATABASE_HOST']`, `requiredIf: { key: 'NODE_ENV', equals: 'production' }`, or another group's `'DB_HOST'`).
 - `generateExample` still emits flat env names (`DB_HOST=...`) with a comment at each group level (`# group APP`, `# group APP.DB`). `toJsonSchema` follows the nested result shape.
 - `loadEnv(..., { assign: true })` writes the flat names back (`DB_HOST=...`), never a nested object.
 - Malformed groups are rejected up front by `validateSchema` (now exported): a missing/empty `prefix`, a non-object or empty `schema`, a `type` on the group, circular group references, extra options on the group, or a composed prefix that collides with another key (e.g. a declared `APP_DB_HOST` plus nested `APP_` / `DB_` groups) all throw `EnvSaafError` naming the problem. The same sub-schema can be reused in separate groups.
@@ -991,7 +1019,7 @@ that depend on object identity or custom membership behavior are also omitted.
 For a `json` discriminator, JSON scalars (including `null`) can match; values
 like `Infinity` cannot match canonical JSON and are ignored in membership lists.
 
-**Not represented:** `transform`, `validate`, `aliases`, `sensitive`,
+**Not represented:** `conflictsWith`, `transform`, `validate`, `aliases`, `sensitive`,
 input trimming and splitting, regular-expression flags (flagged patterns are omitted),
 and defaults that cannot be converted to JSON without loss or depend on local time.
 File existence and the detailed `base64` check remain runtime-only.
@@ -1024,7 +1052,7 @@ Invalid schema:
   - PORT: unknown option "requried"
 ```
 
-A misspelled option in a rule. The message names the key and the option as written; the [types reference](#types-reference) lists the options each type accepts, and the paragraph after the table lists the ones every type shares (`required`, `requiredIf`, `default`, `validate`, `transform`, `sensitive`, `aliases`, plus `choices` and `trim` where they apply).
+A misspelled option in a rule. The message names the key and the option as written; the [types reference](#types-reference) lists the options each type accepts, and the paragraph after the table lists the ones every type shares (`required`, `requiredIf`, `conflictsWith`, `default`, `description`, `validate`, `transform`, `sensitive`, `aliases`, plus `choices` and `trim` where they apply).
 
 The same message shape appears for a misspelled call option:
 

@@ -16,6 +16,14 @@ export interface EnvRule {
    * (or the referenced key is absent), the key stays optional.
    */
   requiredIf?: RequiredIfCondition;
+  /**
+   * One key or a list of keys that must not be set at the same time as this
+   * key (e.g. `'OAUTH_TOKEN_FILE'` or `['DB_HOST', 'DB_PORT']`). Evaluated in
+   * a second pass after aliases and defaults are resolved; symmetric even when
+   * declared on one side only. Naming an undeclared key or this key itself is
+   * rejected up front by `validateSchema`. Inside a group, use full env names.
+   */
+  conflictsWith?: string | readonly string[];
   /** Human documentation for the variable. Shown in the `generateExample` comment and as the JSON Schema property `description`; it never affects validation. */
   description?: string;
   /** Warn when the variable is set. A string adds a migration note to the warning and generated example. */
@@ -137,7 +145,7 @@ export interface EnvRule {
  * env var `DB_HOST` and the result nests it as `{ DB: { HOST: '...' } }`.
  * Groups may contain groups; their prefixes concatenate and results nest at
  * each level. A group may not also set `type`.
- * Inside a group, `aliases` and `requiredIf.key` use FULL env var names
+ * Inside a group, `aliases`, `requiredIf.key` and `conflictsWith` use FULL env var names
  * (e.g. `'OLD_DB_HOST'`, `'NODE_ENV'`, or another group's `'DB_HOST'`).
  */
 export interface EnvGroupRule<S extends EnvSchema = EnvSchema> {
