@@ -554,9 +554,10 @@ async function runCheck() {
   const { usedNotDocumented, documentedNotUsed } = diffEnv(used, documented);
   // The real .env is not committed, so only compare keys when it is actually present
   const envPath = path.join(dir, '.env');
+  const envFileFound = fs.existsSync(envPath);
   let envExtra = [];
   let envMissing = [];
-  if (fs.existsSync(envPath)) {
+  if (envFileFound) {
     const envKeys = Object.keys(readEnvFile(envPath));
     const envDiff = diffEnv(envKeys, documented);
     envExtra = envDiff.usedNotDocumented;
@@ -572,7 +573,7 @@ async function runCheck() {
   let invalid = [];
   if (schemaOpt) {
     const schema = await loadSchemaFile();
-    const targetName = fileExplicit ? fileOpt : (fs.existsSync(envPath) ? '.env' : null);
+    const targetName = fileExplicit ? fileOpt : (envFileFound ? '.env' : null);
     if (targetName) {
       const values = readEnvFile(path.join(dir, targetName));
       try {
@@ -595,6 +596,10 @@ async function runCheck() {
   const scaffoldNote = `no process.env usage found in code yet — ${documentedNotUsed.length} ${documentedNotUsed.length === 1 ? 'key' : 'keys'} in ${fileOpt} ${documentedNotUsed.length === 1 ? 'is' : 'are'} not used by any code yet`;
   const ok = scaffoldAhead || (usedNotDocumented.length === 0 && documentedNotUsed.length === 0
     && envExtra.length === 0 && envMissing.length === 0 && invalid.length === 0);
+  const skippedValues = schemaOpt && !fileExplicit && !envFileFound;
+  if (skippedValues && !jsonMode) {
+    console.log('env-saaf: no .env file found — values were not validated.');
+  }
   if (jsonMode) {
     // Issue #187: `scan --json` names the documented-but-unused keys `unused`,
     // so `check --json` now exposes the same list under the same name. `extra`
@@ -608,6 +613,7 @@ async function runCheck() {
       envExtra,
       envMissing,
     };
+    if (skippedValues) result.envFileFound = false;
     if (scaffoldAhead) result.note = scaffoldNote;
     console.log(JSON.stringify(result));
   } else if (scaffoldAhead) {

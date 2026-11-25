@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Fixed: `check --schema` reports when a missing `.env` skips value validation, including `envFileFound: false` in JSON output (fixes #338).
 - Added: an optional `description` string on any rule. It is validated, leads
   the generated `.env.example` comment and becomes the JSON Schema property
   `description`; it never affects validation (fixes #343).
