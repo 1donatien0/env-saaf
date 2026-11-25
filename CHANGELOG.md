@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Added: with `--schema`, `check` also diffs the schema against
+  `.env.example` in both directions — `NOT DOCUMENTED` for schema keys missing
+  from the example and `NOT IN SCHEMA` for example keys the schema does not
+  declare (flattened group names), in text and as `schemaNotDocumented` /
+  `documentedNotInSchema` in `--json` (fixes #358).
 - Added: an `ipv6` type. It accepts what `net.isIP` reports as IPv6 (compressed
   forms, IPv4-mapped addresses, `fe80::1%eth0`), joins the string-valued types
   for `minLength`/`maxLength`/`pattern`, emits `format: 'ipv6'` from
