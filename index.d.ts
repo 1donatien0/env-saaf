@@ -131,6 +131,12 @@ export interface EnvRule {
    */
   unique?: boolean;
   /**
+   * `array` only: drop empty items after splitting, so a trailing or doubled
+   * separator (`a,b,`, `a,,b`) validates to the remaining items instead of
+   * failing. `minItems`/`maxItems` count what remains. Default false.
+   */
+  skipEmpty?: boolean;
+  /**
    * Deprecated variable names accepted as fallbacks when this key is unset
    * (e.g. `['OLD_NAME']`). The first populated alias supplies the value and
    * emits a deprecation warning; if the canonical key is also set, the
