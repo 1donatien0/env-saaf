@@ -7329,6 +7329,32 @@ assert.deepStrictEqual(scanCode("const env = process.env; env['DB.PORT']; env[`M
   }
 }
 
+// Issue #343: a rule description reaches the example comment and the JSON Schema
+{
+  const schema = {
+    PORT: { type: 'port', required: true, description: 'HTTP listen port' },
+    NAME: { description: 'Service name' },
+    URL: { type: 'url', description: '  Public base URL  ' },
+  };
+  assert.deepStrictEqual(validateEnv(schema, { PORT: '3000' }), { PORT: 3000 });
+  assert.throws(() => validateSchema({ BAD: { description: 3 } }), /"description" must be a string/);
+
+  const example = generateExample(schema);
+  assert.ok(example.includes('# HTTP listen port; type: port, required'), example);
+  assert.ok(example.includes('# Service name; type: string'), example);
+  // Trimmed, and it never becomes part of the value placeholder.
+  assert.ok(example.includes('# Public base URL; type: url'), example);
+
+  const properties = toJsonSchema(schema).properties;
+  assert.strictEqual(properties.PORT.description, 'HTTP listen port');
+  assert.strictEqual(properties.NAME.description, 'Service name');
+  assert.strictEqual(properties.URL.description, 'Public base URL');
+
+  // Grouped inner rules carry their own description.
+  const grouped = toJsonSchema({ DB: { prefix: 'DB_', schema: { HOST: { type: 'host', description: 'Database host' } } } });
+  assert.strictEqual(grouped.properties.DB.properties.HOST.description, 'Database host');
+}
+
 Promise.all([watchModeTest, watchModeErrorPathTest, watchModeEsmSchemaTest, loadEnvAsyncTest, formatErrorThrowingHookTest])
   .then(() => console.log('env-saaf v1.5.0: all tests passed'))
   .catch((err) => { console.error(err); process.exit(1); });

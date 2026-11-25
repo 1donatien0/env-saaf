@@ -16,6 +16,8 @@ export interface EnvRule {
    * (or the referenced key is absent), the key stays optional.
    */
   requiredIf?: RequiredIfCondition;
+  /** Human documentation for the variable. Shown in the `generateExample` comment and as the JSON Schema property `description`; it never affects validation. */
+  description?: string;
   /** A default may be an already-parsed object or array for `type: 'json'` or `type: 'array'`, or a `Date` for `type: 'date'`. */
   default?: string | number | boolean | Date | Record<string, unknown> | unknown[] | null;
   choices?: Array<string | number | boolean>;
