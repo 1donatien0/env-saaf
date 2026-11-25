@@ -221,13 +221,32 @@ const starterKeys = ['APP_NAME', 'RETRIES', 'DEBUG', 'PORT', 'API_URL', 'SUPPORT
 // Issue #232: infer a starter rule type from a sample value found in an
 // existing example file. Priority order (first match wins): a port-looking
 // number -> 'port', true/false -> 'boolean', an http(s) URL -> 'url', an
-// email -> 'email', an integer -> 'int', a decimal -> 'number', anything
+// email -> 'email', then the unambiguous shapes uuid/date/duration/semver/
+// json/hex (issue #356), an integer -> 'int', a decimal -> 'number', anything
 // else -> 'string' (including empty values). "Port-looking" means a whole
 // number in 1024-65535 — the range app servers actually listen on; smaller
 // whole numbers are more often counts or flags, so they infer as 'int'.
 function inferTypeFromSample(sample) {
   const v = String(sample).trim();
   if (v === '') return 'string';
+  // Issue #356: shapes that are unambiguous once seen. Each candidate is
+  // confirmed with the real validator, so an inferred rule always accepts the
+  // sample it came from (an impossible date or a padded UUID stays 'string').
+  const accepts = (type) => {
+    try {
+      validateEnv({ SAMPLE: { type } }, { SAMPLE: v });
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(v) && accepts('uuid')) return 'uuid';
+  if (/^\d{4}-\d{2}-\d{2}(?:T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?$/.test(v) && accepts('date')) return 'date';
+  if (/^(?:\d+(?:\.\d+)?(?:ms|s|m|h|d|w))+$/i.test(v) && accepts('duration')) return 'duration';
+  if (/^v?(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/.test(v) && accepts('semver')) return 'semver';
+  if ((v.startsWith('{') || v.startsWith('[')) && accepts('json')) return 'json';
+  // Even-length hex of at least four bytes: 'deadbeef', not 'cafe' or 'face'.
+  if (/^(?:[0-9a-fA-F]{2}){4,}$/.test(v) && accepts('hex')) return 'hex';
   if (/^-?\d+$/.test(v)) {
     const n = Number(v);
     return n >= 1024 && n <= 65535 ? 'port' : 'int';

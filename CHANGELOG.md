@@ -49,6 +49,10 @@
   instead of living only as README snippets. Both fail with the env-saaf message
   when a required value is missing (fixes #364).
 
+- Added: `init --from-example` infers `uuid`, `date`, `duration`, `semver`,
+  `json` and `hex` from unambiguous sample values, each confirmed with the real
+  validator, so the generated starter schema needs less hand-editing
+  (fixes #356). Existing inferences are unchanged.
 - Added: `env-saaf print [dir] --schema <file> [--file name] [--json]` prints
   the effective configuration the schema produces — coerced values and applied
   defaults — with `sensitive` rules masked, and exits 1 with the usual
