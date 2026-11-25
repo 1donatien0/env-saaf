@@ -2359,6 +2359,173 @@ try {
     assert.strictEqual(warnOnceRun.status, 0, `${warnOnceRun.stdout}${warnOnceRun.stderr}`);
     assert.strictEqual(warnOnceRun.stderr.split('undeclared key "NOPE_FLAG"').length - 1, 1);
 
+    // Protection follows the example findings, not filename equality: a separate values file
+    // (default .env, --values, or an alias) holding the flagged value never echoes it through schema errors.
+    const SECRET_BLOCK_EXAMPLE = [
+      `WEBHOOK_ENDPOINT=${syntheticSecrets.OPENAI_KEY}`,
+      `ENDPOINTS=https://example.com,${syntheticSecrets.ANTHROPIC_KEY}`,
+      `DB_CONN=${syntheticSecrets.REDIS_URL}`,
+      `API_URL=${syntheticSecrets.GITHUB_TOKEN}`,
+      `LEGACY_SVC_URL=${syntheticSecrets.SLACK_TOKEN}`,
+      'COPY_URL=',
+      'PORT=3000',
+      '',
+    ].join('\n');
+    const SECRET_BLOCK_VALUES = [
+      `WEBHOOK_ENDPOINT=${syntheticSecrets.OPENAI_KEY}`,
+      `ENDPOINTS=https://example.com,${syntheticSecrets.ANTHROPIC_KEY}`,
+      `DB_CONN=${syntheticSecrets.REDIS_URL}`,
+      `OLD_API_URL=${syntheticSecrets.GITHUB_TOKEN}`,
+      `LEGACY_SVC_URL=${syntheticSecrets.SLACK_TOKEN}`,
+      `COPY_URL=${syntheticSecrets.OPENAI_KEY}`,
+      'PORT=not-a-port',
+      '',
+    ].join('\n');
+    const secretBlockDir = mkProject({
+      'src/app.js': 'void (process.env.WEBHOOK_ENDPOINT && process.env.ENDPOINTS && process.env.DB_CONN && process.env.API_URL && process.env.LEGACY_SVC_URL && process.env.COPY_URL && process.env.PORT);\n',
+      '.env.example': SECRET_BLOCK_EXAMPLE,
+      '.env': SECRET_BLOCK_VALUES,
+      '.env.production': SECRET_BLOCK_VALUES,
+      'env.schema.js': [
+        'module.exports = {',
+        "  WEBHOOK_ENDPOINT: { type: 'url', required: true },",
+        "  ENDPOINTS: { type: 'array', of: 'url', required: true },",
+        "  DB_CONN: { type: 'url', required: true, validate: (v) => 'bad pw ' + new URL(v).password },",
+        "  API_URL: { type: 'url', required: true, aliases: ['OLD_API_URL'] },",
+        "  SVC: { prefix: 'SVC_', schema: { URL: { type: 'url', required: true, aliases: ['LEGACY_SVC_URL'] } } },",
+        "  COPY_URL: { type: 'url', required: true },",
+        "  PORT: { type: 'port', required: true },",
+        '};',
+        '',
+      ].join('\n'),
+    });
+    const secretBlockKeys = ['WEBHOOK_ENDPOINT', 'ENDPOINTS', 'DB_CONN', 'API_URL', 'LEGACY_SVC_URL'];
+    for (const extraArgs of [[], ['--values', '.env.production']]) {
+      const label = extraArgs.length ? '--values separate file' : 'default .env';
+      const textRun = run(['check', 'src/app.js', '--schema', 'env.schema.js', ...extraArgs], secretBlockDir);
+      assert.strictEqual(textRun.status, 1, label);
+      assertNoLeak(textRun.stdout + textRun.stderr, syntheticSecrets, `${label} text`);
+      for (const k of secretBlockKeys) assert.match(textRun.stdout, new RegExp(`SECRET in \\.env\\.example: ${k}\\b`), `${label} ${k}`);
+      assert.match(textRun.stdout, /^INVALID(?: in \.env\.production)?: PORT: expected a port \(0-65535, e\.g\. 3000\), got "not-a-port"$/m, `${label} keeps safe diagnostics`);
+      assert.match(textRun.stdout, /^INVALID(?: in \.env\.production)?: COPY_URL: .*withheld/m, `${label} generic diagnostic`);
+      assert.doesNotMatch(textRun.stdout, /^INVALID(?: in \.env\.production)?: (?:WEBHOOK_ENDPOINT|ENDPOINTS|DB_CONN|API_URL|SVC_URL|LEGACY_SVC_URL)\b/m, label);
+
+      const jsonRun = run(['check', 'src/app.js', '--schema', 'env.schema.js', '--json', ...extraArgs], secretBlockDir);
+      assert.strictEqual(jsonRun.status, 1, label);
+      assertNoLeak(jsonRun.stdout + jsonRun.stderr, syntheticSecrets, `${label} json`);
+      const jsonBlock = JSON.parse(jsonRun.stdout);
+      assert.deepStrictEqual(jsonBlock.secrets, secretBlockKeys);
+      assert.strictEqual(jsonBlock.invalid.length, 2, `${label} ${JSON.stringify(jsonBlock.invalid)}`);
+      assert.ok(jsonBlock.invalid.some(m => /^PORT: expected a port/.test(m)));
+      assert.ok(jsonBlock.invalid.some(m => /^COPY_URL: .*withheld/.test(m)));
+    }
+
+    // A schema message may quote only a slice of a flagged example value (list element, JSON leaf, URL password,
+    // query value, path segment, bearer token, short password) arriving under an unflagged key: it is withheld,
+    // while a message quoting an unrelated value keeps its useful text.
+    const sliceMap = {
+      ECHO_PW: syntheticSecrets.REDIS_URL.split(':')[2].split('@')[0],
+      ECHO_LEAF: JSON.parse(syntheticSecrets.JSON_SECRET).nested.token,
+      ECHO_ELEM: syntheticSecrets.LIST_SECRET.split(',')[1],
+      ECHO_BEARER: syntheticSecrets.BEARER_SECRET.split(' ')[1],
+      ECHO_QUERY: new URL(syntheticSecrets.URL_QUERY_SECRET).searchParams.get('api_key'),
+      ECHO_SEG: syntheticSecrets.URL_PATH_SECRET.split('/').pop(),
+      ECHO_SHORT: 'pass',
+    };
+    const sliceFlagged = {
+      FLAG_REDIS: syntheticSecrets.REDIS_URL,
+      FLAG_JSON: syntheticSecrets.JSON_SECRET,
+      FLAG_LIST: syntheticSecrets.LIST_SECRET,
+      FLAG_BEARER: syntheticSecrets.BEARER_SECRET,
+      FLAG_QUERY: syntheticSecrets.URL_QUERY_SECRET,
+      FLAG_PATH: syntheticSecrets.URL_PATH_SECRET,
+      FLAG_DB: syntheticSecrets.DATABASE_URL,
+    };
+    const sliceKeys = [...Object.keys(sliceFlagged), ...Object.keys(sliceMap), 'ECHO_SAFE'];
+    const sliceDir = mkProject({
+      'src/app.js': `void (${sliceKeys.map(k => `process.env.${k}`).join(' && ')});\n`,
+      '.env.example': [
+        ...Object.entries(sliceFlagged).map(([k, v]) => `${k}=${JSON.stringify(v)}`),
+        ...Object.keys(sliceMap).map(k => `${k}=`),
+        'ECHO_SAFE=',
+        '',
+      ].join('\n'),
+      '.env': [...Object.entries(sliceMap).map(([k, v]) => `${k}=${v}`), 'ECHO_SAFE=plain-safe-123', ''].join('\n'),
+      'env.schema.js': `module.exports = {\n${[...Object.keys(sliceMap), 'ECHO_SAFE'].map(k => `  ${k}: { type: 'string', validate: (v) => 'bad ' + v },`).join('\n')}\n};\n`,
+    });
+    const sliceText = run(['check', 'src/app.js', '--schema', 'env.schema.js'], sliceDir);
+    assert.strictEqual(sliceText.status, 1);
+    assertNoLeak(sliceText.stdout + sliceText.stderr, { ...syntheticSecrets, ...sliceMap }, 'slice echo text');
+    for (const k of Object.keys(sliceMap)) {
+      assert.match(sliceText.stdout, new RegExp(`^INVALID: ${k}: value rejected by schema \\(details withheld`, 'm'), k);
+    }
+    assert.match(sliceText.stdout, /^INVALID: ECHO_SAFE: bad plain-safe-123$/m);
+    const sliceJson = JSON.parse(run(['check', 'src/app.js', '--schema', 'env.schema.js', '--json'], sliceDir).stdout);
+    assert.deepStrictEqual(sliceJson.secrets, Object.keys(sliceFlagged));
+    assert.strictEqual(sliceJson.invalid.length, Object.keys(sliceMap).length + 1);
+    assertNoLeak(JSON.stringify(sliceJson), { ...syntheticSecrets, ...sliceMap }, 'slice echo json');
+
+    // A flagged URL whose password is only one to three characters (raw or percent-encoded) is still withheld when that
+    // password is copied under another key with a URL schema, while a message quoting a longer lookalike keeps its text.
+    const shortPwDir = mkProject({
+      'src/app.js': 'void (process.env.FLAG_SHORT && process.env.FLAG_ENCODED && process.env.FLAG_LIST && process.env.FLAG_NULLJSON && process.env.ECHO_XYZ && process.env.ECHO_DECODED && process.env.ECHO_ENC && process.env.ECHO_MID && process.env.ECHO_LONGER);\n',
+      '.env.example': [
+        'FLAG_SHORT=postgres://user:xyz@db.example.com:5432/app',
+        'FLAG_ENCODED=postgres://user:a%2Fb@db.example.com:5432/app',
+        `FLAG_LIST=https://example.com,${syntheticSecrets.OPENAI_KEY}`,
+        `FLAG_NULLJSON=${JSON.stringify(JSON.stringify({ a: null, n: 1, t: syntheticSecrets.STRIPE_KEY }))}`,
+        'ECHO_XYZ=',
+        'ECHO_DECODED=',
+        'ECHO_ENC=',
+        'ECHO_MID=',
+        'ECHO_LONGER=',
+        '',
+      ].join('\n'),
+      '.env': 'ECHO_XYZ=xyz\nECHO_DECODED=a/b\nECHO_ENC=a%2Fb\nECHO_MID=xyz\nECHO_LONGER=xyzzy\n',
+      'env.schema.js': "module.exports = { ECHO_XYZ: { type: 'url' }, ECHO_DECODED: { type: 'url' }, ECHO_ENC: { type: 'url' }, ECHO_MID: { type: 'string', validate: (v) => 'bad ' + v + ' for endpoint' }, ECHO_LONGER: { type: 'url' } };\n",
+    });
+    const shortPwText = run(['check', 'src/app.js', '--schema', 'env.schema.js'], shortPwDir);
+    assert.strictEqual(shortPwText.status, 1);
+    assertNoLeak(shortPwText.stdout + shortPwText.stderr, syntheticSecrets, 'short password text');
+    assert.doesNotMatch(shortPwText.stdout + shortPwText.stderr, /"xyz"|"a\/b"|a%2Fb"/);
+    assert.match(shortPwText.stdout, /^INVALID: ECHO_ENC: value rejected by schema \(details withheld/m);
+    assert.match(shortPwText.stdout, /^INVALID: ECHO_MID: value rejected by schema \(details withheld/m);
+    assert.doesNotMatch(shortPwText.stdout, /bad xyz for endpoint/);
+    assert.match(shortPwText.stdout, /^INVALID: ECHO_XYZ: value rejected by schema \(details withheld/m);
+    assert.match(shortPwText.stdout, /^INVALID: ECHO_DECODED: value rejected by schema \(details withheld/m);
+    assert.match(shortPwText.stdout, /^INVALID: ECHO_LONGER: expected a valid URL \(e\.g\. https:\/\/example\.com\), got "xyzzy"$/m);
+    const shortPwJson = JSON.parse(run(['check', 'src/app.js', '--schema', 'env.schema.js', '--json'], shortPwDir).stdout);
+    assert.deepStrictEqual(shortPwJson.secrets, ['FLAG_SHORT', 'FLAG_ENCODED', 'FLAG_LIST', 'FLAG_NULLJSON']);
+    assert.strictEqual(shortPwJson.invalid.length, 5);
+    assert.ok(shortPwJson.invalid.every(m => !m.includes('"xyz"') && !m.includes('a/b')), JSON.stringify(shortPwJson.invalid));
+
+    // A prefixed group key flagged by its full name protects its aliases and drops its own schema error.
+    const nestedFlagDir = mkProject({
+      'src/app.js': 'void (process.env.DBG_PASS && process.env.PORT);\n',
+      '.env.example': `DBG_PASS=${syntheticSecrets.GITHUB_TOKEN}\nPORT=3000\n`,
+      '.env': `OLD_DBG_PASS=${syntheticSecrets.GITHUB_TOKEN}\nPORT=not-a-port\n`,
+      'env.schema.js': "module.exports = { DBG: { prefix: 'DBG_', schema: { PASS: { type: 'port', required: true, aliases: ['OLD_DBG_PASS'] } } }, PORT: { type: 'port', required: true } };\n",
+    });
+    const nestedFlagText = run(['check', 'src/app.js', '--schema', 'env.schema.js'], nestedFlagDir);
+    assert.strictEqual(nestedFlagText.status, 1);
+    assertNoLeak(nestedFlagText.stdout + nestedFlagText.stderr, syntheticSecrets, 'nested flagged key text');
+    assert.match(nestedFlagText.stdout, /SECRET in \.env\.example: DBG_PASS/);
+    assert.match(nestedFlagText.stdout, /^INVALID: PORT: expected a port/m);
+    assert.doesNotMatch(nestedFlagText.stdout, /^INVALID: DBG_PASS/m);
+
+    // Ordinary output is unchanged when the example has no findings: the values file error still echoes its value.
+    const noFindingDir = mkProject({
+      'src/app.js': 'void (process.env.HOME_URL && process.env.PORT);\n',
+      '.env.example': 'HOME_URL=\nPORT=3000\n',
+      '.env': 'HOME_URL=not a url\nPORT=not-a-port\n',
+      'env.schema.js': "module.exports = { HOME_URL: { type: 'url', required: true }, PORT: { type: 'port', required: true } };\n",
+    });
+    const noFindingRun = run(['check', 'src/app.js', '--schema', 'env.schema.js'], noFindingDir);
+    assert.strictEqual(noFindingRun.status, 1);
+    assert.match(noFindingRun.stdout, /^INVALID: HOME_URL: expected a valid URL \(e\.g\. https:\/\/example\.com\), got "not a url"$/m);
+    assert.match(noFindingRun.stdout, /^INVALID: PORT: expected a port \(0-65535, e\.g\. 3000\), got "not-a-port"$/m);
+    assert.doesNotMatch(noFindingRun.stdout, /withheld/);
+
     // 4. Watch mode (text and --json): detects a secret added to .env.example and recovers when replaced with a placeholder.
     const sleep = (ms) => new Promise(r => setTimeout(r, ms));
     const stopChild = (child) => new Promise((resolve, reject) => {
@@ -2374,14 +2541,21 @@ try {
       child.kill('SIGINT');
     });
 
-    for (const useJson of [false, true]) {
-      asyncChecks.push((async () => {
+    // Run these four watch scenarios one after another so they never add to the many concurrent watcher
+    // processes already started above (the existing 8s waits are sensitive to load).
+    let watchChain = Promise.resolve();
+    for (const [useJson, separateValues] of [[false, false], [true, false], [false, true], [true, true]]) {
+      watchChain = watchChain.then(async () => {
         const wDir = mkProject({
           'src/app.js': 'void (process.env.API_KEY && process.env.ENDPOINTS && process.env.PORT);\n',
           '.env.example': 'API_KEY=\nENDPOINTS=https://example.com\nPORT=3000\n',
           'env.schema.js': "module.exports = { API_KEY: { type: 'string' }, ENDPOINTS: { type: 'array', of: 'url', required: true }, PORT: { type: 'port', required: true } };\n",
         });
-        const baseArgs = ['check', wDir, '--file', '.env.example', '--schema', 'env.schema.js', '--watch'];
+        // separateValues: default check validates .env (not the template), so the flagged value arrives from another file.
+        const baseArgs = separateValues
+          ? ['check', wDir, '--schema', 'env.schema.js', '--watch']
+          : ['check', wDir, '--file', '.env.example', '--schema', 'env.schema.js', '--watch'];
+        if (separateValues) fs.writeFileSync(path.join(wDir, '.env'), 'API_KEY=\nENDPOINTS=https://example.com\nPORT=3000\n');
         const args = useJson ? [CLI, ...baseArgs, '--json'] : [CLI, ...baseArgs];
         const child = spawn(process.execPath, args, {
           cwd: wDir,
@@ -2411,14 +2585,20 @@ try {
           await waitFor(() => /check finished, exit 0/.test(stderr) && runCount() >= 1, 'initial clean watch');
           fs.writeFileSync(
             path.join(wDir, '.env.example'),
-            `API_KEY=${syntheticSecrets.HEX_TOKEN_40}\nENDPOINTS=https://example.com,${syntheticSecrets.ANTHROPIC_KEY}\nPORT=not-a-port\n`,
+            `API_KEY=${syntheticSecrets.HEX_TOKEN_40}\nENDPOINTS=https://example.com,${syntheticSecrets.ANTHROPIC_KEY}\nPORT=${separateValues ? '3000' : 'not-a-port'}\n`,
           );
+          if (separateValues) {
+            fs.writeFileSync(
+              path.join(wDir, '.env'),
+              `API_KEY=${syntheticSecrets.HEX_TOKEN_40}\nENDPOINTS=https://example.com,${syntheticSecrets.ANTHROPIC_KEY}\nPORT=not-a-port\n`,
+            );
+          }
           await waitFor(
             () => /check finished, exit 1/.test(stderr) && runCount() >= 2,
             'secret added in watch mode',
           );
           assert.strictEqual(exited, null, 'watcher must stay alive after secret finding');
-          assertNoLeak(stdout + stderr, syntheticSecrets, useJson ? 'watch --json' : 'watch text');
+          assertNoLeak(stdout + stderr, syntheticSecrets, `watch ${useJson ? 'json' : 'text'}${separateValues ? ' separate values' : ''}`);
           if (useJson) {
             const lines = stdout.trim().split(/\r?\n/).map(line => JSON.parse(line));
             const failing = lines[lines.length - 1];
@@ -2435,6 +2615,7 @@ try {
 
           const beforeRecover = runCount();
           fs.writeFileSync(path.join(wDir, '.env.example'), 'API_KEY=your-key-here\nENDPOINTS=https://example.com\nPORT=3000\n');
+          if (separateValues) fs.writeFileSync(path.join(wDir, '.env'), 'API_KEY=\nENDPOINTS=https://example.com\nPORT=3000\n');
           await waitFor(
             () => runCount() > beforeRecover && /check finished, exit 0\s*$/.test(stderr),
             'watch recovery after placeholder fix',
@@ -2449,8 +2630,9 @@ try {
         } finally {
           if (exited === null) await stopChild(child);
         }
-      })());
+      });
     }
+    asyncChecks.push(watchChain);
   }
 } catch (err) {
   cleanup();

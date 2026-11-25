@@ -691,27 +691,116 @@ function readExampleValuesIsolated(filePath) {
   }
 }
 
-function collectTaintedSchemaKeys(schema, secretSet, prefix = '', out = new Set(secretSet)) {
-  for (const [key, rule] of Object.entries(schema)) {
-    if (rule && typeof rule === 'object' && rule.schema && typeof rule.prefix === 'string') {
-      collectTaintedSchemaKeys(rule.schema, secretSet, prefix + rule.prefix, out);
-    } else if (rule && Array.isArray(rule.aliases) && rule.aliases.some(a => secretSet.has(a))) {
-      out.add(prefix + key);
-    }
+// Everything a flagged example value could be echoed as: the whole value plus
+// the secret-looking pieces of lists, JSON leaves, URL passwords, query values
+// and path segments, so a schema message that quotes only a slice is caught.
+function addSensitiveFragments(raw, out, force = false) {
+  if (typeof raw !== 'string') return;
+  const v = raw.trim();
+  // A URL password is recorded even when it is one to three characters long;
+  // guardValidationErrors matches such short pieces only as a whole quoted value.
+  if (v.length < (force ? 1 : 4)) return;
+  if (force || isSecretExampleValue(v)) out.add(v);
+  // Every piece below is strictly shorter than v, so the recursion terminates.
+  const auth = /^(?:Bearer|Basic)\s+(\S+)$/i.exec(v);
+  if (auth) addSensitiveFragments(auth[1], out);
+  if (/^[[{]/.test(v)) {
+    try {
+      const stack = [JSON.parse(v)];
+      while (stack.length > 0) {
+        const cur = stack.pop();
+        if (typeof cur === 'string') addSensitiveFragments(cur, out);
+        else if (cur !== null && typeof cur === 'object') stack.push(...Object.values(cur));
+      }
+    } catch { /* not JSON: the whole value is already recorded */ }
   }
-  return out;
+  if (!/\s/.test(v) && /^[a-z][a-z0-9+.-]*:\/\//i.test(v)) {
+    const userinfo = /^[a-z][a-z0-9+.-]*:\/\/([^/?#@]*)@/i.exec(v);
+    if (userinfo && userinfo[1].includes(':')) {
+      const pass = userinfo[1].slice(userinfo[1].indexOf(':') + 1);
+      addSensitiveFragments(pass, out, true);
+      try { addSensitiveFragments(decodeURIComponent(pass), out, true); } catch { /* keep raw */ }
+    }
+    try {
+      const parsed = new URL(v);
+      for (const [, paramVal] of parsed.searchParams) addSensitiveFragments(paramVal, out);
+      for (const seg of parsed.pathname.split('/')) addSensitiveFragments(seg, out);
+    } catch { /* not a WHATWG URL */ }
+  }
+  if (!/\s/.test(v) && /[,;|]/.test(v)) {
+    for (const part of v.split(/[,;|]/)) addSensitiveFragments(part, out);
+  }
 }
 
-function isTaintedValidationError(message, taintedKeys) {
-  const m = /^([^\s:]+): /.exec(message);
-  if (!m) return true;
-  const subject = m[1];
-  for (const k of taintedKeys) {
-    if (subject === k || subject.startsWith(`${k}[`) || subject.startsWith(`${k}.`)) {
-      return true;
+// What check must keep out of schema-validation output once the example file
+// has findings: `strip` names are removed from the validated values, `tainted`
+// schema keys have their errors withheld, and `fragments` are value pieces no
+// message may contain. The decision depends only on the example findings, never
+// on which file is validated.
+function buildExampleGuard(schema, secrets, exampleValues) {
+  const secretSet = new Set(secrets);
+  const tainted = new Set(secretSet);
+  const strip = new Set(secretSet);
+  const walk = (group, prefix) => {
+    for (const [key, rule] of Object.entries(group)) {
+      if (rule && typeof rule === 'object' && rule.schema && typeof rule.prefix === 'string') {
+        walk(rule.schema, prefix + rule.prefix);
+        continue;
+      }
+      const aliases = rule && Array.isArray(rule.aliases) ? rule.aliases : [];
+      if (secretSet.has(prefix + key) || aliases.some(a => secretSet.has(a))) {
+        tainted.add(prefix + key);
+        strip.add(prefix + key);
+        for (const a of aliases) strip.add(a);
+      }
     }
+  };
+  walk(schema, '');
+  const fragments = new Set();
+  for (const k of secrets) addSensitiveFragments(exampleValues[k], fragments);
+  return { tainted, strip, fragments };
+}
+
+const WITHHELD = 'details withheld because the example file has flagged values';
+
+// Keep a schema message only when it provably carries no flagged value: keyed
+// to an untainted schema key and free of every sensitive fragment. Errors for
+// tainted keys are already reported by name under SECRET and are dropped; an
+// unrecognised shape or a message that quotes a flagged value is replaced by a
+// generic diagnostic instead of being printed.
+// A one-to-three character piece (a short URL password) would match inside
+// ordinary words, so it counts only as a whole token: not touching a letter or
+// digit on either side, anywhere in the message (`got "xyz"`, `bad xyz for x`).
+function containsWholeToken(message, token) {
+  for (let i = message.indexOf(token); i !== -1; i = message.indexOf(token, i + 1)) {
+    const before = message[i - 1];
+    const after = message[i + token.length];
+    if (!(before && /[A-Za-z0-9]/.test(before)) && !(after && /[A-Za-z0-9]/.test(after))) return true;
   }
   return false;
+}
+
+function guardValidationErrors(errors, guard) {
+  const out = [];
+  for (const message of errors) {
+    const m = /^([^\s:]+): /.exec(message);
+    if (!m) {
+      out.push(`schema validation failed (${WITHHELD})`);
+      continue;
+    }
+    const subject = m[1];
+    let isTainted = false;
+    for (const k of guard.tainted) {
+      if (subject === k || subject.startsWith(`${k}[`) || subject.startsWith(`${k}.`)) isTainted = true;
+    }
+    if (isTainted) continue;
+    let carriesValue = false;
+    for (const f of guard.fragments) {
+      if (f.length >= 4 ? message.includes(f) : containsWholeToken(message, f)) { carriesValue = true; break; }
+    }
+    out.push(carriesValue ? `${subject}: value rejected by schema (${WITHHELD})` : message);
+  }
+  return [...new Set(out)];
 }
 
 function readEnvFile(filePath) {
@@ -1071,23 +1160,18 @@ async function runCheck() {
       targetName = valuesOpt;
     }
     if (targetName) {
-      const targetPath = path.join(dir, targetName);
-      const rawValues = readEnvFile(targetPath);
-      const validatingTemplate = path.resolve(targetPath) === path.resolve(examplePath);
-      const secretSet = validatingTemplate && secrets.length > 0 ? new Set(secrets) : null;
-      const values = secretSet
-        ? Object.fromEntries(Object.entries(rawValues).filter(([k]) => !secretSet.has(k)))
+      const rawValues = readEnvFile(path.join(dir, targetName));
+      // Any example finding protects the schema report, whichever file (the
+      // template, .env, --values) supplies the values or an alias resolves to.
+      const guard = secrets.length > 0 ? buildExampleGuard(schema, secrets, isolatedExample) : null;
+      const values = guard
+        ? Object.fromEntries(Object.entries(rawValues).filter(([k]) => !guard.strip.has(k)))
         : rawValues;
       try {
         validateEnv(schema, values);
       } catch (e) {
         if (!(e instanceof EnvSaafError)) throw e;
-        // When validating the template itself, secret-flagged keys (and the
-        // schema keys that alias them) are already reported by name under
-        // SECRET, so drop their schema errors: those messages echo the value.
-        invalid = secretSet
-          ? e.errors.filter(msg => !isTaintedValidationError(msg, collectTaintedSchemaKeys(schema, secretSet)))
-          : e.errors;
+        invalid = guard ? guardValidationErrors(e.errors, guard) : e.errors;
       }
     }
   }
