@@ -4,6 +4,12 @@
 
 - Fixed: `scanCode` (and `scanCodeLocations`) now follows destructured `process.env` aliases such as `const { env } = process` and `const { env: myEnv } = process`, while ignoring other destructured `process` bindings like `argv` (fixes #425).
 
+- Added: seeded property-based tests for `validateEnv` (`test-validate-fuzz.js`,
+  part of `npm test`) covering all 18 scalar types and `array`, checking
+  coercion idempotence, `.env.example` round-trips, inclusive `min`/`max`
+  bounds, key-named diagnostics and `{ throwOnError: false }` parity, and
+  `sensitive` raw-value masking (fixes #419).
+
 - Fixed: duration arrays accept human duration strings or numeric milliseconds for `min` / `max` and enforce the bounds on each item. Generated examples respect the bounds, and JSON Schema exports them on `items` (fixes #427).
 
 - Fixed: `duration` choices accept human duration strings such as `15m`, comparing them as milliseconds alongside numeric choices. Array items and JSON Schema enums use the same normalization, without modifying the supplied schema (fixes #426).
