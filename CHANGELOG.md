@@ -9,7 +9,17 @@
 
 - Added: `scan --json` includes a `locations` map from each variable to `{ file, line }` uses (relative paths, 1-based lines), driven by `scanCodeLocations` / `scanDirLocations`; plain output and `vars` / `unused` stay unchanged (fixes #335).
 
+- Added: `toJsonSchema` emits a `pattern` for `base64` rules, so a consumer
+  validating against the exported schema accepts exactly the standard,
+  unpadded and URL-safe forms the runtime accepts and rejects a mixed alphabet
+  or bad padding (fixes #351).
+
 - Fixed: `validateSchema` rejects `required: true` together with a `default` (the default means the key can never be missing, so `required` was dead config). The `init` starter schema no longer sets both on `PORT` (fixes #340).
+
+- Added: an `exports` map exposing `.` (`types`, `import`, `require`) and
+  `./package.json`, so only the public entry resolves; deep imports such as
+  `env-saaf/cli.js` now fail with `ERR_PACKAGE_PATH_NOT_EXPORTED`. `main` and
+  `types` stay for older resolvers (fixes #357).
 
 - Fixed: duration bound errors name the duration and show milliseconds for numeric bounds, while preserving explicit units in string bounds (fixes #341).
 

@@ -543,6 +543,19 @@ function decimalNumber(value) {
 // Semantic version: MAJOR.MINOR.PATCH, no leading zeroes in numeric parts;
 // optional pre-release/build suffixes and one optional lowercase 'v' prefix.
 // Shared by coerce() and toJsonSchema() so runtime and schema checks match.
+// Issue #351: the JSON Schema pattern for base64 mirrors the runtime check
+// (standard or URL-safe alphabet, no mixing, unpadded lengths 4n+2/4n+3, and
+// padding only on a multiple of four).
+const B64_STD = '[A-Za-z0-9+/]';
+const B64_URL = '[A-Za-z0-9_-]';
+const BASE64_RE = new RegExp(
+  `^(?:(?:${B64_STD}{4})+(?:${B64_STD}{2}==|${B64_STD}{3}=)?`
+  + `|${B64_STD}{2,3}(?:${B64_STD}{4})*`
+  + `|(?:${B64_STD}{4})*(?:${B64_STD}{2}==|${B64_STD}{3}=)`
+  + `|(?:${B64_URL}{4})+(?:${B64_URL}{2}==|${B64_URL}{3}=)?`
+  + `|${B64_URL}{2,3}(?:${B64_URL}{4})*`
+  + `|(?:${B64_URL}{4})*(?:${B64_URL}{2}==|${B64_URL}{3}=))$`);
+
 const SEMVER_RE = /^v?(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-((?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*)(?:\.(?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*))*))?(?:\+([0-9a-zA-Z-]+(?:\.[0-9a-zA-Z-]+)*))?$/;
 
 function coerce(key, raw, type, trim = true, protocols, sensitive = false, of = 'string', separator = ',') {
@@ -2241,6 +2254,7 @@ function jsonSchemaForScalar(type, protocols) {
     case 'email': case 'uuid': case 'ipv4': return { type: 'string', format: type };
     case 'hex': return { type: 'string', pattern: '^[0-9a-fA-F]+$' };
     case 'semver': return { type: 'string', pattern: SEMVER_RE.source };
+    case 'base64': return { type: 'string', pattern: BASE64_RE.source };
     case 'url': {
       const property = { type: 'string', format: 'uri' };
       if (protocols) {

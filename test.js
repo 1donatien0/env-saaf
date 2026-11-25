@@ -188,6 +188,8 @@ function assertDraft202012Schema(schema, path = '#', root = true) {
   });
   assert.deepStrictEqual(toJsonSchema({}), { $schema: draft, type: 'object', properties: {} });
 
+  const base64Pattern = toJsonSchema({ B: { type: 'base64' } }).properties.B.pattern;
+  assert.strictEqual(typeof base64Pattern, 'string', 'base64 needs a JSON Schema pattern (issue #351)');
   const types = {
     string: { type: 'string' },
     number: { type: 'number' },
@@ -204,7 +206,7 @@ function assertDraft202012Schema(schema, path = '#', root = true) {
       type: 'string',
       pattern: '^v?(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)(?:-((?:0|[1-9]\\d*|\\d*[a-zA-Z-][0-9a-zA-Z-]*)(?:\\.(?:0|[1-9]\\d*|\\d*[a-zA-Z-][0-9a-zA-Z-]*))*))?(?:\\+([0-9a-zA-Z-]+(?:\\.[0-9a-zA-Z-]+)*))?$',
     },
-    base64: { type: 'string' },
+    base64: { type: 'string', pattern: base64Pattern },
     date: { type: 'string', anyOf: [{ format: 'date' }, { format: 'date-time' }] },
     file: { type: 'string' },
     duration: { type: 'number', minimum: 0 },
@@ -213,6 +215,27 @@ function assertDraft202012Schema(schema, path = '#', root = true) {
   };
   const rules = Object.fromEntries(Object.keys(types).map(type => [type, { type }]));
   assert.deepStrictEqual(toJsonSchema(rules).properties, types);
+
+  // Issue #351: the schema pattern and the runtime validator must agree.
+  // An empty value is treated as missing, so it is not in this corpus.
+  {
+    const pattern = new RegExp(base64Pattern);
+    const samples = [
+      'aGVsbG8=', 'aGVsbG8', 'aGVsbG8h', 'AA==', 'AAA=', 'AAAA', 'ab', 'abc', 'abcd',
+      'a-b_', 'a-b=', '__==', '--', 'A+/=', 'AB+/', 'AAAAXX==', 'AAAABBB=',
+      'a', 'abcde', 'AAAA==', 'A+B_', 'a b', 'AAAAA', 'A===', 'aGVsbG8===', 'a-b_=', '=AAA', 'AA=A',
+    ];
+    for (const value of samples) {
+      let runtimeOk = true;
+      try {
+        validateEnv({ B: { type: 'base64' } }, { B: value });
+      } catch {
+        runtimeOk = false;
+      }
+      assert.strictEqual(pattern.test(value), runtimeOk,
+        `JSON Schema pattern and runtime disagree on ${JSON.stringify(value)}`);
+    }
+  }
 
   const options = toJsonSchema({
     MODE: { required: true, minLength: 0, maxLength: 6, pattern: /^\w+$/, choices: ['local', 'test', 'local'] },
@@ -6700,7 +6723,8 @@ const formatErrorThrowingHookTest = (async () => {
     required: ['VERSION'],
   });
   assert.deepStrictEqual(composed.properties.PLAIN, { type: 'string' });
-  assert.deepStrictEqual(composed.properties.B64, { type: 'string' });
+  assert.deepStrictEqual(composed.properties.B64,
+    { type: 'string', pattern: toJsonSchema({ B: { type: 'base64' } }).properties.B.pattern });
 }
 
 // Issue #321: quoted keys share the env-file key grammar.
