@@ -7,6 +7,8 @@
   `example` / `init` no longer repeat the same flags; explicit flags always
   win, unknown config keys are a usage error, and projects without the key
   behave as before (fixes #354).
+- Docs: the landing page now lists the `print` and `init` commands and the
+  `--schema` / `--values` options on `check`.
 - Added: with `--schema`, `check` also diffs the schema against
   `.env.example` in both directions — `NOT DOCUMENTED` for schema keys missing
   from the example and `NOT IN SCHEMA` for example keys the schema does not
