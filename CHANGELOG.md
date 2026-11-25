@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Fixed: `int` and `number` values now accept underscore separators (`1_000`, `1_000.5`), matching JavaScript numeric literals — a single underscore between digits only; leading, trailing or doubled underscores are still rejected with the usual messages (fixes #412).
+
+- Fixed: `generateExample` formats bounded `duration` values as human durations (`2h`, `1h30m`, `45s`) instead of raw milliseconds, so the generated example reads like the unbounded `15m` and still validates against its own schema (fixes #414).
+
 - Fixed: `host` accepts and preserves a single trailing DNS root dot on a hostname, while still rejecting leading dots and empty labels (fixes #413).
 
 - Added: `options.rules` on `validateEnv`, `loadEnv`, and `loadEnvAsync` for

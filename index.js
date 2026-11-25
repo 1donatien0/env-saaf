@@ -647,6 +647,17 @@ function decimalNumber(value) {
   return typeof value === 'string' && /^\s*0[xob]/i.test(value) ? NaN : Number(value);
 }
 
+// Underscore separators in numeric literals ('1_000', '1_000.5', like a
+// JavaScript numeric literal): a single '_' between digits only — never
+// leading, trailing or doubled (issue #412). Anything else is returned
+// unchanged, so the existing errors keep their messages.
+function stripNumericUnderscores(value) {
+  if (typeof value !== 'string') return value;
+  const s = value.trim();
+  if (!/^[+-]?(?:\d(?:_?\d)*)(?:\.(?:\d(?:_?\d)*))?(?:[eE][+-]?(?:\d(?:_?\d)*))?$/.test(s)) return value;
+  return s.replace(/_/g, '');
+}
+
 // Semantic version: MAJOR.MINOR.PATCH, no leading zeroes in numeric parts;
 // optional pre-release/build suffixes and one optional lowercase 'v' prefix.
 // Shared by coerce() and toJsonSchema() so runtime and schema checks match.
@@ -692,7 +703,8 @@ function coerce(key, raw, type, trim = true, protocols, sensitive = false, of = 
       // Reject NaN as well as non-finite results (Infinity, -Infinity, and
       // exponent overflow like '1e999'): Number() parses them without error,
       // and a silent Infinity breaks downstream maths (issue #175).
-      const n = decimalNumber(v);
+      // Underscore separators ('1_000.5') are stripped first (issue #412).
+      const n = decimalNumber(stripNumericUnderscores(v));
       if (v === '' || !Number.isFinite(n)) throw new Error(`${key}: expected a number (e.g. ${TYPE_EXAMPLES.number}), got "${shown}"`);
       return n;
     }
@@ -707,8 +719,12 @@ function coerce(key, raw, type, trim = true, protocols, sensitive = false, of = 
       // integer; '3.5', 'abc', and non-finite values ('Infinity', '1e999')
       // do not pass. The shape is checked on the trimmed spelling so
       // surrounding whitespace behaves the same with trim: false.
-      if (typeof v === 'string' && !/^[+-]?\d+$/.test(v.trim())) throw new Error(`${key}: expected an integer (e.g. ${TYPE_EXAMPLES.int}), got "${shown}"`);
-      const n = decimalNumber(v);
+      // Underscore separators ('1_000', like a JavaScript numeric literal)
+      // are accepted (issue #412); a misplaced underscore fails the shape
+      // check below with the usual message.
+      const digits = typeof v === 'string' ? stripNumericUnderscores(v) : v;
+      if (typeof v === 'string' && !/^[+-]?\d+$/.test(String(digits).trim())) throw new Error(`${key}: expected an integer (e.g. ${TYPE_EXAMPLES.int}), got "${shown}"`);
+      const n = decimalNumber(digits);
       if (v === '' || !Number.isFinite(n) || !Number.isInteger(n)) throw new Error(`${key}: expected an integer (e.g. ${TYPE_EXAMPLES.int}), got "${shown}"`);
       return n;
     }
@@ -2499,6 +2515,22 @@ function boundedStringPlaceholder(type, example, rule, limit) {
   }
 }
 
+/** Format milliseconds back as a human duration ('2h', '1h30m', '45s',
+ * '500ms') for generated examples (issue #414): an example file is read
+ * by humans, so a bounded duration should read like the `15m` the
+ * unbounded case already emits, never a bare millisecond count. Only
+ * whole milliseconds decompose exactly. */
+function formatDuration(ms) {
+  const units = [['w', 604800000], ['d', 86400000], ['h', 3600000], ['m', 60000], ['s', 1000], ['ms', 1]];
+  let rest = ms;
+  let out = '';
+  for (const [unit, size] of units) {
+    const n = Math.floor(rest / size);
+    if (n > 0) { out += n + unit; rest -= n * size; }
+  }
+  return out || '0ms';
+}
+
 /** Placeholder for a scalar (non-array) rule, per its declared type. Every
  * value is a literal that itself validates against the type (issue #251),
  * so a generated .env.example passes `check` out of the box — except `file`,
@@ -2555,6 +2587,11 @@ function scalarPlaceholder(rule, stringGrowth) {
   const value = Math.min(max, Math.max(min, sample));
   if (value === sample) return placeholder;
   if (value === 0) return '0';
+  // Issue #414: a bounded duration reads like '2h', not '7200000'.
+  // Only whole milliseconds up to the safe-integer limit decompose
+  // exactly — beyond that the re-parsed sum drifts by a few ms, so huge
+  // or fractional values keep the numeric spelling (which round-trips).
+  if (type === 'duration' && Number.isSafeInteger(value)) return formatDuration(value);
   // int/port and duration reject exponent notation, even for a valid value.
   return value.toLocaleString('en-US', { useGrouping: false, maximumSignificantDigits: 21 });
 }
