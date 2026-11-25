@@ -922,6 +922,7 @@ CLI output is plain text by default, including in pipes and CI. For scripts that
 ```bash
 npx env-saaf --version      # print the installed version
 npx env-saaf scan ./src     # every env var your code actually uses
+npx env-saaf scan src/server.js  # scan a single code file (also accepted by check)
 npx env-saaf scan . --exclude fixtures --exclude 'src/generated/**'  # leave vendored or generated code out
                            # scans .js/.cjs/.mjs/.ts/.mts/.cts/.tsx/.jsx and .vue/.svelte/.astro components
 git show HEAD:src/config.js | npx env-saaf scan --stdin  # scan code piped on standard input
@@ -969,6 +970,8 @@ When scanning a directory, `scanDir` skips `node_modules`, `.git*` and common bu
 When a real `.env` sits next to the template, `check` also compares their keys: a key in `.env` that is not documented (`EXTRA in .env: FOO (not in .env.example)`) is usually a typo, and a template key with no local value is reported as `MISSING in .env: BAR (in .env.example, not set locally)`. `--file` selects the template for both comparisons; with no `.env` file this extra check is skipped. In `--json` mode the findings appear as `envExtra` and `envMissing` alongside the existing `missing`, `extra`, `unused` and `invalid` fields — `unused` lists the documented-but-unused keys under the same name `scan --json` uses, and `extra` keeps the identical list for compatibility.
 
 The scanner finds dot access and static bracket keys through simple local aliases declared with `const`, `let` or `var`, such as `const env = process.env; env.PORT`. This also works with `import.meta.env`. The text scanner tracks reads after declaration. Reassignment, shadowing, alias chains and destructuring through an alias are outside its scope.
+
+Both `scan` and `check` also accept a path to a single readable code file (such as `npx env-saaf scan src/server.js` or `npx env-saaf check src/server.js`), applying the same code-extension filter and comment/literal masking without scanning sibling files; `scan --json` reports `locations` using the file path as given.
 
 #### Exit codes
 

@@ -1250,6 +1250,768 @@ try {
       }));
     }
   }
+
+  // Issue #418: scan and check accept a single readable supported code file.
+  {
+    const { runInNewContext } = require('node:vm');
+    const serverSrc = [
+      '// process.env.COMMENT_DECOY',
+      '/* import.meta.env.BLOCK_DECOY */',
+      "const literal = 'process.env.STRING_DECOY';",
+      'const port = process.env.PORT;',
+      "const host = process.env['DB.HOST'];",
+      'const opt = process.env?.OPTIONAL_KEY;',
+      'const vite = import.meta.env.VITE_URL;',
+      "const { SECRET_TOKEN, RETRIES: r = '3' } = process.env;",
+      'const env = process.env; const aliased = env.ALIAS_KEY;',
+      'const tpl = `plain process.env.TPL_DECOY ${process.env.TPL_KEY}`;',
+      'const { env: procEnv } = process; const dAlias = procEnv.DESTRUCTURED_PROC_KEY;',
+      '',
+    ].join('\n');
+    const expectedServerVars = [
+      'ALIAS_KEY', 'DB.HOST', 'DESTRUCTURED_PROC_KEY', 'OPTIONAL_KEY', 'PORT', 'RETRIES', 'SECRET_TOKEN', 'TPL_KEY', 'VITE_URL',
+    ];
+    const dir = mkProject({
+      'src/server.js': serverSrc,
+      'src/sibling.js': 'const s = process.env.SIBLING_UNDOCUMENTED;\n',
+      'src/empty.js': '// process.env.ONLY_COMMENT\nconst x = 42;\n',
+      'README.md': 'process.env.MD_DECOY\n',
+      'notes.txt': 'process.env.TXT_DECOY\n',
+      'UPPER.JS': 'process.env.UPPER_EXT\n',
+      '.env.example': expectedServerVars.map(k => `${k}=\n`).join(''),
+    });
+
+    // 1. scan <file>: lists only that file's keys, ignores comments/literals and sibling files, exits 0.
+    const plainScan = run(['scan', 'src/server.js'], dir);
+    assert.strictEqual(plainScan.status, 0, `${plainScan.stdout}${plainScan.stderr}`);
+    assert.strictEqual(plainScan.stderr, '');
+    assert.strictEqual(plainScan.stdout, expectedServerVars.join('\n') + '\n');
+
+    // Directory scan on the same project still includes sibling.js.
+    const fullDirScan = run(['scan', dir], dir);
+    assert.strictEqual(fullDirScan.status, 0);
+    assert.ok(fullDirScan.stdout.split(/\r?\n/).includes('SIBLING_UNDOCUMENTED'));
+
+    // 2. scan <file> --json preserves the exact given filename in locations.
+    for (const given of ['src/server.js', './src/server.js', path.join(dir, 'src/server.js')]) {
+      const jsonScan = run(['scan', given, '--json'], dir);
+      assert.strictEqual(jsonScan.status, 0, `${given}: ${jsonScan.stdout}${jsonScan.stderr}`);
+      assert.strictEqual(jsonScan.stderr, '');
+      const parsed = JSON.parse(jsonScan.stdout);
+      assert.strictEqual(parsed.ok, true);
+      assert.deepStrictEqual(parsed.vars, expectedServerVars);
+      assert.ok(!('unused' in parsed), 'implicit .env.example should not add unused noise to single-file scan');
+      assert.deepStrictEqual(parsed.locations.PORT, [{ file: given, line: 4 }]);
+      assert.deepStrictEqual(parsed.locations['DB.HOST'], [{ file: given, line: 5 }]);
+      assert.deepStrictEqual(parsed.locations.TPL_KEY, [{ file: given, line: 10 }]);
+    }
+
+    // Explicit --file compares the single file's reads against the template.
+    fs.writeFileSync(path.join(dir, '.env.with-extra'), expectedServerVars.map(k => `${k}=\n`).join('') + 'EXTRA_TEMPLATE_KEY=\n');
+    const scanWithFile = run(['scan', 'src/server.js', '--file', '.env.with-extra', '--json'], dir);
+    assert.strictEqual(scanWithFile.status, 0, `${scanWithFile.stdout}${scanWithFile.stderr}`);
+    assert.deepStrictEqual(JSON.parse(scanWithFile.stdout).unused, ['EXTRA_TEMPLATE_KEY']);
+
+    // Empty / comment-only code file reports no usage and exits 0.
+    const emptyPlain = run(['scan', 'src/empty.js'], dir);
+    assert.strictEqual(emptyPlain.status, 0);
+    assert.strictEqual(emptyPlain.stdout, '');
+    assert.strictEqual(emptyPlain.stderr, 'No process.env usage found.\n');
+    const emptyJson = run(['scan', 'src/empty.js', '--json'], dir);
+    assert.strictEqual(emptyJson.status, 0);
+    assert.deepStrictEqual(JSON.parse(emptyJson.stdout), { ok: true, vars: [], locations: {} });
+
+    // 3. check <file>: checks only that file against .env.example (no sibling scan).
+    const dirCheck = run(['check', dir], dir);
+    assert.strictEqual(dirCheck.status, 1, 'directory check must fail on sibling undocumented key');
+    assert.match(dirCheck.stdout, /MISSING in \.env\.example: SIBLING_UNDOCUMENTED/);
+
+    const fileCheck = run(['check', 'src/server.js'], dir);
+    assert.strictEqual(fileCheck.status, 0, `${fileCheck.stdout}${fileCheck.stderr}`);
+    assert.match(fileCheck.stdout, /all clean/);
+
+    const fileCheckJson = run(['check', 'src/server.js', '--json'], dir);
+    assert.strictEqual(fileCheckJson.status, 0);
+    assert.deepStrictEqual(JSON.parse(fileCheckJson.stdout), {
+      ok: true, missing: [], extra: [], unused: [], invalid: [], envExtra: [], envMissing: [],
+    });
+
+    // Undocumented key in the checked single file still fails check with exit 1.
+    const badFileCheck = run(['check', 'src/sibling.js'], dir);
+    assert.strictEqual(badFileCheck.status, 1);
+    assert.match(badFileCheck.stdout, /MISSING in \.env\.example: SIBLING_UNDOCUMENTED/);
+
+    // check <file> works with --schema, --values, --json-schema, subprojects, and outside-cwd paths.
+    const schemaDir = mkProject({
+      'sub/src/entry.ts': 'export const p = process.env.PORT;\n',
+      'sub/.env.example': 'PORT=3000\n',
+      'sub/.env': 'PORT=3000\n',
+      'sub/.env.bad': 'PORT=not-a-port\n',
+      'sub/env.schema.js': "module.exports = { PORT: { type: 'port', required: true } };\n",
+      'schema-only/src/entry.js': 'const p = process.env.PORT;\n',
+      'schema-only/env.schema.js': "module.exports = { PORT: { type: 'port', required: true } };\n",
+    });
+    const subOk = run(['check', 'sub/src/entry.ts', '--schema', 'env.schema.js'], schemaDir);
+    assert.strictEqual(subOk.status, 0, `${subOk.stdout}${subOk.stderr}`);
+    const subBad = run(['check', 'sub/src/entry.ts', '--schema', 'env.schema.js', '--values', '.env.bad'], schemaDir);
+    assert.strictEqual(subBad.status, 1);
+    assert.match(subBad.stdout, /INVALID in \.env\.bad: PORT/);
+
+    const outsideCwd = mkProject({});
+    const absEntry = path.join(schemaDir, 'sub', 'src', 'entry.ts');
+    const fromOutside = run(['check', absEntry, '--schema', 'env.schema.js'], outsideCwd);
+    assert.strictEqual(fromOutside.status, 0, `${fromOutside.stdout}${fromOutside.stderr}`);
+
+    const jsonSchemaFromFile = run(['check', 'schema-only/src/entry.js', '--schema', 'env.schema.js', '--json-schema'], schemaDir);
+    assert.strictEqual(jsonSchemaFromFile.status, 0, `${jsonSchemaFromFile.stdout}${jsonSchemaFromFile.stderr}`);
+    assert.strictEqual(JSON.parse(jsonSchemaFromFile.stdout).$schema, 'https://json-schema.org/draft/2020-12/schema');
+
+    const jsonSchemaMissingFlag = run(['check', 'src/server.js', '--json-schema'], dir);
+    assert.strictEqual(jsonSchemaMissingFlag.status, 2);
+    assert.match(jsonSchemaMissingFlag.stderr, /--json-schema needs --schema/);
+
+    const subAbsSchema = run(['check', 'sub/src/entry.ts', '--schema', path.join(schemaDir, 'sub', 'env.schema.js')], schemaDir);
+    assert.strictEqual(subAbsSchema.status, 0, `${subAbsSchema.stdout}${subAbsSchema.stderr}`);
+
+    // Missing .env.example stops at cwd rather than climbing into a parent folder.
+    const nestedNoExample = path.join(schemaDir, 'sub', 'nested-pkg');
+    fs.mkdirSync(path.join(nestedNoExample, 'src'), { recursive: true });
+    fs.writeFileSync(path.join(nestedNoExample, 'src', 'app.js'), 'const p = process.env.PORT;\n');
+    const stoppedAtCwd = run(['check', 'src/app.js'], nestedNoExample);
+    assert.strictEqual(stoppedAtCwd.status, 2);
+    assert.match(stoppedAtCwd.stderr, /\.env\.example not found/);
+
+    const outsideNoExample = mkProject({ 'src/app.js': 'const p = process.env.PORT;\n' });
+    const missingFromOutside = run(['check', path.join(outsideNoExample, 'src', 'app.js')], outsideCwd);
+    assert.strictEqual(missingFromOutside.status, 2);
+    assert.match(missingFromOutside.stderr, /\.env\.example not found/);
+
+    // package.json "env-saaf" defaults apply to explicit code-file inputs, with explicit CLI precedence.
+    const fileOnlyContractDir = mkProject({
+      'src/server.js': 'const p = process.env.PORT;\n',
+      '.env.contract': 'PORT=3000\n',
+      'package.json': '{"name":"file-only-contract","env-saaf":{"file":".env.contract"}}\n',
+    });
+    const fileOnlyDirOk = run(['check', '.'], fileOnlyContractDir);
+    assert.strictEqual(fileOnlyDirOk.status, 0, `${fileOnlyDirOk.stdout}${fileOnlyDirOk.stderr}`);
+    const fileOnlySingleOk = run(['check', 'src/server.js'], fileOnlyContractDir);
+    assert.strictEqual(fileOnlySingleOk.status, 0, `${fileOnlySingleOk.stdout}${fileOnlySingleOk.stderr}`);
+    assert.match(fileOnlySingleOk.stdout, /code and \.env\.contract match/);
+    const contractScanJson = run(['scan', 'src/server.js', '--json'], fileOnlyContractDir);
+    assert.strictEqual(contractScanJson.status, 0, `${contractScanJson.stdout}${contractScanJson.stderr}`);
+    assert.deepStrictEqual(JSON.parse(contractScanJson.stdout), {
+      ok: true,
+      vars: ['PORT'],
+      unused: [],
+      locations: { PORT: [{ file: 'src/server.js', line: 1 }] },
+    });
+
+    const contractDir = mkProject({
+      'src/server.js': 'const p = process.env.PORT;\n',
+      'src/sibling.js': 'const s = process.env.SIBLING_ONLY;\n',
+      '.env.contract': 'PORT=3000\n',
+      '.env.override': 'PORT=3000\nEXTRA_OVERRIDE_KEY=\n',
+      '.env': 'PORT=3000\n',
+      'config/env.schema.js': "module.exports = { PORT: { type: 'port', required: true } };\n",
+      'override.schema.js': "module.exports = { PORT: { type: 'string', required: true } };\n",
+      'package.json': JSON.stringify({
+        name: 'contract-proj',
+        'env-saaf': { file: '.env.contract', schema: 'config/env.schema.js', dir: 'missing-default-dir' },
+      }) + '\n',
+    });
+    const contractDirFail = run(['check', '.'], contractDir);
+    assert.strictEqual(contractDirFail.status, 1);
+    assert.match(contractDirFail.stdout, /MISSING in \.env\.contract: SIBLING_ONLY/);
+
+    const contractFileOk = run(['check', 'src/server.js'], contractDir);
+    assert.strictEqual(contractFileOk.status, 0, `${contractFileOk.stdout}${contractFileOk.stderr}`);
+    assert.match(contractFileOk.stdout, /code and \.env\.contract match/);
+
+    // A package with both env-saaf.file and env-saaf.schema defaults still runs scan on a code file
+    // (ignoring check-only config.schema while applying config.file), whereas explicit CLI --schema still exits 2.
+    const contractBothScanJson = run(['scan', 'src/server.js', '--json'], contractDir);
+    assert.strictEqual(contractBothScanJson.status, 0, `${contractBothScanJson.stdout}${contractBothScanJson.stderr}`);
+    assert.deepStrictEqual(JSON.parse(contractBothScanJson.stdout), {
+      ok: true,
+      vars: ['PORT'],
+      unused: [],
+      locations: { PORT: [{ file: 'src/server.js', line: 1 }] },
+    });
+    const contractDirScanJson = run(['scan', '.', '--json'], contractDir);
+    assert.strictEqual(contractDirScanJson.status, 0, `${contractDirScanJson.stdout}${contractDirScanJson.stderr}`);
+
+    for (const explicitSchemaArgs of [
+      ['scan', 'src/server.js', '--schema', 'config/env.schema.js'],
+      ['scan', 'src/server.js', '--schema=config/env.schema.js'],
+    ]) {
+      const explicitScanSchema = run(explicitSchemaArgs, contractDir);
+      assert.strictEqual(explicitScanSchema.status, 2);
+      assert.match(explicitScanSchema.stderr, /flag --schema is not supported for scan/);
+    }
+
+    const contractExampleOk = run(['example', contractDir], contractDir);
+    assert.strictEqual(contractExampleOk.status, 0, `${contractExampleOk.stdout}${contractExampleOk.stderr}`);
+    assert.match(contractExampleOk.stdout, /PORT=3000/);
+    const explicitExampleFile = run(['example', contractDir, '--file', '.env.contract'], contractDir);
+    assert.strictEqual(explicitExampleFile.status, 2);
+    assert.match(explicitExampleFile.stderr, /flag --file is not supported for example/);
+
+    const contractCliOverrideFile = run(['check', 'src/server.js', '--file', '.env.override'], contractDir);
+    assert.strictEqual(contractCliOverrideFile.status, 1);
+    assert.match(contractCliOverrideFile.stdout, /NOT IN SCHEMA: EXTRA_OVERRIDE_KEY/);
+
+    fs.writeFileSync(path.join(contractDir, '.env'), 'PORT=not-a-port\n');
+    const contractValuesSchemaCatch = run(['check', 'src/server.js', '--values', '.env'], contractDir);
+    assert.strictEqual(contractValuesSchemaCatch.status, 1);
+    assert.match(contractValuesSchemaCatch.stdout, /INVALID in \.env: PORT/);
+
+    fs.writeFileSync(path.join(contractDir, '.env.contract'), 'PORT=not-a-port\n');
+    const contractSchemaCatch = run(['check', 'src/server.js'], contractDir);
+    assert.strictEqual(contractSchemaCatch.status, 1);
+    assert.match(contractSchemaCatch.stdout, /INVALID: PORT/);
+
+    const contractCliOverrideSchema = run(['check', 'src/server.js', '--schema', 'override.schema.js'], contractDir);
+    assert.strictEqual(contractCliOverrideSchema.status, 0, `${contractCliOverrideSchema.stdout}${contractCliOverrideSchema.stderr}`);
+
+    // Configured package.json file/schema paths resolve relative to the package that defined them,
+    // never selecting same-named nested files inside a subdirectory.
+    const nestedDecoyDir = mkProject({
+      'package.json': '{"name":"nested-decoy","env-saaf":{"file":".env.contract","schema":"env.schema.js"}}\n',
+      '.env.contract': 'ROOT_CONTRACT_KEY=3000\n',
+      '.env': 'ROOT_CONTRACT_KEY=3000\n',
+      'env.schema.js': "module.exports = { ROOT_CONTRACT_KEY: { type: 'port', required: true } };\n",
+      'sub/.env.contract': 'NESTED_SUB_DECOY_KEY=9999\n',
+      'sub/.env': 'NESTED_SUB_DECOY_KEY=9999\n',
+      'sub/env.schema.js': "module.exports = { NESTED_SUB_DECOY_KEY: { type: 'port', required: true } };\n",
+      'sub/app.js': 'const k = process.env.ROOT_CONTRACT_KEY;\n',
+    });
+    const nestedDirModeOk = run(['check', '.'], nestedDecoyDir);
+    assert.strictEqual(nestedDirModeOk.status, 0, `${nestedDirModeOk.stdout}${nestedDirModeOk.stderr}`);
+    const nestedCheckOk = run(['check', 'sub/app.js'], nestedDecoyDir);
+    assert.strictEqual(nestedCheckOk.status, 0, `${nestedCheckOk.stdout}${nestedCheckOk.stderr}`);
+    assert.match(nestedCheckOk.stdout, /code and \.env\.contract match/);
+    const nestedCheckOutsideOk = run(['check', path.join(nestedDecoyDir, 'sub', 'app.js')], outsideCwd);
+    assert.strictEqual(nestedCheckOutsideOk.status, 0, `${nestedCheckOutsideOk.stdout}${nestedCheckOutsideOk.stderr}`);
+    const nestedScanJson = run(['scan', 'sub/app.js', '--json'], nestedDecoyDir);
+    assert.strictEqual(nestedScanJson.status, 0, `${nestedScanJson.stdout}${nestedScanJson.stderr}`);
+    assert.deepStrictEqual(JSON.parse(nestedScanJson.stdout), {
+      ok: true,
+      vars: ['ROOT_CONTRACT_KEY'],
+      unused: [],
+      locations: { ROOT_CONTRACT_KEY: [{ file: 'sub/app.js', line: 1 }] },
+    });
+    const nestedJsonSchema = run(['check', 'sub/app.js', '--json-schema'], nestedDecoyDir);
+    assert.strictEqual(nestedJsonSchema.status, 0, `${nestedJsonSchema.stdout}${nestedJsonSchema.stderr}`);
+    assert.deepStrictEqual(Object.keys(JSON.parse(nestedJsonSchema.stdout).properties), ['ROOT_CONTRACT_KEY']);
+
+    // Schema-only package config also anchors to the defining package root rather than a nested subdir decoy.
+    const schemaOnlyPkgDir = mkProject({
+      'package.json': '{"name":"schema-only-pkg","env-saaf":{"schema":"env.schema.js"}}\n',
+      '.env.example': 'ROOT_SCHEMA_KEY=3000\n',
+      '.env': 'ROOT_SCHEMA_KEY=3000\n',
+      'env.schema.js': "module.exports = { ROOT_SCHEMA_KEY: { type: 'port', required: true } };\n",
+      'sub/.env.example': 'NESTED_SCHEMA_DECOY=9999\n',
+      'sub/env.schema.js': "module.exports = { NESTED_SCHEMA_DECOY: { type: 'port', required: true } };\n",
+      'sub/app.js': 'const k = process.env.ROOT_SCHEMA_KEY;\n',
+    });
+    const schemaOnlyPkgOk = run(['check', 'sub/app.js'], schemaOnlyPkgDir);
+    assert.strictEqual(schemaOnlyPkgOk.status, 0, `${schemaOnlyPkgOk.stdout}${schemaOnlyPkgOk.stderr}`);
+
+    // An empty env-saaf config object without file/schema defaults still lets an unconfigured subproject resolve its .env.example.
+    const emptyCfgSubDir = mkProject({
+      'package.json': '{"name":"empty-cfg","env-saaf":{}}\n',
+      'sub/.env.example': 'SUB_LOCAL_KEY=1\n',
+      'sub/app.js': 'const k = process.env.SUB_LOCAL_KEY;\n',
+    });
+    const emptyCfgSubOk = run(['check', 'sub/app.js'], emptyCfgSubDir);
+    assert.strictEqual(emptyCfgSubOk.status, 0, `${emptyCfgSubOk.stdout}${emptyCfgSubOk.stderr}`);
+
+    // Subpackage package.json bounds context lookup and does not leak to a parent monorepo root.
+    const monoDir = mkProject({
+      'package.json': '{"name":"mono-root","env-saaf":{"file":".env.root"}}\n',
+      '.env.root': 'PORT=3000\n',
+      '.env.example': 'PORT=3000\n',
+      'packages/web/package.json': '{"name":"web-pkg","env-saaf":{"file":".env.web"}}\n',
+      'packages/web/src/app.js': 'const p = process.env.PORT;\n',
+      'packages/plain/package.json': '{"name":"plain-pkg"}\n',
+      'packages/plain/src/app.js': 'const p = process.env.PORT;\n',
+    });
+    const monoMissingWeb = run(['check', 'packages/web/src/app.js'], monoDir);
+    assert.strictEqual(monoMissingWeb.status, 2);
+    assert.match(monoMissingWeb.stderr, /\.env\.web not found in .*packages[\\/]web/);
+    const monoMissingPlain = run(['check', 'packages/plain/src/app.js'], monoDir);
+    assert.strictEqual(monoMissingPlain.status, 2);
+    assert.match(monoMissingPlain.stderr, /\.env\.example not found in .*packages[\\/]plain/);
+
+    // Config lookup stops at cwd rather than climbing into an unrelated parent package.json.
+    const parentTrapRoot = mkProject({
+      'package.json': '{"name":"parent-trap","env-saaf":{"file":".env.parent-trap"}}\n',
+      'child/.env.example': 'PORT=3000\n',
+      'child/src/app.js': 'const p = process.env.PORT;\n',
+    });
+    const childStoppedAtCwd = run(['check', 'src/app.js'], path.join(parentTrapRoot, 'child'));
+    assert.strictEqual(childStoppedAtCwd.status, 0, `${childStoppedAtCwd.stdout}${childStoppedAtCwd.stderr}`);
+
+    // Malformed package.json in the selected file's project still exits 2.
+    const brokenPkgFileDir = mkProject({
+      'package.json': '{"name":\n',
+      '.env.example': 'PORT=3000\n',
+      'src/app.js': 'const p = process.env.PORT;\n',
+    });
+    const brokenPkgFileRes = run(['check', 'src/app.js'], brokenPkgFileDir);
+    assert.strictEqual(brokenPkgFileRes.status, 2);
+    assert.match(brokenPkgFileRes.stderr, /cannot read project config/);
+
+    // package.json "env-saaf.dir" pointing to a single file preserves the configured path in locations
+    // and resolves configured defaults relative to the package root rather than src/.
+    const cfgFileDir = mkProject({
+      'src/only.js': 'const c = process.env.CFG_KEY;\n',
+      'src/.env.contract': 'NESTED_CFG_DECOY=bad\n',
+      '.env.contract': 'CFG_KEY=ok\n',
+      'package.json': '{"name":"cfg-file","env-saaf":{"dir":"src/only.js","file":".env.contract"}}\n',
+    });
+    const cfgScan = run(['scan', '--json'], cfgFileDir);
+    assert.strictEqual(cfgScan.status, 0, `${cfgScan.stdout}${cfgScan.stderr}`);
+    assert.deepStrictEqual(JSON.parse(cfgScan.stdout), {
+      ok: true,
+      vars: ['CFG_KEY'],
+      unused: [],
+      locations: { CFG_KEY: [{ file: 'src/only.js', line: 1 }] },
+    });
+    const cfgCheck = run(['check'], cfgFileDir);
+    assert.strictEqual(cfgCheck.status, 0, `${cfgCheck.stdout}${cfgCheck.stderr}`);
+    const cfgDirOnly = mkProject({
+      'src/only.js': 'const c = process.env.CFG_KEY;\n',
+      'package.json': '{"name":"cfg-dir-only","env-saaf":{"dir":"src/only.js"}}\n',
+    });
+    const cfgExample = run(['example'], cfgDirOnly);
+    assert.strictEqual(cfgExample.status, 2);
+    assert.match(cfgExample.stderr, /is not a directory/);
+
+    // Symlinked parent segment (src/jump/../app.js -> ../other/sub) stats and reads the same real target
+    // while preserving the supplied location string and ignoring lexical decoy src/app.js.
+    const symProj = mkProject({
+      'src/app.js': 'const bad = process.env.LEXICAL_DECOY_KEY;\n',
+      'src/.env.example': 'LEXICAL_DECOY_KEY=\n',
+      'other/sub/.keep': '',
+      'other/app.js': 'const good = process.env.REAL_SYMLINK_TARGET_KEY;\n',
+      'other/.env.contract': 'REAL_SYMLINK_TARGET_KEY=\n',
+      'other/package.json': '{"name":"other-pkg","env-saaf":{"file":".env.contract"}}\n',
+    });
+    let createdDirSymlink = false;
+    try {
+      fs.symlinkSync(path.join('..', 'other', 'sub'), path.join(symProj, 'src', 'jump'), 'dir');
+      createdDirSymlink = true;
+    } catch {
+      createdDirSymlink = false;
+    }
+    if (createdDirSymlink) {
+      const symScan = run(['scan', 'src/jump/../app.js', '--json'], symProj);
+      assert.strictEqual(symScan.status, 0, `${symScan.stdout}${symScan.stderr}`);
+      assert.deepStrictEqual(JSON.parse(symScan.stdout), {
+        ok: true,
+        vars: ['REAL_SYMLINK_TARGET_KEY'],
+        unused: [],
+        locations: { REAL_SYMLINK_TARGET_KEY: [{ file: 'src/jump/../app.js', line: 1 }] },
+      });
+      const symCheck = run(['check', 'src/jump/../app.js'], symProj);
+      assert.strictEqual(symCheck.status, 0, `${symCheck.stdout}${symCheck.stderr}`);
+    }
+
+    // 4. Every supported code extension is accepted by both scan and check.
+    const extFiles = {};
+    const extNames = ['js', 'cjs', 'mjs', 'ts', 'mts', 'cts', 'tsx', 'jsx', 'vue', 'svelte', 'astro'];
+    for (const ext of extNames) {
+      extFiles[`f.${ext}`] = ext === 'vue' || ext === 'svelte'
+        ? `<script>const v = process.env.EXT_${ext.toUpperCase()};</script>\n`
+        : ext === 'astro'
+          ? `---\nconst v = process.env.EXT_ASTRO;\n---\n`
+          : `const v = process.env.EXT_${ext.toUpperCase()};\n`;
+    }
+    const extDir = mkProject(extFiles);
+    for (const ext of extNames) {
+      const key = `EXT_${ext.toUpperCase()}`;
+      fs.writeFileSync(path.join(extDir, '.env.example'), `${key}=\n`);
+      const s = run(['scan', `f.${ext}`], extDir);
+      assert.strictEqual(s.status, 0, `scan f.${ext}: ${s.stderr}`);
+      assert.strictEqual(s.stdout.trim(), key);
+      const c = run(['check', `f.${ext}`], extDir);
+      assert.strictEqual(c.status, 0, `check f.${ext}: ${c.stdout}${c.stderr}`);
+    }
+
+    // 5. Absent paths, unsupported extensions, unreadable files, --stdin + file, and other commands exit 2.
+    for (const cmdName of ['scan', 'check']) {
+      for (const absent of ['src/missing.js', 'nope.ts']) {
+        const mText = run([cmdName, absent], dir);
+        assert.strictEqual(mText.status, 2, `${cmdName} ${absent}`);
+        assert.strictEqual(mText.stderr.trim(), `env-saaf: ${absent} does not exist`);
+        const mJson = run([cmdName, absent, '--json'], dir);
+        assert.strictEqual(mJson.status, 2);
+        assert.deepStrictEqual(JSON.parse(mJson.stdout), {
+          ok: false,
+          error: `env-saaf: ${absent} does not exist`,
+        });
+      }
+      for (const unsupported of ['README.md', 'notes.txt', '.env.example', 'UPPER.JS']) {
+        const uText = run([cmdName, unsupported], dir);
+        assert.strictEqual(uText.status, 2, `${cmdName} ${unsupported}`);
+        assert.strictEqual(uText.stderr.trim(), `env-saaf: ${unsupported} is not a directory`);
+        const uJson = run([cmdName, unsupported, '--json'], dir);
+        assert.strictEqual(uJson.status, 2);
+        assert.deepStrictEqual(JSON.parse(uJson.stdout), {
+          ok: false,
+          error: `env-saaf: ${unsupported} is not a directory`,
+        });
+      }
+    }
+
+    for (const dirOnlyCmd of [['example', 'src/server.js'], ['init', 'src/server.js'], ['print', 'src/server.js', '--schema', 'env.schema.js']]) {
+      const res = run(dirOnlyCmd, dir);
+      assert.strictEqual(res.status, 2, dirOnlyCmd.join(' '));
+      assert.match(res.stderr, /src\/server\.js is not a directory/);
+    }
+
+    for (const stdinConflict of [['scan', '--stdin', 'src/server.js'], ['scan', 'src/server.js', '--stdin']]) {
+      const res = run(stdinConflict, dir, 'process.env.PORT;\n');
+      assert.strictEqual(res.status, 2);
+      assert.match(res.stderr, /--stdin cannot be combined with a directory argument/);
+    }
+
+    if (process.platform !== 'win32' && process.getuid && process.getuid() !== 0) {
+      const sealed = path.join(dir, 'src', 'sealed.js');
+      fs.writeFileSync(sealed, 'process.env.SEALED;\n');
+      fs.chmodSync(sealed, 0o000);
+      try {
+        for (const cmdName of ['scan', 'check']) {
+          const r = run([cmdName, 'src/sealed.js'], dir);
+          assert.strictEqual(r.status, 2);
+          assert.strictEqual(r.stderr.trim(), 'env-saaf: src/sealed.js is not a directory');
+        }
+      } finally {
+        fs.chmodSync(sealed, 0o600);
+      }
+    }
+
+    // Deterministic cross-platform check for unreadable code files, non-regular entries, stat failures,
+    // symlink parent canonicalization, and non-ENOENT read error propagation.
+    const cliSource = fs.readFileSync(CLI, 'utf8');
+    const stubRealpath = Object.assign((p) => path.resolve(dir, p), {
+      native: (p) => path.resolve(dir, p),
+    });
+    for (const [scenario, fsStub, expectedErr] of [
+      ['unreadable-js', {
+        existsSync: (p) => p === 'src/locked.js',
+        realpathSync: stubRealpath,
+        statSync: () => ({ isDirectory: () => false, isFile: () => true }),
+        openSync: () => { throw Object.assign(new Error('EACCES: permission denied'), { code: 'EACCES' }); },
+        constants: fs.constants,
+      }, 'env-saaf: src/locked.js is not a directory'],
+      ['non-regular-js', {
+        existsSync: (p) => p === 'src/fifo.js',
+        realpathSync: stubRealpath,
+        statSync: () => ({ isDirectory: () => false, isFile: () => false }),
+        openSync: () => 3,
+        closeSync: () => {},
+        constants: fs.constants,
+      }, 'env-saaf: src/fifo.js is not a directory'],
+      ['stat-throws', {
+        existsSync: (p) => p === 'src/vanished.js',
+        realpathSync: stubRealpath,
+        statSync: () => { throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' }); },
+        constants: fs.constants,
+      }, 'env-saaf: src/vanished.js does not exist'],
+    ]) {
+      const targetArg = scenario === 'unreadable-js' ? 'src/locked.js'
+        : scenario === 'non-regular-js' ? 'src/fifo.js' : 'src/vanished.js';
+      for (const cmdName of ['scan', 'check']) {
+        let exitCode = null;
+        const errors = [];
+        const req = (id) => (id === 'node:fs' ? fsStub : id === './index' ? require('./index') : require(id));
+        req.resolve = require.resolve;
+        req.cache = {};
+        try {
+          runInNewContext(cliSource, {
+            require: req,
+            console: { log: () => {}, error: (m) => errors.push(m) },
+            Buffer,
+            URL,
+            setTimeout,
+            clearTimeout,
+            process: {
+              argv: ['node', 'cli.js', cmdName, targetArg],
+              cwd: () => dir,
+              platform: process.platform,
+              exit: (code) => { exitCode = code; throw new Error('__EXIT__'); },
+            },
+          });
+        } catch (e) {
+          if (e.message !== '__EXIT__') throw e;
+        }
+        assert.strictEqual(exitCode, 2, `${scenario} (${cmdName})`);
+        assert.deepStrictEqual(errors, [expectedErr], `${scenario} (${cmdName})`);
+      }
+    }
+
+    // Cross-platform symlink-parent check (verifies realpathSync.native parent resolution even without Windows symlink privilege).
+    {
+      const realSymProj = fs.realpathSync.native(symProj);
+      const realOtherFile = path.join(realSymProj, 'other', 'app.js');
+      const lexicalWrongFile = path.join(realSymProj, 'src', 'app.js');
+      const logs = [];
+      let exitCode = null;
+      const symStub = {
+        ...fs,
+        realpathSync: Object.assign(
+          () => { throw new Error('must use realpathSync.native so symlinked parent .. is not collapsed lexically'); },
+          {
+            native: (p) => (p === 'src/jump/..' || p === 'src\\jump\\..' ? path.join(realSymProj, 'other') : fs.realpathSync.native(p)),
+          },
+        ),
+        readFileSync: (p, enc) => {
+          if (path.resolve(p) === path.resolve(lexicalWrongFile)) {
+            throw new Error('must not read lexical decoy src/app.js');
+          }
+          return fs.readFileSync(p, enc);
+        },
+      };
+      const req = (id) => (id === 'node:fs' ? symStub : id === './index' ? require('./index') : require(id));
+      req.resolve = require.resolve;
+      req.cache = {};
+      try {
+        runInNewContext(cliSource, {
+          require: req,
+          console: { log: (m) => logs.push(m), error: () => {} },
+          Buffer,
+          URL,
+          setTimeout,
+          clearTimeout,
+          process: {
+            argv: ['node', 'cli.js', 'scan', 'src/jump/../app.js', '--json'],
+            cwd: () => symProj,
+            platform: process.platform,
+            exit: (code) => { exitCode = code; throw new Error('__EXIT__'); },
+          },
+        });
+      } catch (e) {
+        if (e.message !== '__EXIT__') throw e;
+      }
+      assert.strictEqual(exitCode, 0);
+      const symParsed = JSON.parse(logs[0]);
+      assert.strictEqual(symParsed.ok, true);
+      assert.deepStrictEqual(symParsed.vars, ['REAL_SYMLINK_TARGET_KEY']);
+      assert.deepStrictEqual(symParsed.unused, []);
+      assert.deepStrictEqual(symParsed.locations, {
+        REAL_SYMLINK_TARGET_KEY: [{ file: 'src/jump/../app.js', line: 1 }],
+      });
+      assert.ok(fs.existsSync(realOtherFile));
+    }
+
+    // Static read race and non-ENOENT watch read failures still propagate rather than being swallowed.
+    {
+      let caughtErr = null;
+      const watchedPaths = [];
+      const makeFailStub = (errCode) => ({
+        ...fs,
+        existsSync: (p) => p === path.join(dir, '.env.example'),
+        realpathSync: stubRealpath,
+        statSync: () => ({ isDirectory: () => false, isFile: () => true }),
+        openSync: () => 3,
+        closeSync: () => {},
+        watch: (p) => { watchedPaths.push(p); return { close: () => {} }; },
+        readdirSync: () => [],
+        readFileSync: () => { throw Object.assign(new Error(`read failed: ${errCode}`), { code: errCode }); },
+      });
+      const reqStatic = (id) => (id === 'node:fs' ? makeFailStub('ENOENT') : id === './index' ? require('./index') : require(id));
+      reqStatic.resolve = require.resolve;
+      reqStatic.cache = {};
+      try {
+        runInNewContext(cliSource, {
+          require: reqStatic,
+          console: { log: () => {}, error: () => {} },
+          Buffer,
+          URL,
+          setTimeout: () => 1,
+          clearTimeout: () => {},
+          process: {
+            argv: ['node', 'cli.js', 'scan', 'src/server.js'],
+            cwd: () => dir,
+            platform: process.platform,
+            on: () => {},
+            exit: (code) => { throw new Error(`unexpected process.exit(${code})`); },
+          },
+        });
+      } catch (e) {
+        caughtErr = e;
+      }
+      assert.ok(caughtErr && caughtErr.code === 'ENOENT', `expected static ENOENT to propagate, got ${caughtErr}`);
+
+      asyncChecks.push((async () => {
+        let watchExit = null;
+        const watchErrors = [];
+        const reqWatch = (id) => (id === 'node:fs' ? makeFailStub('EIO') : id === './index' ? require('./index') : require(id));
+        reqWatch.resolve = require.resolve;
+        reqWatch.cache = {};
+        runInNewContext(cliSource, {
+          require: reqWatch,
+          console: { log: () => {}, error: (m) => watchErrors.push(m) },
+          Buffer,
+          URL,
+          setTimeout: () => 1,
+          clearTimeout: () => {},
+          process: {
+            argv: ['node', 'cli.js', 'scan', 'src/server.js', '--watch'],
+            cwd: () => dir,
+            platform: process.platform,
+            on: () => {},
+            exit: (code) => { watchExit = code; },
+          },
+        });
+        await Promise.resolve();
+        await Promise.resolve();
+        assert.strictEqual(watchExit, 1);
+        assert.ok(watchErrors.some((e) => e && e.code === 'EIO'));
+        assert.ok(watchedPaths.includes(path.join(dir, 'src')));
+      })());
+    }
+
+    // 6. --watch survives temporary removal of a selected single file, reports exit 2 per run,
+    // and recovers when restored, while static missing-file --watch still exits 2 immediately.
+    for (const cmdName of ['scan', 'check']) {
+      const staticWatchMissing = run([cmdName, 'src/missing-watch.js', '--watch'], dir);
+      assert.strictEqual(staticWatchMissing.status, 2);
+      assert.strictEqual(staticWatchMissing.stderr.trim(), 'env-saaf: src/missing-watch.js does not exist');
+    }
+
+    {
+      const { spawn } = require('node:child_process');
+      const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+      const stopWatcher = (child) => new Promise((resolve, reject) => {
+        child.once('exit', (code, signal) => {
+          try {
+            if (process.platform === 'win32') assert.strictEqual(signal, 'SIGINT');
+            else assert.strictEqual(code, 0);
+            resolve();
+          } catch (e) {
+            reject(e);
+          }
+        });
+        child.kill('SIGINT');
+      });
+
+      asyncChecks.push((async () => {
+        const wDir = mkProject({
+          'src/target.js': 'const p = process.env.PORT;\n',
+          'src/sibling.js': 'const s = process.env.SIBLING_NEVER_WATCHED;\n',
+          '.env.example': 'PORT=3000\n',
+        });
+        const targetPath = path.join(wDir, 'src', 'target.js');
+        const child = spawn(process.execPath, [CLI, 'check', 'src/target.js', '--watch'], {
+          cwd: wDir,
+          env: cleanEnv(),
+          stdio: ['ignore', 'pipe', 'pipe'],
+        });
+        let out = '';
+        let exited = null;
+        child.stdout.setEncoding('utf8');
+        child.stderr.setEncoding('utf8');
+        child.stdout.on('data', (d) => { out += d; });
+        child.stderr.on('data', (d) => { out += d; });
+        child.on('exit', (code, signal) => { exited = { code, signal }; });
+        const waitFor = async (pred, what, timeoutMs = 8000) => {
+          const start = Date.now();
+          while (!pred()) {
+            if (Date.now() - start > timeoutMs) throw new Error(`timed out waiting for ${what}; output:\n${out}`);
+            await sleep(50);
+          }
+        };
+        const runCount = () => (out.match(/check finished, exit/g) || []).length;
+
+        try {
+          await waitFor(() => /all clean/.test(out) && /check finished, exit 0/.test(out), 'initial single-file watch pass');
+          assert.strictEqual(runCount(), 1);
+
+          fs.unlinkSync(targetPath);
+          await waitFor(
+            () => /env-saaf: src\/target\.js does not exist/.test(out) && /check finished, exit 2/.test(out) && runCount() >= 2,
+            'missing single-file watch exit 2',
+          );
+          await sleep(250);
+          assert.strictEqual(exited, null, 'watcher must stay alive while selected file is missing');
+
+          const countBeforeRestore = runCount();
+          fs.writeFileSync(targetPath, 'const p = process.env.PORT;\nconst u = process.env.RESTORED_DRIFT;\n');
+          await waitFor(
+            () => /MISSING in \.env\.example: RESTORED_DRIFT/.test(out) && /check finished, exit 1/.test(out) && runCount() > countBeforeRestore,
+            'restored single-file watch drift exit 1',
+          );
+          assert.doesNotMatch(out, /SIBLING_NEVER_WATCHED/);
+
+          const countBeforeClean = runCount();
+          fs.writeFileSync(targetPath, 'const p = process.env.PORT;\n');
+          await waitFor(
+            () => runCount() > countBeforeClean && /check finished, exit 0\s*$/.test(out),
+            'restored single-file watch clean exit 0',
+          );
+        } finally {
+          if (exited === null) await stopWatcher(child);
+        }
+      })());
+
+      asyncChecks.push((async () => {
+        const wDir = mkProject({
+          'src/scan-target.js': 'const p = process.env.PORT;\n',
+        });
+        const targetPath = path.join(wDir, 'src', 'scan-target.js');
+        const child = spawn(process.execPath, [CLI, 'scan', 'src/scan-target.js', '--json', '--watch'], {
+          cwd: wDir,
+          env: cleanEnv(),
+          stdio: ['ignore', 'pipe', 'pipe'],
+        });
+        let stdout = '';
+        let stderr = '';
+        let exited = null;
+        child.stdout.setEncoding('utf8');
+        child.stderr.setEncoding('utf8');
+        child.stdout.on('data', (d) => { stdout += d; });
+        child.stderr.on('data', (d) => { stderr += d; });
+        child.on('exit', (code, signal) => { exited = { code, signal }; });
+        const waitFor = async (pred, what, timeoutMs = 8000) => {
+          const start = Date.now();
+          while (!pred()) {
+            if (Date.now() - start > timeoutMs) throw new Error(`timed out waiting for ${what}; stdout:\n${stdout}\nstderr:\n${stderr}`);
+            await sleep(50);
+          }
+        };
+        const runCount = () => (stderr.match(/scan finished, exit/g) || []).length;
+
+        try {
+          await waitFor(() => /scan finished, exit 0/.test(stderr), 'initial json scan watch pass');
+          fs.unlinkSync(targetPath);
+          await waitFor(
+            () => stdout.includes('"error":"env-saaf: src/scan-target.js does not exist"') && /scan finished, exit 2/.test(stderr),
+            'missing json scan watch exit 2',
+          );
+          await sleep(250);
+          assert.strictEqual(exited, null, 'json scan watcher must stay alive while selected file is missing');
+
+          const countBeforeRestore = runCount();
+          fs.writeFileSync(targetPath, 'const r = process.env.RESTORED_JSON_KEY;\n');
+          await waitFor(
+            () => stdout.includes('"RESTORED_JSON_KEY"') && runCount() > countBeforeRestore,
+            'restored json scan watch pass',
+          );
+          const jsonLines = stdout.trim().split(/\r?\n/).map((line) => JSON.parse(line));
+          assert.deepStrictEqual(jsonLines[jsonLines.length - 1], {
+            ok: true,
+            vars: ['RESTORED_JSON_KEY'],
+            locations: { RESTORED_JSON_KEY: [{ file: 'src/scan-target.js', line: 1 }] },
+          });
+        } finally {
+          if (exited === null) await stopWatcher(child);
+        }
+      })());
+    }
+  }
 } catch (err) {
   cleanup();
   throw err;
