@@ -127,7 +127,7 @@ const KNOWN_RULE_OPTIONS = new Set([
 // Issue #250: option names `validateEnv` accepts — a typo'd option must fail
 // fast instead of running silently as if it was never passed (same class of
 // bug as #218, one layer up: there the rule options, here the options object).
-const KNOWN_VALIDATE_OPTIONS = new Set(['throwOnError', 'strict', 'onWarn', 'formatError']);
+const KNOWN_VALIDATE_OPTIONS = new Set(['throwOnError', 'strict', 'onWarn', 'formatError', 'rules']);
 // `loadEnv` forwards its validateEnv options, plus its own file options.
 const KNOWN_LOAD_ENV_OPTIONS = new Set([
   ...KNOWN_VALIDATE_OPTIONS, 'path', 'paths', 'env', 'override', 'assign',
@@ -244,6 +244,24 @@ function normalizeConflictsWith(conflictsWith) {
     list.push(entry);
   }
   return list;
+}
+
+// Issue #346: `options.rules` accepts a single cross-field hook or an array of
+// hooks. Indexed iteration rejects sparse holes as non-functions.
+function normalizeRules(rules) {
+  if (rules === undefined) return [];
+  if (typeof rules === 'function') return [rules];
+  if (Array.isArray(rules)) {
+    const list = [];
+    for (let i = 0; i < rules.length; i++) {
+      if (typeof rules[i] !== 'function') {
+        throw new TypeError('env-saaf: "rules" option must be a function or an array of functions');
+      }
+      list.push(rules[i]);
+    }
+    return list;
+  }
+  throw new TypeError('env-saaf: "rules" option must be a function or an array of functions');
 }
 
 // Validate the shape of the schema itself, independent of any env values.
@@ -1058,7 +1076,7 @@ function validateEnvCore(schema, env, options, valueSources) {
   // { throwOnError: false }, like schema errors.
   for (const opt of Object.keys(options)) {
     if (!KNOWN_VALIDATE_OPTIONS.has(opt)) {
-      throw new EnvSaafError([`unknown option "${opt}" (validateEnv accepts: throwOnError, strict, onWarn, formatError)`]);
+      throw new EnvSaafError([`unknown option "${opt}" (validateEnv accepts: throwOnError, strict, onWarn, formatError, rules)`]);
     }
   }
   // Reject a malformed schema before looking at any values, so a typo on an
@@ -1074,6 +1092,7 @@ function validateEnvCore(schema, env, options, valueSources) {
   if (options.formatError !== undefined && typeof options.formatError !== 'function') {
     throw new TypeError('env-saaf: "formatError" option must be a function');
   }
+  const rules = normalizeRules(options.rules);
   const warn = options.onWarn || ((msg) => console.warn(msg));
   const setKeys = Object.keys(env).filter((k) => env[k] !== undefined && env[k] !== '');
   if (options.strict) {
@@ -1427,9 +1446,34 @@ function validateEnvCore(schema, env, options, valueSources) {
         + (hint ? ` (did you mean ${hint}? ${where})` : ''), undefined);
     }
   }
+  // Issue #228: re-nest grouped keys (DB_HOST -> { DB: { HOST } }) and freeze.
+  const result = Object.freeze(groupOf.size ? nestGroups(out, groupOf) : out);
+  // Pass 3 (issue #346): run cross-field `rules` only when earlier checks left
+  // no errors, so hooks always inspect a complete coerced result snapshot.
+  if (!errors.length) {
+    for (const rule of rules) {
+      const outcome = rule(result);
+      if (outcome === undefined || outcome === null) continue;
+      if (typeof outcome === 'string') {
+        if (outcome) pushErr(outcome);
+        continue;
+      }
+      if (Array.isArray(outcome)) {
+        for (let i = 0; i < outcome.length; i++) {
+          const item = outcome[i];
+          if (typeof item !== 'string') {
+            throw new TypeError('env-saaf: "rules" hook must return a string, an array of strings, or undefined');
+          }
+          if (item) pushErr(item);
+        }
+        continue;
+      }
+      throw new TypeError('env-saaf: "rules" hook must return a string, an array of strings, or undefined');
+    }
+  }
   // Non-throwing mode lives in the public wrapper below; the core always
   // returns both the values and the errors (issue #55).
-  return { out, errors, groupOf, errorSources };
+  return { out, result, errors, errorSources };
 }
 
 // Issue #231: an opt-in hook may replace the message. It only ever sees an
@@ -1491,14 +1535,12 @@ function nearMissKey(key, candidates) {
 }
 
 function validateEnv(schema, env = process.env, options = {}) {
-  const { out, errors, groupOf } = validateEnvCore(schema, env, options);
-  // Issue #228: re-nest grouped keys (DB_HOST -> { DB: { HOST } }).
-  const result = groupOf.size ? nestGroups(out, groupOf) : out;
-  if (options.throwOnError === false) return { env: Object.freeze(result), errors, details: errorDetails(errors) };
+  const { result, errors } = validateEnvCore(schema, env, options);
+  if (options.throwOnError === false) return { env: result, errors, details: errorDetails(errors) };
   if (errors.length) {
     throw new EnvSaafError(errors, formatErrorMessage(errors, schema, options));
   }
-  return Object.freeze(result);
+  return result;
 }
 
 /**
@@ -1564,7 +1606,7 @@ function* loadEnvSteps(schema, options) {
   // obvious at the call site.
   for (const opt of Object.keys(options)) {
     if (!KNOWN_LOAD_ENV_OPTIONS.has(opt)) {
-      throw new EnvSaafError([`unknown option "${opt}" (loadEnv accepts: path, paths, env, override, assign, throwOnError, strict, onWarn, formatError)`]);
+      throw new EnvSaafError([`unknown option "${opt}" (loadEnv accepts: path, paths, env, override, assign, throwOnError, strict, onWarn, formatError, rules)`]);
     }
   }
   // One file or several: `path` may be a string or an array of strings, or
@@ -1636,7 +1678,7 @@ function* loadEnvSteps(schema, options) {
   // validateEnv directly when you want to collect the errors (issue #55).
   // The core is used directly so `assign` writes the FLAT env names (a group
   // result nested under DB must not be written back as "DB=[object Object]").
-  const { out, errors, groupOf, errorSources } = validateEnvCore(
+  const { out, result, errors, errorSources } = validateEnvCore(
     schema, merged, { ...rest, throwOnError: true }, sources
   );
   if (errors.length) {
@@ -1651,7 +1693,7 @@ function* loadEnvSteps(schema, options) {
       env[key] = (value !== null && typeof value === 'object') ? JSON.stringify(value) : String(value);
     }
   }
-  return Object.freeze(groupOf.size ? nestGroups(out, groupOf) : out);
+  return result;
 }
 
 /**

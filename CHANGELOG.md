@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Added: `options.rules` on `validateEnv`, `loadEnv`, and `loadEnvAsync` for
+  schema-level cross-field validation hooks. Accepts a function or array of
+  functions receiving the frozen coerced result object and returning an error
+  string, an array of error strings, or nothing; runs only when earlier checks
+  produced a complete error-free snapshot and aggregates errors into
+  `EnvSaafError`, `details`, and `{ throwOnError: false }` results (fixes #346).
+
 - Added: with `--schema`, `check` also diffs the schema against
   `.env.example` in both directions — `NOT DOCUMENTED` for schema keys missing
   from the example and `NOT IN SCHEMA` for example keys the schema does not

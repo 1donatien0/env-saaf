@@ -241,7 +241,21 @@ export interface FormatErrorContext {
   readonly keys: readonly string[];
 }
 
-export interface ValidateOptions {
+type ValidationRuleInput<S extends EnvSchema> = string extends keyof S
+  ? Record<string, any>
+  : Readonly<EnvResult<S>>;
+
+/**
+ * Schema-level cross-field validation hook (issue #346). Receives the frozen,
+ * coerced result object when earlier checks produced no errors, and returns an
+ * error string, a list of error strings, or nothing (`undefined`, `null`, `''`,
+ * `[]`).
+ */
+export type ValidationRule<S extends EnvSchema = EnvSchema> = (
+  env: ValidationRuleInput<S>
+) => string | readonly string[] | void | null | undefined;
+
+export interface ValidateOptions<S extends EnvSchema = EnvSchema> {
   /** Report variables that are set but not in the schema (default false). */
   strict?: boolean;
   /**
@@ -265,6 +279,15 @@ export interface ValidateOptions {
    * (no error is thrown, and `errors` stays raw) or for malformed schemas.
    */
   formatError?: (errors: readonly string[], context: FormatErrorContext) => string;
+  /**
+   * Optional cross-field validation hook or list of hooks (issue #346).
+   * Runs only when earlier checks (`strict`, per-key coercion and constraints,
+   * `conflictsWith`, and `requiredIf`) produced no errors, so hooks always
+   * inspect a complete, frozen `EnvResult<S>` snapshot with coerced values.
+   * Return a non-empty string or an array of strings to report validation
+   * errors, or nothing (`undefined`, `null`, `''`, `[]`) to pass.
+   */
+  rules?: ValidationRule<S> | readonly ValidationRule<S>[];
 }
 
 /** The result of `validateEnv(..., { throwOnError: false })`. */
@@ -285,10 +308,10 @@ export interface ValidateResult<S extends EnvSchema> {
  * `DB_HOST`). Independent of any env values, so it can run at startup.
  */
 export function validateSchema(schema: EnvSchema): void;
-export function validateEnv<S extends EnvSchema>(schema: S, env: Record<string, string | undefined> | undefined, options: ValidateOptions & { throwOnError: false }): ValidateResult<S>;
-export function validateEnv<S extends EnvSchema>(schema: S, env?: Record<string, string | undefined>, options?: ValidateOptions): EnvResult<S>;
+export function validateEnv<S extends EnvSchema>(schema: S, env: Record<string, string | undefined> | undefined, options: ValidateOptions<S> & { throwOnError: false }): ValidateResult<S>;
+export function validateEnv<S extends EnvSchema>(schema: S, env?: Record<string, string | undefined>, options?: ValidateOptions<S>): EnvResult<S>;
 
-export interface LoadEnvOptions {
+export interface LoadEnvOptions<S extends EnvSchema = EnvSchema> {
   /** One file, or several files in order (later files win). */
   path?: string | string[];
   /** Alias for passing several files at once. */
@@ -302,10 +325,12 @@ export interface LoadEnvOptions {
   onWarn?: (message: string) => void;
   /** Passed through to validateEnv (custom `EnvSaafError` message). */
   formatError?: (errors: readonly string[], context: FormatErrorContext) => string;
+  /** Passed through to validateEnv (schema-level cross-field validation rules). */
+  rules?: ValidationRule<S> | readonly ValidationRule<S>[];
 }
 
-export function loadEnv<S extends EnvSchema>(schema: S, options?: LoadEnvOptions): EnvResult<S>;
-export function loadEnvAsync<S extends EnvSchema>(schema: S, options?: LoadEnvOptions): Promise<EnvResult<S>>;
+export function loadEnv<S extends EnvSchema>(schema: S, options?: LoadEnvOptions<S>): EnvResult<S>;
+export function loadEnvAsync<S extends EnvSchema>(schema: S, options?: LoadEnvOptions<S>): Promise<EnvResult<S>>;
 /**
  * Parse `.env` text into `{ KEY: value }`, handling quotes, `export `, inline
  * comments, multiline quoted values, and static `${VAR}` parameter expansion

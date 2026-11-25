@@ -59,7 +59,8 @@ const env = validateEnv({
    8. **`validate(value, env)`** receives the coerced value.
    9. **`transform(value)`** runs only for a supplied value, never a default; its result is re-checked against the declared `type`.
 5. **`conflictsWith` and `requiredIf`** run in a second pass over all keys, after every value has been coerced and defaulted, so declaration order never matters.
-6. The result is **re-nested** for groups and **frozen**, then returned or thrown as one `EnvSaafError`.
+6. The result is **re-nested** for groups and **frozen**.
+7. **`options.rules`** (when given) runs if all earlier steps produced no errors, receiving that complete frozen result and appending any returned error strings before `validateEnv` / `loadEnv` returns or throws one `EnvSaafError`.
 
 The order explains the three surprises people hit most:
 
@@ -151,6 +152,41 @@ const env = validateEnv({
 - The check is symmetric even when declared on only one key, and reciprocal declarations (`A` naming `B` and `B` naming `A`) report a single conflict error rather than a duplicate.
 - Inside grouped schemas, `conflictsWith` uses full flattened env names (`DB_HOST`, `DATABASE_URL`).
 - `validateSchema` rejects a `conflictsWith` that names an undeclared key, the key itself, or an empty/non-string entry.
+
+### Cross-field validation rules (`options.rules`)
+
+For invariants that span several coerced keys, pass a function (or an array of functions) via `options.rules` in `validateEnv`, `loadEnv`, or `loadEnvAsync`:
+
+```js
+const { validateEnv } = require('env-saaf');
+
+const env = validateEnv(
+  {
+    CACHE_TTL:       { type: 'duration', default: '5m' },
+    SESSION_TTL:     { type: 'duration', default: '30m' },
+    WORKERS:         { type: 'int', default: 4 },
+    QUEUE_DEPTH:     { type: 'int', default: 10 },
+    MAX_CONNECTIONS: { type: 'int', default: 50 },
+    SENTRY_DSN:      { type: 'url' },
+    LOG_FILE:        { type: 'string' },
+  },
+  process.env,
+  {
+    rules: [
+      (cfg) => (cfg.CACHE_TTL >= cfg.SESSION_TTL ? 'CACHE_TTL must be smaller than SESSION_TTL' : undefined),
+      (cfg) => (!cfg.SENTRY_DSN && !cfg.LOG_FILE ? 'At least one of SENTRY_DSN, LOG_FILE must be set' : undefined),
+      (cfg) => (cfg.WORKERS * cfg.QUEUE_DEPTH > cfg.MAX_CONNECTIONS
+        ? 'WORKERS * QUEUE_DEPTH must not exceed MAX_CONNECTIONS'
+        : undefined),
+    ],
+  },
+);
+```
+
+- Each hook receives the frozen, coerced result object (including `default` values, resolved `aliases`, post-`transform` values, and nested `group` objects).
+- Return a non-empty error string, an array of error strings, or nothing (`undefined`, `null`, `''`, or `[]`) when the check passes. Multiple hooks all run in order and aggregate every returned error.
+- **Incomplete-snapshot rule:** `options.rules` runs only when all earlier steps (`strict`, per-key coercion and bounds, `conflictsWith`, and `requiredIf`) produced zero errors. If any key already failed, hooks are skipped so they never inspect a partial environment or emit cascading secondary errors.
+- Returned errors join the normal error list in `EnvSaafError.errors`, `error.details` (`{ key: '', message }`, or `{ key, message }` when prefixed with `KEY: `), `formatError`, and `{ throwOnError: false }` results. Rule messages are added verbatim, so name the keys involved rather than echoing secret values.
 
 ### Non-throwing mode — collect errors instead of throwing
 
@@ -1075,7 +1111,7 @@ The same message shape appears for a misspelled call option:
 
 ```
 Invalid environment variables:
-  - unknown option "throwOnErr" (validateEnv accepts: throwOnError, strict, onWarn, formatError)
+  - unknown option "throwOnErr" (validateEnv accepts: throwOnError, strict, onWarn, formatError, rules)
 ```
 
 Fix the spelling. `validateSchema(schema)` runs the same check without an environment, so a typo fails in a test rather than at boot.
@@ -1189,7 +1225,7 @@ A comparison is not a migration path, though — see [Migrating to env-saaf](#mi
 
 ### When another library is a better fit
 
-- **Validating HTTP requests, API payloads, forms, or nested JSON:** `env-saaf` only validates flat environment variable maps and has no nested object schemas or cross-field conditional rules. Use **zod** (especially in TypeScript) or **joi** when you need general data validation.
+- **Validating HTTP requests, API payloads, forms, or nested JSON:** `env-saaf` validates environment variable maps rather than arbitrary nested JSON payloads. Use **zod** (especially in TypeScript) or **joi** when you need general data validation.
 - **You already use `zod` or `joi` in the project:** If you already depend on one of them for request/data validation and do not need `env-saaf`'s `.env` parser or `scan`/`check` CLI, validating `process.env` with your existing library avoids adding another tool.
 - **Richer TypeScript inference or non-Node runtimes:** Use **zod** for full static type inference (nested shapes, discriminated unions, narrowed literal enums) or browser/edge runtime support (`env-saaf` uses Node built-ins `node:fs`, `node:net`, and `node:path`). Use **envalid** if you want env-only validation with `devDefault`, proxy-guarded env access, or literal-union inference from `choices`.
 
