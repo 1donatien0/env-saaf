@@ -8,6 +8,10 @@
   bounds, key-named diagnostics and `{ throwOnError: false }` parity, and
   `sensitive` raw-value masking (fixes #419).
 
+- Fixed: duration arrays accept human duration strings or numeric milliseconds for `min` / `max` and enforce the bounds on each item. Generated examples respect the bounds, and JSON Schema exports them on `items` (fixes #427).
+
+- Fixed: `duration` choices accept human duration strings such as `15m`, comparing them as milliseconds alongside numeric choices. Array items and JSON Schema enums use the same normalization, without modifying the supplied schema (fixes #426).
+
 - Fixed: `int` and `number` values now accept underscore separators (`1_000`, `1_000.5`), matching JavaScript numeric literals — a single underscore between digits only; leading, trailing or doubled underscores are still rejected with the usual messages (fixes #412).
 
 - Fixed: `generateExample` formats bounded `duration` values as human durations (`2h`, `1h30m`, `45s`) instead of raw milliseconds, so the generated example reads like the unbounded `15m` and still validates against its own schema (fixes #414).

@@ -262,6 +262,10 @@ validateEnv({ PORT: { type: 'port' } }, {}, { formatError: () => 1 });
 // Duration string bounds retain the numeric result type.
 const boundedDuration = validateEnv({ TIMEOUT: { type: 'duration', min: '30s', max: '1h30m', required: true } });
 const boundedMilliseconds: number = boundedDuration.TIMEOUT;
+const boundedDurations = validateEnv({ TS: { type: 'array', of: 'duration', min: '2h', max: 86400000, required: true } });
+const durationItems: number[] = boundedDurations.TS;
+// @ts-expect-error — duration items are coerced to milliseconds.
+const durationStrings: string[] = boundedDurations.TS;
 
 // Non-string inputs retain their types, including optional and mixed values.
 const keptNumber: number = maskValue(42);

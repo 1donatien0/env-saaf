@@ -133,10 +133,22 @@ const KNOWN_LOAD_ENV_OPTIONS = new Set([
   ...KNOWN_VALIDATE_OPTIONS, 'path', 'paths', 'env', 'override', 'assign',
 ]);
 
+function usesDurationBounds(rule) {
+  return rule.type === 'duration' || (rule.type === 'array' && rule.of === 'duration');
+}
+
 // Only string duration bounds need coercion; numeric bounds retain their contract.
 function numericBound(key, rule, value) {
-  return rule.type === 'duration' && typeof value === 'string'
+  return usesDurationBounds(rule) && typeof value === 'string'
     ? coerce(key, value, 'duration') : value;
+}
+
+// Compare and export duration choices in milliseconds without changing the schema.
+function normalizedChoices(key, rule) {
+  const type = rule.type === 'array' ? rule.of : rule.type;
+  return type === 'duration'
+    ? rule.choices.map(choice => typeof choice === 'string' ? coerce(key, choice, type) : choice)
+    : rule.choices;
 }
 
 // Issue #228: a group rule nests a sub-schema under one prefix, so
@@ -389,7 +401,7 @@ function validateSchemaRules(schema, warn, patterns = new Map(), prefix = '', an
           errors.push(`${key}: "min" must not exceed "max"`);
         }
       }
-    } else if (effectiveType === 'duration') {
+    } else if (usesDurationBounds(rule)) {
       const parsed = {};
       for (const opt of ['min', 'max']) {
         if (rule[opt] === undefined) continue;
@@ -445,6 +457,7 @@ function validateSchemaRules(schema, warn, patterns = new Map(), prefix = '', an
     // can never match any real input: the string '1' for an `int`, 'true' for
     // a `boolean`. Coerce each choice the way a value is coerced and reject
     // the ones that fail or come back different from what was written.
+    // Duration strings are allowed: normalize them to milliseconds when comparing.
     // Issue #320: on an `array` rule choices apply to each coerced item, so
     // validate them against `of` (the item type) instead of 'array'.
     // String-typed rules are fine. A `date` value is always a freshly parsed
@@ -459,7 +472,10 @@ function validateSchemaRules(schema, warn, patterns = new Map(), prefix = '', an
         for (const choice of rule.choices) {
           if (typeof choice === 'number' && !Number.isFinite(choice)) continue;
           let matches = false;
-          try { matches = coerce(key, choice, choiceType) === choice; }
+          try {
+            const value = coerce(key, choice, choiceType);
+            matches = value === choice || (choiceType === 'duration' && typeof choice === 'string');
+          }
           catch { /* not a value this type can produce */ }
           if (!matches) {
             const shownChoice = typeof choice === 'string' ? JSON.stringify(choice) : String(choice);
@@ -1232,19 +1248,25 @@ function validateEnvCore(schema, env, options, valueSources) {
     const type = rule.type || 'string';
     try {
       const val = coerce(key, raw, type, rule.trim !== false, rule.protocols, sensitive, rule.of, rule.separator, rule.skipEmpty === true);
-      // min/max: allowed range for numeric values (number, int, port, duration).
+      // min/max: allowed range for numeric values and duration-array items.
       // Runs right after coercion, before choices/pattern/transform; the
       // error names the allowed range. min alone or max alone both work.
-      if (typeof val === 'number' && (rule.min !== undefined || rule.max !== undefined)) {
+      const durationItems = type === 'array' && rule.of === 'duration';
+      if ((typeof val === 'number' || durationItems) && (rule.min !== undefined || rule.max !== undefined)) {
         const lo = rule.min !== undefined ? numericBound(key, rule, rule.min) : -Infinity;
         const hi = rule.max !== undefined ? numericBound(key, rule, rule.max) : Infinity;
-        if (val < lo || val > hi) {
+        const badIndex = durationItems ? val.findIndex(item => item < lo || item > hi) : -1;
+        if (durationItems ? badIndex !== -1 : val < lo || val > hi) {
           // Bare numbers and numeric strings are milliseconds; retain explicit duration units.
-          const min = type === 'duration' && Number.isFinite(Number(rule.min)) ? `${lo}ms` : rule.min;
-          const max = type === 'duration' && Number.isFinite(Number(rule.max)) ? `${hi}ms` : rule.max;
+          const duration = usesDurationBounds(rule);
+          const min = duration && Number.isFinite(Number(rule.min)) ? `${lo}ms` : rule.min;
+          const max = duration && Number.isFinite(Number(rule.max)) ? `${hi}ms` : rule.max;
           const range = rule.min !== undefined && rule.max !== undefined ? `${min}–${max}`
             : rule.min !== undefined ? `at least ${min}` : `at most ${max}`;
-          pushErr(`${key}: expected ${type === 'duration' ? 'a duration' : 'a number'} ${range}, got "${shown}"`, valueSource());
+          const item = durationItems ? `${val[badIndex]}ms` : shown;
+          const shownItem = durationItems && sensitive ? maskValue(item) : item;
+          const name = durationItems ? `${key}[${badIndex}]` : key;
+          pushErr(`${name}: expected ${duration ? 'a duration' : 'a number'} ${range}, got "${shownItem}"`, valueSource());
           continue;
         }
       }
@@ -1338,18 +1360,19 @@ function validateEnvCore(schema, env, options, valueSources) {
         }
       }
       if (rule.choices) {
+        const choices = normalizedChoices(key, rule);
         if (Array.isArray(val)) {
           // Issue #320: `choices` on an array rule constrains each coerced
           // item, not the array itself. Name the key, the bad item and its
           // index so the failure is actionable (as `unique: true` does).
-          const badIndex = val.findIndex(item => !rule.choices.includes(item));
+          const badIndex = val.findIndex(item => !choices.includes(item));
           if (badIndex !== -1) {
             const item = val[badIndex];
             const shownItem = sensitive ? maskValue(safeString(item)) : safeString(item);
             pushErr(`${key}: expected one of [${rule.choices.join(', ')}], got "${shownItem}" (item ${badIndex})`, valueSource());
             continue;
           }
-        } else if (!rule.choices.includes(val)) {
+        } else if (!choices.includes(val)) {
           pushErr(`${key}: expected one of [${rule.choices.join(', ')}], got "${shown}"`, valueSource());
           continue;
         }
@@ -2396,9 +2419,90 @@ const ARRAY_ITEM_EXAMPLES = {
   file: ['./a.json', './b.json', './c.json'],
 };
 
+// A duration token must preserve its value after both coercion and splitting.
+// Try equivalent units when the usual spelling contains the array separator.
+function durationArrayToken(value, separator, preferred) {
+  const forms = [formatDuration(value), decimalExample(value)];
+  // Preserve a choice's spelling when it safely round-trips through the separator.
+  if (typeof preferred === 'string') forms.unshift(preferred);
+  for (const [unit, size] of DURATION_UNITS) {
+    const quantity = decimalExample(value / size);
+    if (Number(quantity) * size === value) forms.push(quantity + unit);
+  }
+  for (const form of forms) {
+    for (const token of [form, form.toUpperCase()]) {
+      // Checking the delimiter too catches overlaps such as '1m' + 'mm'.
+      const parts = (token + separator).split(separator);
+      if (parts.length === 2 && parts[0] === token && parts[1] === '' &&
+          coerce('placeholder', token, 'duration') === value) return token;
+    }
+  }
+}
+
+function durationArrayPlaceholder(rule, separator) {
+  const min = Math.max(0, numericBound('placeholder', rule, rule.min) ?? 0);
+  const max = numericBound('placeholder', rule, rule.max) ?? Infinity;
+  // As with other placeholders, contradictory constraints remain best-effort.
+  if (min > max) return;
+  const hasChoices = Array.isArray(rule.choices) && rule.choices.length > 0;
+  let count = hasChoices ? rule.choices.length : Math.max(3, rule.minItems || 0);
+  count = Math.max(count, rule.minItems || 0);
+  if (rule.maxItems !== undefined) count = Math.min(count, Math.max(1, rule.maxItems));
+  const examples = new Map();
+  const add = (value, preferred) => {
+    if (!Number.isFinite(value) || value < min || value > max || examples.has(value)) return;
+    const token = durationArrayToken(value, separator, preferred);
+    if (token !== undefined) examples.set(value, token);
+  };
+  if (hasChoices) {
+    const choices = normalizedChoices('placeholder', rule);
+    for (let i = 0; i < choices.length; i++) add(choices[i], rule.choices[i]);
+    count = Math.max(examples.size, rule.minItems || 0);
+    if (rule.maxItems !== undefined) count = Math.min(count, Math.max(1, rule.maxItems));
+  } else {
+    // Keep useful existing examples. Whole milliseconds also work with a '.'
+    // separator, provided the interval contains enough of them.
+    const whole = Math.floor(max) - Math.ceil(min) >= (rule.unique ? (rule.minItems || 1) - 1 : 0);
+    const start = whole ? Math.ceil(min) : min;
+    const end = whole ? Math.floor(max) : max;
+    for (const token of ARRAY_ITEM_EXAMPLES.duration) {
+      add(Math.min(end, Math.max(start, coerce('placeholder', token, 'duration'))));
+    }
+    if (!examples.size || (rule.unique && examples.size < count)) {
+      const stop = Number.isFinite(end) ? end
+        : Math.min(Number.MAX_VALUE, start + Math.max(1, start) * (count - 1));
+      for (let i = 0; i < count; i++) {
+        const value = Math.min(stop, start + (stop - start) * (i / Math.max(1, count - 1)));
+        add(whole ? Math.floor(value) : value);
+      }
+      // At a floating-point binade boundary, interpolation can round together
+      // despite enough distinct values. Inspect only the required next doubles.
+      if (rule.unique && examples.size < (rule.minItems || 0)) {
+        const bits = new DataView(new ArrayBuffer(8));
+        let value = start;
+        for (let i = 0; i < rule.minItems && value <= stop; i++) {
+          add(value);
+          bits.setFloat64(0, value);
+          bits.setBigUint64(0, bits.getBigUint64(0) + 1n);
+          value = bits.getFloat64(0);
+        }
+      }
+    }
+  }
+  if (!examples.size) return;
+  if (rule.unique) count = Math.min(count, examples.size);
+  const tokens = hasChoices ? [...examples.values()]
+    : [...examples].sort(([a], [b]) => a - b).map(([, token]) => token);
+  return Array.from({ length: count }, (_, i) => tokens[i % tokens.length]).join(separator);
+}
+
 /** Placeholder for an `array` rule: example items of the `of` type (or the rule's `choices`), sized to fit minItems/maxItems, joined by `separator`. */
 function arrayPlaceholder(rule) {
   const separator = rule.separator || ',';
+  if (rule.of === 'duration' && (rule.min !== undefined || rule.max !== undefined)) {
+    const bounded = durationArrayPlaceholder(rule, separator);
+    if (bounded !== undefined) return bounded;
+  }
   const hasChoices = Array.isArray(rule.choices) && rule.choices.length > 0;
   let examples;
   if (hasChoices) {
@@ -2515,16 +2619,24 @@ function boundedStringPlaceholder(type, example, rule, limit) {
   }
 }
 
+// Duration and integer parsers reject exponent notation, including for tiny/huge examples.
+function decimalExample(value) {
+  return value.toLocaleString('en-US', { useGrouping: false, maximumSignificantDigits: 21 });
+}
+
+const DURATION_UNITS = [['w', 604800000], ['d', 86400000], ['h', 3600000], ['m', 60000], ['s', 1000], ['ms', 1]];
+
 /** Format milliseconds back as a human duration ('2h', '1h30m', '45s',
  * '500ms') for generated examples (issue #414): an example file is read
  * by humans, so a bounded duration should read like the `15m` the
  * unbounded case already emits, never a bare millisecond count. Only
  * whole milliseconds decompose exactly. */
 function formatDuration(ms) {
-  const units = [['w', 604800000], ['d', 86400000], ['h', 3600000], ['m', 60000], ['s', 1000], ['ms', 1]];
+  // Fractions and huge values need their exact decimal spelling to round-trip.
+  if (!Number.isSafeInteger(ms)) return decimalExample(ms);
   let rest = ms;
   let out = '';
-  for (const [unit, size] of units) {
+  for (const [unit, size] of DURATION_UNITS) {
     const n = Math.floor(rest / size);
     if (n > 0) { out += n + unit; rest -= n * size; }
   }
@@ -2591,9 +2703,9 @@ function scalarPlaceholder(rule, stringGrowth) {
   // Only whole milliseconds up to the safe-integer limit decompose
   // exactly — beyond that the re-parsed sum drifts by a few ms, so huge
   // or fractional values keep the numeric spelling (which round-trips).
-  if (type === 'duration' && Number.isSafeInteger(value)) return formatDuration(value);
+  if (type === 'duration') return formatDuration(value);
   // int/port and duration reject exponent notation, even for a valid value.
-  return value.toLocaleString('en-US', { useGrouping: false, maximumSignificantDigits: 21 });
+  return decimalExample(value);
 }
 
 function deprecationNotice(option) {
@@ -2767,6 +2879,10 @@ function jsonSchemaForRule(key, rule, required) {
   if (type === 'array') {
     const itemType = rule.of ?? 'string';
     const items = jsonSchemaForScalar(itemType, rule.protocols);
+    if (itemType === 'duration') {
+      if (rule.min !== undefined) items.minimum = Math.max(0, numericBound('schema', rule, rule.min));
+      if (rule.max !== undefined) items.maximum = numericBound('schema', rule, rule.max);
+    }
     if (itemType === 'string') items.minLength = 1;
     property = { type: 'array', items };
     if (rule.minItems !== undefined) property.minItems = rule.minItems;
@@ -2795,7 +2911,7 @@ function jsonSchemaForRule(key, rule, required) {
     property.pattern = typeof pattern === 'string' ? pattern : pattern.source;
   }
   if (Array.isArray(rule.choices)) {
-    const choices = [...new Set(rule.choices.filter(isJsonPrimitive))];
+    const choices = [...new Set(normalizedChoices(key, rule).filter(isJsonPrimitive))];
     if (choices.length) {
       // Issue #320: on an array rule the enum constrains each item. A
       // top-level enum would mean the whole array must equal a single choice.

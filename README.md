@@ -479,6 +479,12 @@ setTimeout(refresh, env.CACHE_TTL); // 900000 for '15m'
 
 `duration` parses a human duration (`500ms`, `30s`, `15m`, `2h`, `1d`, `1w`) into a number of milliseconds; compound values sum their parts, so `1h30m` is 5,400,000 ms and `2d12h` is 216,000,000 ms (every part needs a unit — `1h30` is rejected); a bare number is already milliseconds, so `'250'` and `250` both mean 250 ms. Each unit may appear at most once in a compound value; repeats such as `1h1h` or `1s500ms250ms` are rejected. Units are case-insensitive and decimals are allowed (`1.5h` is 5,400,000 ms); `w` is a week of 7 days, so `1w` is 604,800,000 ms. Unknown units (`15min`, `15sec`), negatives and malformed values are rejected with an error naming the key. A number given as a `default` is taken as milliseconds, and `min`/`max` work on the millisecond result like on any other number. `generateExample` suggests `15m` for the type.
 
+Duration `choices` may mix human duration strings and numeric milliseconds. For
+example, `{ type: 'duration', choices: ['15m', 1800000] }` accepts `15m` or `30m`
+and rejects `45m`. Equivalent spellings such as `900s` also match `15m`. This
+works for `array` rules with `of: 'duration'` too. JSON Schema exports the choices
+as millisecond numbers, while generated examples keep the original spelling.
+
 ### `host` type — a hostname or IP address, no scheme or port
 
 ```js
@@ -511,6 +517,8 @@ const env = validateEnv({
 ```
 
 `array` splits a delimited string on `separator` (default `','`), trims each item by default (`trim: false` keeps surrounding whitespace), and coerces every item with `of` (default `'string'`; any built-in scalar type is supported, and nested `'array'` is rejected up front). Empty items (such as `a,,b` or a trailing comma `a,b,`) are rejected rather than silently dropped — set `skipEmpty: true` to drop them instead, after which `minItems`/`maxItems` and `unique` count the remaining items — and any invalid item reports its 0-based index and offending value (`PORTS[1]: expected a port (0-65535, e.g. 3000), got "abc"` — masked when `sensitive: true`). `minItems` and `maxItems` bound the number of items (both non-negative integers, `minItems` must not exceed `maxItems`); a violation reports the key with the count and the bound (`TAGS: expected at least 2 items, got 1`), and the bounds apply to `default` values too. `unique: true` rejects repeated items, compared after item coercion (`'1,01'` for `of: 'int'` counts as a duplicate); a violation reports the key and the duplicated item (`TAGS: duplicate value "a" (unique: true)`), and it applies to `default` values too. Malformed values and use on a non-`array` rule are rejected up front, and `toJsonSchema` renders `unique: true` as `uniqueItems: true`. An already-parsed array may be passed as a `default` (including `[]`), and `generateExample` suggests three example items of the `of` type joined by `separator` — `a,b,c` for the default `string`, but `1,2,3` for `int`, `3000,8080,5432` for `port`, and so on — so the generated value itself validates against the rule; the comment above each array key names the item type (`# type: array, items: int`). In TypeScript the element type is inferred from `of`.
+
+For `of: 'duration'`, `min` and `max` bound each item in milliseconds and also accept human duration strings, just like scalar durations. For example, `{ type: 'array', of: 'duration', min: '2h', max: '1d' }` accepts `'3h,4h'` and rejects `'3h,25h'`. Both bounds are inclusive and apply to defaults too; `minItems` / `maxItems` still control the number of items. Generated duration-array examples respect the item bounds, and `toJsonSchema` exports them as `items.minimum` / `items.maximum` in milliseconds.
 
 ### `trim: false` — keep whitespace when it matters
 
@@ -1069,8 +1077,8 @@ console.log(JSON.stringify(schema, null, 2));
 Numeric, length and item bounds become JSON Schema keywords. Arrays describe
 their coerced items, durations are milliseconds, and dates serialize to ISO
 date-time strings (the schema also accepts the `date` format). The `json` type
-allows any JSON shape. JSON-compatible `choices` become `enum` values without
-re-coercion. Representable defaults are exported in coerced form as annotations;
+allows any JSON shape. JSON-compatible `choices` become `enum` values; duration
+strings are normalized to milliseconds. Representable defaults are exported in coerced form as annotations;
 JSON Schema does not fill in missing values. Avoid putting secrets in schema
 defaults, choices or condition values that will be shared.
 

@@ -30,13 +30,16 @@ export interface EnvRule {
   deprecated?: boolean | string;
   /** A default may be an already-parsed object or array for `type: 'json'` or `type: 'array'`, or a `Date` for `type: 'date'`. */
   default?: string | number | boolean | Date | Record<string, unknown> | unknown[] | null;
+  /** Allowed coerced values. Duration choices may also be human duration strings (e.g. '15m'), including for array items. */
   choices?: Array<string | number | boolean>;
   /**
    * Allowed range for numeric values (`number`, `int`, `port`, `duration`).
    * `min` alone or `max` alone both work; out-of-range values are
    * rejected with an error naming the allowed range. Duration bounds may also
    * be human duration strings (e.g. `min: '30s'`, `max: '1h30m'`), parsed
-   * with the same rules as duration values. For `date` rules the
+   * with the same rules as duration values. On `array` rules with
+   * `of: 'duration'`, these inclusive bounds apply to each item, including defaults.
+   * Use `minItems` / `maxItems` for the array's length. For `date` rules the
    * bounds are ISO date (or datetime) strings instead, e.g. `min: '2026-01-01'`,
    * compared chronologically against the parsed value; a number is rejected
    * up front for `date` rules.
