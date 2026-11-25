@@ -633,7 +633,7 @@ function isSecretExampleValue(raw, depth = 0) {
         }
         return false;
       }
-    } catch { /* not valid JSON — fall through */ }
+    } catch { /* Fall through when the value is not valid JSON. */ }
   }
   if (!/\s/.test(v) && /^[a-z][a-z0-9+.-]*:\/\//i.test(v)) {
     const authority = /^[a-z][a-z0-9+.-]*:\/\/([^/?#@]*)@([^/?#]+)/i.exec(v);
