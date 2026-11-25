@@ -655,7 +655,9 @@ function isSecretExampleValue(raw, depth = 0) {
         if (seg && isSecretToken(seg)) return true;
       }
     } catch { /* non-WHATWG URL placeholder already checked above */ }
-    return false;
+    // A delimited list that merely starts with a URL (`https://a.test,<token>`)
+    // still needs each element inspected, so only a delimiter-free URL ends here.
+    if (!/[,;|]/.test(v)) return false;
   }
   if (!/\s/.test(v) && /[,;|]/.test(v)) {
     const parts = v.split(/[,;|]/);
@@ -665,18 +667,51 @@ function isSecretExampleValue(raw, depth = 0) {
 }
 
 // Parse the template without consulting ambient process.env so `${API_KEY}` in
-// .env.example never inherits a live credential from the caller's shell.
-function readExampleValuesIsolated(filePath, fallbackEntries) {
+// .env.example never inherits a live credential from the caller's shell. When a
+// key uses `${VAR:?msg}` or `${VAR?msg}` for an ambient-only variable, stub
+// only that variable with a benign placeholder so literal secrets on the same
+// or later lines are still inspected and ambient values are never reused.
+function readExampleValuesIsolated(filePath) {
   const input = fs.readFileSync(filePath, 'utf8');
+  const stubEnv = Object.create(null);
   const savedEnv = process.env;
-  process.env = {};
+  process.env = stubEnv;
   try {
-    return parseEnvFile(input);
-  } catch {
-    return fallbackEntries;
+    for (;;) {
+      try {
+        return parseEnvFile(input);
+      } catch (err) {
+        const m = /^env-saaf: [^\s]+ at line \d+: ([A-Za-z_][A-Za-z0-9_]*): /.exec(err && err.message);
+        if (!m || stubEnv[m[1]] !== undefined) return {};
+        stubEnv[m[1]] = 'placeholder';
+      }
+    }
   } finally {
     process.env = savedEnv;
   }
+}
+
+function collectTaintedSchemaKeys(schema, secretSet, prefix = '', out = new Set(secretSet)) {
+  for (const [key, rule] of Object.entries(schema)) {
+    if (rule && typeof rule === 'object' && rule.schema && typeof rule.prefix === 'string') {
+      collectTaintedSchemaKeys(rule.schema, secretSet, prefix + rule.prefix, out);
+    } else if (rule && Array.isArray(rule.aliases) && rule.aliases.some(a => secretSet.has(a))) {
+      out.add(prefix + key);
+    }
+  }
+  return out;
+}
+
+function isTaintedValidationError(message, taintedKeys) {
+  const m = /^([^\s:]+): /.exec(message);
+  if (!m) return true;
+  const subject = m[1];
+  for (const k of taintedKeys) {
+    if (subject === k || subject.startsWith(`${k}[`) || subject.startsWith(`${k}.`)) {
+      return true;
+    }
+  }
+  return false;
 }
 
 function readEnvFile(filePath) {
@@ -987,9 +1022,8 @@ async function runCheck() {
     }
     fatalExit(2);
   }
-  const exampleEntries = readEnvFile(examplePath);
-  const documented = Object.keys(exampleEntries);
-  const isolatedExample = readExampleValuesIsolated(examplePath, exampleEntries);
+  const documented = Object.keys(readEnvFile(examplePath));
+  const isolatedExample = readExampleValuesIsolated(examplePath);
   const secrets = documented.filter(k => isSecretExampleValue(isolatedExample[k]));
   const used = scanFile !== null
     ? scanCode(readScanFile())
@@ -1037,26 +1071,23 @@ async function runCheck() {
       targetName = valuesOpt;
     }
     if (targetName) {
-      const values = readEnvFile(path.join(dir, targetName));
+      const targetPath = path.join(dir, targetName);
+      const rawValues = readEnvFile(targetPath);
+      const validatingTemplate = path.resolve(targetPath) === path.resolve(examplePath);
+      const secretSet = validatingTemplate && secrets.length > 0 ? new Set(secrets) : null;
+      const values = secretSet
+        ? Object.fromEntries(Object.entries(rawValues).filter(([k]) => !secretSet.has(k)))
+        : rawValues;
       try {
         validateEnv(schema, values);
       } catch (e) {
-        if (e instanceof EnvSaafError) {
-          invalid = e.errors;
-          // Never echo a secret-flagged template value through schema errors when validating --file itself.
-          if (targetName === fileOpt && secrets.length > 0) {
-            const secretValues = secrets.map(k => isolatedExample[k]).filter(Boolean);
-            invalid = invalid.map((msg) => {
-              let safe = msg;
-              for (const rawSecret of secretValues) {
-                if (safe.includes(rawSecret)) safe = safe.split(rawSecret).join('[REDACTED]');
-              }
-              return safe;
-            });
-          }
-        } else {
-          throw e;
-        }
+        if (!(e instanceof EnvSaafError)) throw e;
+        // When validating the template itself, secret-flagged keys (and the
+        // schema keys that alias them) are already reported by name under
+        // SECRET, so drop their schema errors: those messages echo the value.
+        invalid = secretSet
+          ? e.errors.filter(msg => !isTaintedValidationError(msg, collectTaintedSchemaKeys(schema, secretSet)))
+          : e.errors;
       }
     }
   }
