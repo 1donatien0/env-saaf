@@ -7355,6 +7355,249 @@ assert.deepStrictEqual(scanCode("const env = process.env; env['DB.PORT']; env[`M
   assert.strictEqual(grouped.properties.DB.properties.HOST.description, 'Database host');
 }
 
-Promise.all([watchModeTest, watchModeErrorPathTest, watchModeEsmSchemaTest, loadEnvAsyncTest, formatErrorThrowingHookTest])
+
+// Issue #350: loadEnv errors name the winning file a bad value came from.
+const loadEnvSourceErrorsTest = (async () => {
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const path = require('node:path');
+  const { loadEnv, loadEnvAsync, validateEnv, EnvSaafError, maskValue } = require('./index');
+
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'env-saaf-350-'));
+  const baseFile = path.join(dir, '.env');
+  const localFile = path.join(dir, '.env.local');
+  const secretRaw = 'file-secret-not-uuid';
+  fs.writeFileSync(baseFile, `PORT=not-a-port\nSECRET=${secretRaw}\nHOST=from-base\n`);
+  fs.writeFileSync(localFile, 'PORT=also-bad\nHOST=from-local\n');
+
+  const schema = {
+    PORT: { type: 'port', required: true },
+    SECRET: { type: 'uuid', required: true, sensitive: true },
+    HOST: { type: 'host', required: true },
+  };
+
+  // 1. Single-file sync: name that file in the message and details.source.
+  try {
+    loadEnv(schema, { path: baseFile, env: {} });
+    assert.fail('expected single-file loadEnv to throw');
+  } catch (err) {
+    assert.ok(err instanceof EnvSaafError);
+    assert.strictEqual(
+      err.errors[0],
+      `PORT (from ${baseFile}): expected a port (0-65535, e.g. 3000), got "not-a-port"`
+    );
+    assert.deepStrictEqual(err.details[0], {
+      key: 'PORT',
+      message: 'expected a port (0-65535, e.g. 3000), got "not-a-port"',
+      source: baseFile,
+    });
+    assert.strictEqual(
+      err.errors[1],
+      `SECRET (from ${baseFile}): expected a valid UUID (e.g. 550e8400-e29b-41d4-a716-446655440000), got "${maskValue(secretRaw)}"`
+    );
+    assert.ok(!err.errors[1].includes(secretRaw));
+    assert.strictEqual(err.details[1].source, baseFile);
+    assert.strictEqual(err.details[1].message.includes(maskValue(secretRaw)), true);
+  }
+
+  // 2. Layered paths: report the winning (later) file for overridden keys,
+  // and the earlier file for keys only set there.
+  try {
+    loadEnv(schema, { paths: [baseFile, localFile], env: {} });
+    assert.fail('expected layered loadEnv to throw');
+  } catch (err) {
+    assert.ok(err instanceof EnvSaafError);
+    assert.strictEqual(
+      err.errors[0],
+      `PORT (from ${localFile}): expected a port (0-65535, e.g. 3000), got "also-bad"`
+    );
+    assert.strictEqual(err.details[0].source, localFile);
+    assert.strictEqual(err.details[1].source, baseFile);
+    assert.ok(err.errors[1].includes(`(from ${baseFile})`));
+  }
+
+  // 3. Ambient env wins by default: keep today's message, no source field.
+  const ambientMsg = (() => {
+    try {
+      validateEnv({ PORT: { type: 'port', required: true } }, { PORT: 'nope' });
+    } catch (err) {
+      return { errors: err.errors.slice(), details: err.details.map(d => ({ ...d })) };
+    }
+    assert.fail('expected validateEnv control to throw');
+  })();
+  try {
+    loadEnv({ PORT: { type: 'port', required: true } }, { path: baseFile, env: { PORT: 'nope' } });
+    assert.fail('expected ambient-winning loadEnv to throw');
+  } catch (err) {
+    assert.deepStrictEqual(err.errors, ambientMsg.errors);
+    assert.deepStrictEqual(err.details, ambientMsg.details);
+    assert.strictEqual(err.details[0].source, undefined);
+    assert.ok(!err.errors[0].includes('(from '));
+  }
+
+  // 4. override: true - file wins even when ambient is set, so name the file.
+  try {
+    loadEnv(
+      { PORT: { type: 'port', required: true } },
+      { path: baseFile, env: { PORT: 'nope' }, override: true }
+    );
+    assert.fail('expected override loadEnv to throw');
+  } catch (err) {
+    assert.strictEqual(
+      err.errors[0],
+      `PORT (from ${baseFile}): expected a port (0-65535, e.g. 3000), got "not-a-port"`
+    );
+    assert.strictEqual(err.details[0].source, baseFile);
+  }
+
+  // 5. validateEnv called directly stays byte-identical (no source).
+  try {
+    validateEnv({ PORT: { type: 'port', required: true } }, { PORT: 'nope' });
+    assert.fail('expected direct validateEnv to throw');
+  } catch (err) {
+    assert.deepStrictEqual(err.errors, ambientMsg.errors);
+    assert.deepStrictEqual(err.details, ambientMsg.details);
+    assert.ok(!('source' in err.details[0]));
+  }
+
+  // 6. Async load path matches sync for layered winning-file reporting.
+  try {
+    await loadEnvAsync(schema, { paths: [baseFile, localFile], env: {} });
+    assert.fail('expected layered loadEnvAsync to throw');
+  } catch (err) {
+    assert.ok(err instanceof EnvSaafError);
+    assert.strictEqual(
+      err.errors[0],
+      `PORT (from ${localFile}): expected a port (0-65535, e.g. 3000), got "also-bad"`
+    );
+    assert.strictEqual(err.details[0].source, localFile);
+    assert.strictEqual(err.details[1].source, baseFile);
+  }
+
+  // 7. Missing required key that is absent from files: still no source.
+  try {
+    loadEnv(
+      { MISSING: { type: 'string', required: true } },
+      { path: baseFile, env: {} }
+    );
+    assert.fail('expected missing-key loadEnv to throw');
+  } catch (err) {
+    assert.strictEqual(err.errors[0], 'MISSING: missing required variable');
+    assert.deepStrictEqual(err.details[0], { key: 'MISSING', message: 'missing required variable' });
+  }
+
+  // 8. Alias origin: file supplies OLD_PORT for PORT - PORT carries that source.
+  const aliasFile = path.join(dir, 'alias.env');
+  fs.writeFileSync(aliasFile, 'OLD_PORT=not-a-port\n');
+  const expectAlias = (err) => {
+    assert.ok(err instanceof EnvSaafError);
+    assert.strictEqual(
+      err.errors[0],
+      `PORT (from ${aliasFile}): expected a port (0-65535, e.g. 3000), got "not-a-port"`
+    );
+    assert.deepStrictEqual(err.details[0], {
+      key: 'PORT',
+      message: 'expected a port (0-65535, e.g. 3000), got "not-a-port"',
+      source: aliasFile,
+    });
+  };
+  try {
+    loadEnv(
+      { PORT: { type: 'port', required: true, aliases: ['OLD_PORT'] } },
+      { path: aliasFile, env: {}, onWarn: () => {} }
+    );
+    assert.fail('expected alias-from-file loadEnv to throw');
+  } catch (err) { expectAlias(err); }
+  try {
+    await loadEnvAsync(
+      { PORT: { type: 'port', required: true, aliases: ['OLD_PORT'] } },
+      { path: aliasFile, env: {}, onWarn: () => {} }
+    );
+    assert.fail('expected alias-from-file loadEnvAsync to throw');
+  } catch (err) { expectAlias(err); }
+
+  // 9. Empty file PORT falls back to ambient alias - do not blame the file.
+  const emptyFile = path.join(dir, 'empty.env');
+  fs.writeFileSync(emptyFile, 'PORT=\n');
+  const expectNoSource = (err, got) => {
+    assert.strictEqual(
+      err.errors[0],
+      `PORT: expected a port (0-65535, e.g. 3000), got "${got}"`
+    );
+    assert.deepStrictEqual(err.details[0], {
+      key: 'PORT',
+      message: `expected a port (0-65535, e.g. 3000), got "${got}"`,
+    });
+    assert.ok(!('source' in err.details[0]));
+  };
+  try {
+    loadEnv(
+      { PORT: { type: 'port', required: true, aliases: ['OLD_PORT'] } },
+      { path: emptyFile, env: { OLD_PORT: 'also-bad' }, onWarn: () => {} }
+    );
+    assert.fail('expected empty-file ambient alias loadEnv to throw');
+  } catch (err) { expectNoSource(err, 'also-bad'); }
+  try {
+    await loadEnvAsync(
+      { PORT: { type: 'port', required: true, aliases: ['OLD_PORT'] } },
+      { path: emptyFile, env: { OLD_PORT: 'also-bad' }, onWarn: () => {} }
+    );
+    assert.fail('expected empty-file ambient alias loadEnvAsync to throw');
+  } catch (err) { expectNoSource(err, 'also-bad'); }
+
+  // 10. Empty file PORT falls back to a bad schema default - no file source.
+  try {
+    loadEnv(
+      { PORT: { type: 'port', default: 'not-a-port' } },
+      { path: emptyFile, env: {} }
+    );
+    assert.fail('expected empty-file schema default loadEnv to throw');
+  } catch (err) { expectNoSource(err, 'not-a-port'); }
+  try {
+    await loadEnvAsync(
+      { PORT: { type: 'port', default: 'not-a-port' } },
+      { path: emptyFile, env: {} }
+    );
+    assert.fail('expected empty-file schema default loadEnvAsync to throw');
+  } catch (err) { expectNoSource(err, 'not-a-port'); }
+
+  // 11. Punctuation path: details.source is the original path, not a parse of
+  // the printable message (paths may contain `): `). Use a portable fake
+  // relative name that Node can create on this OS.
+  const weirdName = 'synthetic-path): suffix';
+  const weirdFile = path.join(dir, weirdName);
+  let weirdCreated = false;
+  try {
+    fs.writeFileSync(weirdFile, 'PORT=bad\n');
+    weirdCreated = true;
+  } catch (_) {
+    // Some hosts reject `:` in names; Linux CI creates this fixture.
+  }
+  if (weirdCreated) {
+    const expectWeird = (err) => {
+      assert.strictEqual(
+        err.errors[0],
+        `PORT (from ${weirdFile}): expected a port (0-65535, e.g. 3000), got "bad"`
+      );
+      assert.strictEqual(err.details[0].source, weirdFile);
+      assert.strictEqual(
+        err.details[0].message,
+        'expected a port (0-65535, e.g. 3000), got "bad"'
+      );
+    };
+    try {
+      loadEnv({ PORT: { type: 'port', required: true } }, { path: weirdFile, env: {} });
+      assert.fail('expected punctuation-path loadEnv to throw');
+    } catch (err) { expectWeird(err); }
+    try {
+      await loadEnvAsync({ PORT: { type: 'port', required: true } }, { path: weirdFile, env: {} });
+      assert.fail('expected punctuation-path loadEnvAsync to throw');
+    } catch (err) { expectWeird(err); }
+  }
+
+  fs.rmSync(dir, { recursive: true, force: true });
+})();
+
+Promise.all([watchModeTest, watchModeErrorPathTest, watchModeEsmSchemaTest, loadEnvAsyncTest, formatErrorThrowingHookTest, loadEnvSourceErrorsTest])
   .then(() => console.log('env-saaf v1.5.0: all tests passed'))
   .catch((err) => { console.error(err); process.exit(1); });

@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Added: `loadEnv` / `loadEnvAsync` validation errors name the winning `.env`
+  file a bad value came from (`PORT (from .env.local): ...`) and set
+  `error.details[].source` to that path. Ambient-winning and `validateEnv`-only
+  messages stay unchanged; sensitive masking is preserved (fixes #350).
+
 - Added: an optional `description` string on any rule. It is validated, leads
   the generated `.env.example` comment and becomes the JSON Schema property
   `description`; it never affects validation (fixes #343).

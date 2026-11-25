@@ -176,6 +176,8 @@ In TypeScript, `{ throwOnError: false }` (not `formatError`) narrows the return 
 
 For programmatic handling — mapping failures back to form fields, translating messages, grouping by key — both the thrown error and the non-throwing result expose a `details` array of `{ key, message }` objects. It mirrors `errors` one-to-one, in the same order, without changing the printable strings or `error.message`. `key` is the full env name (including the group prefix for grouped keys, e.g. `DB_HOST`), and `message` is the text with the `key: ` prefix removed. Errors that are not tied to a key (such as an unknown option) use `key: ''` and keep the full text as `message`.
 
+When a bad value came from a file loaded by `loadEnv` / `loadEnvAsync`, the printable string names that file (`PORT (from .env.local): ...`) and the matching `details` entry includes a `source` field with the same path. Layered `paths` report the file that supplied the winning value; ambient environment values keep today's message shape with no `source`. `validateEnv` called on its own is unchanged.
+
 ```js
 try {
   validateEnv(schema, process.env);

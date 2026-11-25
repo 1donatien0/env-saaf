@@ -25,12 +25,40 @@ function errorDetails(errors) {
   });
 }
 
+// Issue #350: build printable `KEY (from path): ...` strings and structured
+// `details` from the original path in parallel. Never recover `source` by
+// parsing the printable form - paths may contain `): ` and must round-trip.
+function applyFileSources(errors, errorSources) {
+  const reported = [];
+  const details = [];
+  for (let i = 0; i < errors.length; i++) {
+    const message = errors[i];
+    const source = errorSources[i];
+    const match = /^([^\s:]+): ([\s\S]*)$/.exec(message);
+    if (!match) {
+      reported.push(message);
+      details.push({ key: '', message });
+      continue;
+    }
+    const key = match[1];
+    const body = match[2];
+    if (source) {
+      reported.push(`${key} (from ${source}): ${body}`);
+      details.push({ key, message: body, source });
+    } else {
+      reported.push(message);
+      details.push({ key, message: body });
+    }
+  }
+  return { reported, details };
+}
+
 class EnvSaafError extends Error {
-  constructor(errors, message) {
+  constructor(errors, message, details) {
     super(typeof message === 'string' ? message : 'Invalid environment variables:\n' + errors.map(e => `  - ${e}`).join('\n'));
     this.name = 'EnvSaafError';
     this.errors = errors;
-    this.details = errorDetails(errors);
+    this.details = details !== undefined ? details : errorDetails(errors);
   }
 }
 
@@ -943,8 +971,16 @@ function maskSensitiveMessage(msg, raw, val, sensitive) {
 // Core of validateEnv: validates the schema (issue #228 groups included),
 // coerces every env value against the FLATTENED rules, and returns the flat
 // result plus the group map so callers can re-nest. Never throws EnvSaafError.
-function validateEnvCore(schema, env, options) {
-  const out = {}; const errors = [];
+// Issue #350: optional `valueSources` maps each env key whose merged value
+// came from a loaded file to that path. Errors carry a parallel `errorSources`
+// entry for the *selected* input origin (alias winner, not merely the schema
+// key); schema defaults and ambient-only values leave it unset.
+function validateEnvCore(schema, env, options, valueSources) {
+  const out = {}; const errors = []; const errorSources = [];
+  const pushErr = (message, source) => {
+    errors.push(message);
+    errorSources.push(source);
+  };
   // Issue #250: reject a typo'd option up front, before looking at any values
   // — the check runs even when the variable is absent and even with
   // { throwOnError: false }, like schema errors.
@@ -978,7 +1014,9 @@ function validateEnvCore(schema, env, options) {
       if (!Object.prototype.hasOwnProperty.call(flat, key)
         && !knownAliases.has(key)
         && env[key] !== undefined && env[key] !== '') {
-        errors.push(`${key}: set but not in schema (strict mode)`);
+        const src = valueSources && Object.prototype.hasOwnProperty.call(valueSources, key)
+          ? valueSources[key] : undefined;
+        pushErr(`${key}: set but not in schema (strict mode)`, src);
       }
     }
   }
@@ -989,6 +1027,10 @@ function validateEnvCore(schema, env, options) {
     // (exactly like `undefined`) — it must not reach coercion and become
     // the literal string "null".
     if (raw === null) raw = undefined;
+    // Issue #350: remember which env key supplied the selected input (canonical
+    // or alias winner). Schema defaults clear this so a bad default is never
+    // blamed on a file that only contributed an empty placeholder.
+    let originKey;
     // Issue #53: aliases let a renamed variable migrate without a flag day.
     // If the canonical key is set it wins and any populated alias is noted
     // as ignored; if unset, the first populated alias supplies the value
@@ -1004,18 +1046,31 @@ function validateEnvCore(schema, env, options) {
         }
       }
       if (raw !== undefined && raw !== '') {
+        originKey = key;
         for (const alias of populatedAliases) {
           warn(`env-saaf: ${alias} is ignored because ${key} is set`);
         }
       } else if (populatedAliases.length) {
         const [winner, ...ignored] = populatedAliases;
+        originKey = winner;
         raw = env[winner];
         warn(`env-saaf: ${winner} is deprecated; use ${key} instead`);
         for (const alias of ignored) {
           warn(`env-saaf: ${alias} is ignored because ${winner} is set; use ${key} instead`);
         }
+      } else if (raw === '') {
+        originKey = key;
       }
+    } else if (raw !== undefined && raw !== '') {
+      originKey = key;
+    } else if (raw === '') {
+      originKey = key;
     }
+    const valueSource = () => (
+      valueSources && originKey !== undefined
+        && Object.prototype.hasOwnProperty.call(valueSources, originKey)
+        ? valueSources[originKey] : undefined
+    );
     // Issue #276: an object (or an array on a scalar rule) in a hand-built
     // env object can never be an env value — fail with an error naming the
     // key instead of coercing it to "[object Object]" or "". Two types are
@@ -1025,7 +1080,7 @@ function validateEnvCore(schema, env, options) {
       const ruleType = rule.type || 'string';
       const parsedOk = ruleType === 'json' || (ruleType === 'array' && Array.isArray(raw));
       if (!parsedOk) {
-        errors.push(`${key}: expected a string value, got ${Array.isArray(raw) ? 'an array' : 'an object'}`);
+        pushErr(`${key}: expected a string value, got ${Array.isArray(raw) ? 'an array' : 'an object'}`, valueSource());
         continue;
       }
     }
@@ -1034,9 +1089,12 @@ function validateEnvCore(schema, env, options) {
     // still wins; transform is skipped for defaults (see below).
     let usingDefault = false;
     if (raw === undefined || raw === '') {
-      if (rule.default !== undefined) { raw = rule.default; usingDefault = true; }
-      else {
-        if (rule.required) errors.push(`${key}: missing required variable`);
+      if (rule.default !== undefined) {
+        raw = rule.default;
+        usingDefault = true;
+        originKey = undefined;
+      } else {
+        if (rule.required) pushErr(`${key}: missing required variable`, valueSource());
         else if (rule.requiredIf !== undefined) pendingRequiredIf.push([key, rule.requiredIf]);
         continue;
       }
@@ -1058,7 +1116,7 @@ function validateEnvCore(schema, env, options) {
           const max = type === 'duration' && Number.isFinite(Number(rule.max)) ? `${hi}ms` : rule.max;
           const range = rule.min !== undefined && rule.max !== undefined ? `${min}–${max}`
             : rule.min !== undefined ? `at least ${min}` : `at most ${max}`;
-          errors.push(`${key}: expected ${type === 'duration' ? 'a duration' : 'a number'} ${range}, got "${shown}"`);
+          pushErr(`${key}: expected ${type === 'duration' ? 'a duration' : 'a number'} ${range}, got "${shown}"`, valueSource());
           continue;
         }
       }
@@ -1080,7 +1138,7 @@ function validateEnvCore(schema, env, options) {
           const boundText = (b) => (b instanceof Date ? b.toISOString().slice(0, 10) : String(b));
           const range = lo !== null && hi !== null ? `between ${boundText(rule.min)} and ${boundText(rule.max)}`
             : lo !== null ? `on or after ${boundText(rule.min)}` : `on or before ${boundText(rule.max)}`;
-          errors.push(`${key}: expected a date ${range}, got "${shown}"`);
+          pushErr(`${key}: expected a date ${range}, got "${shown}"`, valueSource());
           continue;
         }
       }
@@ -1094,7 +1152,7 @@ function validateEnvCore(schema, env, options) {
         if (val.length < lo || val.length > hi) {
           const range = rule.minItems !== undefined && rule.maxItems !== undefined ? `${rule.minItems}–${rule.maxItems} items`
             : rule.minItems !== undefined ? `at least ${rule.minItems} items` : `at most ${rule.maxItems} items`;
-          errors.push(`${key}: expected ${range}, got ${val.length}`);
+          pushErr(`${key}: expected ${range}, got ${val.length}`, valueSource());
           continue;
         }
       }
@@ -1115,7 +1173,7 @@ function validateEnvCore(schema, env, options) {
         }
         if (found) {
           const shownDup = sensitive ? maskValue(safeString(duplicate)) : safeString(duplicate);
-          errors.push(`${key}: duplicate value "${shownDup}" (unique: true)`);
+          pushErr(`${key}: duplicate value "${shownDup}" (unique: true)`, valueSource());
           continue;
         }
       }
@@ -1126,7 +1184,7 @@ function validateEnvCore(schema, env, options) {
       if (typeof val === 'string' && (rule.minLength !== undefined || rule.maxLength !== undefined)) {
         if ((rule.minLength !== undefined && (!Number.isInteger(rule.minLength) || rule.minLength < 0))
           || (rule.maxLength !== undefined && (!Number.isInteger(rule.maxLength) || rule.maxLength < 0))) {
-          errors.push(`${key}: "minLength" and "maxLength" must be non-negative integers`);
+          pushErr(`${key}: "minLength" and "maxLength" must be non-negative integers`, valueSource());
           continue;
         }
         const lo = rule.minLength !== undefined ? rule.minLength : 0;
@@ -1134,7 +1192,7 @@ function validateEnvCore(schema, env, options) {
         if (val.length < lo || val.length > hi) {
           const range = rule.minLength !== undefined && rule.maxLength !== undefined ? `${rule.minLength}–${rule.maxLength} characters`
             : rule.minLength !== undefined ? `at least ${rule.minLength} characters` : `at most ${rule.maxLength} characters`;
-          errors.push(`${key}: expected a string ${range} long, got "${shown}"`);
+          pushErr(`${key}: expected a string ${range} long, got "${shown}"`, valueSource());
           continue;
         }
       }
@@ -1143,11 +1201,11 @@ function validateEnvCore(schema, env, options) {
       // the error names the expected length.
       if (rule.type === 'hex' && rule.length !== undefined) {
         if (!Number.isInteger(rule.length) || rule.length < 0) {
-          errors.push(`${key}: "length" must be a non-negative integer`);
+          pushErr(`${key}: "length" must be a non-negative integer`, valueSource());
           continue;
         }
         if (typeof val === 'string' && val.length !== rule.length) {
-          errors.push(`${key}: expected a string ${rule.length} characters long, got "${shown}"`);
+          pushErr(`${key}: expected a string ${rule.length} characters long, got "${shown}"`, valueSource());
           continue;
         }
       }
@@ -1160,11 +1218,11 @@ function validateEnvCore(schema, env, options) {
           if (badIndex !== -1) {
             const item = val[badIndex];
             const shownItem = sensitive ? maskValue(safeString(item)) : safeString(item);
-            errors.push(`${key}: expected one of [${rule.choices.join(', ')}], got "${shownItem}" (item ${badIndex})`);
+            pushErr(`${key}: expected one of [${rule.choices.join(', ')}], got "${shownItem}" (item ${badIndex})`, valueSource());
             continue;
           }
         } else if (!rule.choices.includes(val)) {
-          errors.push(`${key}: expected one of [${rule.choices.join(', ')}], got "${shown}"`);
+          pushErr(`${key}: expected one of [${rule.choices.join(', ')}], got "${shown}"`, valueSource());
           continue;
         }
       }
@@ -1173,9 +1231,10 @@ function validateEnvCore(schema, env, options) {
       const source = rule.pattern;
       if (source !== undefined) {
         const pattern = compilePattern(source, key, errors, patterns);
+        while (errorSources.length < errors.length) errorSources.push(valueSource());
         if (pattern === undefined) continue;
         if (typeof val === 'string' && !pattern.test(val)) {
-          errors.push(`${key}: expected to match ${pattern}, got "${shown}"`);
+          pushErr(`${key}: expected to match ${pattern}, got "${shown}"`, valueSource());
           continue;
         }
       }
@@ -1191,16 +1250,16 @@ function validateEnvCore(schema, env, options) {
         } catch (e) {
           const rawMsg = e && typeof e === 'object' && 'message' in e ? String(e.message) : String(e);
           const msg = maskSensitiveMessage(rawMsg, raw, val, sensitive);
-          errors.push(`${key}: validation failed: ${msg}`);
+          pushErr(`${key}: validation failed: ${msg}`, valueSource());
           continue;
         }
         if (valid === false) {
-          errors.push(`${key}: failed custom validation, got "${shown}"`);
+          pushErr(`${key}: failed custom validation, got "${shown}"`, valueSource());
           continue;
         }
         if (typeof valid === 'string' && valid.length > 0) {
           const msg = maskSensitiveMessage(valid, raw, val, sensitive);
-          errors.push(`${key}: ${msg}`);
+          pushErr(`${key}: ${msg}`, valueSource());
           continue;
         }
       }
@@ -1211,7 +1270,7 @@ function validateEnvCore(schema, env, options) {
       // Its return value is verified against the declared `type` (issue #210).
       if (rule.transform !== undefined && !usingDefault) {
         if (typeof rule.transform !== 'function') {
-          errors.push(`${key}: "transform" must be a function`);
+          pushErr(`${key}: "transform" must be a function`, valueSource());
           continue;
         }
         let transformed;
@@ -1219,14 +1278,14 @@ function validateEnvCore(schema, env, options) {
           transformed = rule.transform(val);
         } catch (e) {
           const msg = maskSensitiveMessage(e.message, raw, val, sensitive);
-          errors.push(`${key}: transform failed: ${msg}`);
+          pushErr(`${key}: transform failed: ${msg}`, valueSource());
           continue;
         }
         out[key] = verifyTransformedType(key, transformed, type, rule.protocols, sensitive, rule.of);
         continue;
       }
       out[key] = val;
-    } catch (e) { errors.push(e.message); }
+    } catch (e) { pushErr(e.message, valueSource()); }
   }
   // Pass 2 (issue #51): evaluate `requiredIf` after Pass 1 has coerced values
   // and applied defaults across the whole schema, so declaration order never
@@ -1248,11 +1307,11 @@ function validateEnvCore(schema, env, options) {
     const matched = Object.prototype.hasOwnProperty.call(cond, 'in') && cond.in !== undefined
       ? cond.in.includes(refVal)
       : refVal === cond.equals;
-    if (matched) errors.push(`${key}: missing required variable`);
+    if (matched) pushErr(`${key}: missing required variable`, undefined);
   }
   // Non-throwing mode lives in the public wrapper below; the core always
   // returns both the values and the errors (issue #55).
-  return { out, errors, groupOf };
+  return { out, errors, groupOf, errorSources };
 }
 
 // Issue #231: an opt-in hook may replace the message. It only ever sees an
@@ -1363,6 +1422,9 @@ function* loadEnvSteps(schema, options) {
   const explicitSinglePath = pathsOpt === undefined && pathOpt !== undefined && !Array.isArray(pathOpt) ? pathOpt : undefined;
   const fileList = pathsOpt !== undefined ? pathsOpt : (pathOpt !== undefined ? (Array.isArray(pathOpt) ? pathOpt : [pathOpt]) : ['.env']);
   const fileEnv = {};
+  // Issue #350: remember the winning file path for each key under layering
+  // (later files overwrite earlier ones). Ambient precedence is applied below.
+  const fileSources = Object.create(null);
   let foundAny = false;
   for (const filePath of fileList) {
     let fileText;
@@ -1382,7 +1444,11 @@ function* loadEnvSteps(schema, options) {
       continue;
     }
     foundAny = true;
-    Object.assign(fileEnv, parseEnvFile(fileText));
+    const parsed = parseEnvFile(fileText);
+    for (const key of Object.keys(parsed)) {
+      fileEnv[key] = parsed[key];
+      fileSources[key] = filePath;
+    }
   }
   if (!foundAny) {
     // Issue #228: count required rules across groups too, under their full
@@ -1396,14 +1462,30 @@ function* loadEnvSteps(schema, options) {
     }
   }
   const merged = override ? { ...env, ...fileEnv } : { ...fileEnv, ...env };
+  // Issue #350: report a source only for values that actually came from a
+  // file after ambient/override precedence. Ambient-winning keys keep today's
+  // message shape with no `source` field.
+  const sources = Object.create(null);
+  for (const key of Object.keys(fileSources)) {
+    if (override) {
+      sources[key] = fileSources[key];
+    } else if (!Object.prototype.hasOwnProperty.call(env, key)) {
+      sources[key] = fileSources[key];
+    }
+  }
   // loadEnv always throws. It can write into the caller's env with
   // `assign: true`, and a half-applied write is not a degraded mode anyone
   // asked for, so `throwOnError: false` is accepted but ignored here — call
   // validateEnv directly when you want to collect the errors (issue #55).
   // The core is used directly so `assign` writes the FLAT env names (a group
   // result nested under DB must not be written back as "DB=[object Object]").
-  const { out, errors, groupOf } = validateEnvCore(schema, merged, { ...rest, throwOnError: true });
-  if (errors.length) throw new EnvSaafError(errors, formatErrorMessage(errors, schema, rest));
+  const { out, errors, groupOf, errorSources } = validateEnvCore(
+    schema, merged, { ...rest, throwOnError: true }, sources
+  );
+  if (errors.length) {
+    const { reported, details } = applyFileSources(errors, errorSources);
+    throw new EnvSaafError(reported, formatErrorMessage(reported, schema, rest), details);
+  }
   if (assign) {
     for (const [key, value] of Object.entries(out)) {
       // A json value (or a transform returning an object/array) must be written
