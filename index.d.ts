@@ -1,4 +1,4 @@
-export type EnvScalarType = 'string' | 'number' | 'int' | 'boolean' | 'url' | 'port' | 'email' | 'json' | 'uuid' | 'hex' | 'ipv4' | 'semver' | 'base64' | 'date' | 'file' | 'duration' | 'host';
+export type EnvScalarType = 'string' | 'number' | 'int' | 'boolean' | 'url' | 'port' | 'email' | 'json' | 'uuid' | 'hex' | 'ipv4' | 'ipv6' | 'semver' | 'base64' | 'date' | 'file' | 'duration' | 'host';
 export type EnvType = EnvScalarType | 'array';
 
 export type RequiredIfCondition =
