@@ -49,24 +49,25 @@ const env = validateEnv({
 | --- | --- | --- | --- |
 | `string` | 任何非缺失文本（默认类型） | `string` | `trim`、`minLength`、`maxLength`、`pattern` |
 | `number` | 非空的十进制文本，包括小数和指数记法。拒绝进制前缀（`0x`、`0b`、`0o`）、`NaN` 和非有限值。 | `number` | `trim`、`min`、`max` |
-| `int` | 能解析为整数的十进制文本，如 `42`、`1e3`；不接受进制前缀 | `number` | `trim`、`min`、`max` |
+| `int` | 纯十进制整数字面量：可选符号加数字，例如 `42`、`-3`、`007`。小数和科学记数写法（`1.0`、`1e3`）以及进制前缀都会被拒绝。 | `number` | `trim`、`min`、`max` |
 | `boolean` | 不区分大小写的 `true/false`、`1/0`、`yes/no`、`on/off`、`y/n` | `boolean` | 无 |
 | `url` | 能被 `new URL()` 接受的绝对 URL，不做规范化 | `string` | `trim`、`minLength`、`maxLength`、`pattern`、`protocols` |
 | `file` | 指向一个存在、可读的普通文件的路径。相对路径以进程的工作目录为基准。 | `string` | `trim`、`minLength`、`maxLength`、`pattern` |
-| `port` | 能解析为 0 到 65535 之间整数的十进制文本；不接受进制前缀 | `number` | `min`、`max` |
+| `port` | 0 到 65535 之间的纯十进制整数字面量（可选 `+` 号加数字，例如 `3000`、`+42`）。小数和科学记数写法（`8080.0`、`1e3`）以及进制前缀都会被拒绝。 | `number` | `min`、`max` |
 | `email` | 一个 `@`、非空的本地部分、域名中含有一个内部点、域名不能以点开头或结尾、无空白字符 | `string` | `trim`、`minLength`、`maxLength`、`pattern` |
 | `json` | 有效的 JSON 文本（对象、数组或原始值）。接受已经解析好的默认值。 | 解析后的 JSON 值 | `trim`。对于数值结果，可用 `min` 和 `max`。 |
 | `uuid` | 规范的 8-4-4-4-12 十六进制分组，大小写均可 | `string` | `trim`、`minLength`、`maxLength`、`pattern` |
 | `hex` | 一个或多个十六进制字符，不带 `0x` 前缀 | `string` | `trim`、`length`、`minLength`、`maxLength`、`pattern` |
 | `ipv4` | 四个十进制八位组，每组 0 到 255；不允许前导零 | `string` | `trim`、`minLength`、`maxLength`、`pattern` |
+| `ipv6` | 任何被 `net.isIP` 识别为 IPv6 的地址，包括压缩形式、IPv4 映射形式和 `%zone` 形式 | `string` | `trim`、`minLength`、`maxLength`、`pattern` |
 | `semver` | `MAJOR.MINOR.PATCH`，可选的预发布和构建后缀，以及一个可选的小写 `v` 前缀（`v1.2.3`）。拒绝数字部分的前导零和大写 `V`。 | `string` | `trim`、`minLength`、`maxLength`、`pattern` |
 | `base64` | 标准或 URL 安全字母表，填充可选。 | `string` | `trim`、`minLength`、`maxLength`、`pattern` |
-| `date` | 有效的 `YYYY-MM-DD`，或带 `T` 以及小时/分钟的日期时间；秒、小数部分以及 `Z` 或数字偏移可选。接受有效的 `Date` 默认值。 | `Date` | `trim` |
-| `duration` | 人类可读的时长：`500ms`、`30s`、`15m`、`2h`、`1d`、`1w`，以及复合形式如 `1h30m`；裸数字表示毫秒 | `number`（毫秒） | `trim`、`min`、`max` |
-| `host` | 主机名（`db.internal`、`localhost`）或 IPv4/IPv6 地址；不带协议、路径或端口 | `string` | `trim`、`minLength`、`maxLength`、`pattern` |
-| `array` | 按 `separator`（默认 `,`）拆分的分隔列表，每个元素按 `of`（默认 `string`）进行转换。空元素会被拒绝。接受数组默认值。 | 带类型的数组（`T[]`） | `of`、`separator`、`trim`、`protocols`（当 `of: 'url'` 时）、`minItems`、`maxItems` |
+| `date` | 有效的 `YYYY-MM-DD`，或带 `T` 以及小时/分钟的日期时间；秒、小数部分以及 `Z` 或数字偏移可选。接受有效的 `Date` 默认值。 | `Date` | `trim`、`min`、`max`（ISO 日期字符串） |
+| `duration` | 人类可读的时长：`500ms`、`30s`、`15m`、`2h`、`1d`、`1w`，以及复合形式如 `1h30m`；裸数字表示毫秒 | `number`（毫秒） | `trim`、`min`、`max`（毫秒数或时长字符串，例如 `min: '30s'`） |
+| `host` | 主机名（`db.internal`、`localhost`、`example.com.`）或 IPv4/IPv6 地址；会保留末尾单个 DNS 根点；不带协议、路径或端口 | `string` | `trim`、`minLength`、`maxLength`、`pattern` |
+| `array` | 按 `separator`（默认 `,`）拆分的分隔列表，每个元素按 `of`（默认 `string`）进行转换。空元素会被拒绝。接受数组默认值。 | 带类型的数组（`T[]`） | `of`、`separator`、`trim`、`protocols`（当 `of: 'url'` 时）、`minItems`、`maxItems`、`unique`、`skipEmpty` |
 
-所有类型都支持 `required`、`requiredIf`、`default`、`validate`、`transform`、`sensitive` 和 `aliases`。设置 `sensitive: true` 后，无论键名是什么（例如 `SESSION_ID`、`LICENSE_KEY`），该键的值在校验错误和 CLI 输出中始终会被掩码处理，并且在 `generateExample` 中其占位符会留空。设置 `aliases: ['OLD_NAME']` 可以接受已弃用的变量名作为后备，并发出警告（见下文）。自定义 `validate(value, env)` 函数在类型转换和内置检查之后（包括对默认值）运行，在 `transform` 之前。`transform` 在校验之后作用于所提供的值。缺失的可选键会被省略，默认值也会被校验。`choices` 选项匹配转换后的字符串、数字或布尔值。解析后的 JSON 值如果属于这三种类型之一，也可以匹配某个选项。字符串输入默认会被修剪。设置 `trim: false` 可以让类字符串类型保留空白。对于 `number` 和 `int`，数值周围的空白在两种设置下都会被接受，但纯空白文本默认会被拒绝，使用 `trim: false` 时则会转换为 `0`。布尔匹配始终忽略周围的空白。`length` 选项只适用于 `hex`。`pattern`、`minLength` 和 `maxLength` 选项只适用于字符串值的类型（`string`、`email`、`url`、`file`、`uuid`、`hex`、`ipv4`、`semver`、`base64`、`host`），在任何其他类型上使用都会被预先拒绝。具体示例见下文各节。
+所有类型都支持 `required`、`requiredIf`、`default`、`validate`、`transform`、`sensitive` 和 `aliases`。设置 `sensitive: true` 后，无论键名是什么（例如 `SESSION_ID`、`LICENSE_KEY`），该键的值在校验错误和 CLI 输出中始终会被掩码处理，并且在 `generateExample` 中其占位符会留空。设置 `aliases: ['OLD_NAME']` 可以接受已弃用的变量名作为后备，并发出警告（见下文）。自定义 `validate(value, env)` 函数在类型转换和内置检查之后（包括对默认值）运行，在 `transform` 之前。`transform` 在校验之后作用于所提供的值。缺失的可选键会被省略，默认值也会被校验。`choices` 选项匹配转换后的字符串、数字或布尔值。解析后的 JSON 值如果属于这三种类型之一，也可以匹配某个选项。字符串输入默认会被修剪。设置 `trim: false` 可以让类字符串类型保留空白。对于 `number` 和 `int`，数值周围的空白在两种设置下都会被接受，但纯空白文本默认会被拒绝，使用 `trim: false` 时则会转换为 `0`。布尔匹配始终忽略周围的空白。`length` 选项只适用于 `hex`。`pattern`、`minLength` 和 `maxLength` 选项只适用于字符串值的类型（`string`、`email`、`url`、`file`、`uuid`、`hex`、`ipv4`、`ipv6`、`semver`、`base64`、`host`），在任何其他类型上使用都会被预先拒绝。具体示例见下文各节。
 
 ### 条件必填（`requiredIf`）
 
@@ -145,6 +146,8 @@ try {
 const env = validateEnv(schema, process.env, { strict: true });
 // throws EnvSaafError listing e.g. "DATABSE_URL: set but not in schema (strict mode)"
 ```
+
+接近的拼写会被点名提示：当缺少必填键，而某个已设置但未声明的键在忽略大小写后同名或仅相差一次编辑（例如 `PROT`/`PORT` 对调）时，错误消息会以 `(did you mean PROT? it is set but not in the schema)` 结尾。严格模式的多余键也会在反方向获得对应的提示。只会建议键名，绝不会回显值，即使对于 `sensitive` 规则也是如此。
 
 严格模式默认关闭——许多应用会与其他工具共享同一个环境。
 
@@ -250,7 +253,7 @@ const env = validateEnv({
 });
 ```
 
-`email` 的检查是务实的——一个 `@`、非空的本地部分和域名、以及域名中有一个点——而不是完整的 RFC 5322。`pattern` 接受一个 `RegExp`，字符串值必须与之匹配（适用于 `string`、`email`、`url`、`file`、`uuid`、`hex`、`ipv4`、`semver`、`base64`、`host`）；它在类型转换和 `choices` 检查之后运行，不匹配的错误会指出失败的 pattern，而在非字符串类型上使用 `pattern` 会被预先拒绝。
+`email` 的检查是务实的（包含一个 `@`、非空的本地部分和域名，以及域名中的一个点），而不是完整的 RFC 5322。`pattern` 接受一个 `RegExp`，字符串值必须与之匹配（适用于 `string`、`email`、`url`、`file`、`uuid`、`hex`、`ipv4`、`ipv6`、`semver`、`base64`、`host`）；它在类型转换和 `choices` 检查之后运行，不匹配的错误会指出失败的 pattern，而在非字符串类型上使用 `pattern` 会被预先拒绝。
 
 ### `int` 类型与 `min`/`max`——整数与范围
 
@@ -272,7 +275,7 @@ const env = validateEnv({
 });
 ```
 
-`json` 用 `JSON.parse` 解析该值——对象、数组和原始值都会以解析后的形式返回；无效的 JSON 会被拒绝，并给出指出键名的错误。`default` 可以直接给一个已经解析好的对象。`minLength` 和 `maxLength` 适用于字符串值的类型（`string`、`email`、`url`、`file`、`uuid`、`hex`、`ipv4`、`semver`、`base64`、`host`），在任何其他类型上使用都会被预先拒绝；两者可以单独使用，过短或过长的值会被拒绝，并给出指出允许长度的错误。它们可以与 `pattern` 组合使用——先检查长度，再检查 pattern。
+`json` 用 `JSON.parse` 解析该值（对象、数组和原始值都会以解析后的形式返回）；无效的 JSON 会被拒绝，并给出指出键名的错误。`default` 可以直接给一个已经解析好的对象。`minLength` 和 `maxLength` 适用于字符串值的类型（`string`、`email`、`url`、`file`、`uuid`、`hex`、`ipv4`、`ipv6`、`semver`、`base64`、`host`），在任何其他类型上使用都会被预先拒绝；两者可以单独使用，过短或过长的值会被拒绝，并给出指出允许长度的错误。它们可以与 `pattern` 组合使用（先检查长度，再检查 pattern）。
 
 ### `uuid` 和 `hex` 类型——ID 与十六进制字符串
 
@@ -606,12 +609,17 @@ CLI 输出默认是纯文本，包括在管道和 CI 中。对于设置了共享
 ```bash
 npx env-saaf --version      # print the installed version
 npx env-saaf scan ./src     # every env var your code actually uses
+npx env-saaf scan . --exclude fixtures --exclude 'src/generated/**'  # leave vendored or generated code out
                            # scans .js/.cjs/.mjs/.ts/.mts/.cts/.tsx/.jsx and .vue/.svelte/.astro components
-npx env-saaf check .        # code vs .env.example diff — exit 1 on any finding (CI-ready)
+git show HEAD:src/config.js | npx env-saaf scan --stdin  # scan code piped on standard input
+npx env-saaf check .        # compare code against .env.example
 npx env-saaf check . --file .env.sample  # compare against a differently-named template file instead
-npx env-saaf check . --json # machine-readable JSON output (ok/missing/extra/unused) for CI or tooling
+npx env-saaf check . --json # machine-readable check results for CI or tooling
 npx env-saaf check . --schema ./env.schema.js  # also validate the values in .env against a schema — exit 1 on a type error
-npx env-saaf scan ./src --json  # JSON list of used vars
+npx env-saaf check . --schema ./env.schema.js --values .env.production  # validate another environment file's values
+npx env-saaf print . --schema ./env.schema.js  # print the coerced values (defaults applied, sensitive rules masked)
+
+npx env-saaf scan ./src --json  # JSON object containing the used vars
 npx env-saaf check . --watch    # re-run check whenever the code, .env.example/.env or schema changes (Ctrl-C to stop)
 npx env-saaf example ./src  # draft a .env.example from a code scan
 npx env-saaf example ./src --write  # save the draft to .env.example (refuses, exit 1, when the scan finds no variables)
@@ -623,11 +631,11 @@ npx env-saaf init . --from-example --groups  # fold keys sharing a prefix into a
 
 开始一个新项目？`env-saaf init` 会写出一个起始 `env.schema.js`，其中带有主要类型（`string`、`int`、`boolean`、`port`、`url`、`email`、`duration`、`host`）的带注释示例，并据此生成一个匹配的 `.env.example`。每个建议的占位符都是能通过其自身规则校验的值，因此生成的 `.env.example` 开箱即可通过 `check`（`file` 类型是例外——它的 `./config.json` 路径必须先存在）。如果项目的 `package.json` 中有 `"type": "module"`，起始文件会改为写成 `env.schema.cjs`，这样它仍然可以用 `require()` 加载——在这种项目里，你自己的 schema 也请用 `.cjs` 扩展名命名。`init` 之后的第一次 `check` 会通过并附带一条说明，直到代码开始读取这些变量为止——脚手架声明了但代码尚未使用的键不会被视为漂移。一旦代码读取了至少一个变量，未使用的键就会和以前一样让 check 失败。除非传入 `--force`，只要这两个文件中有任何一个已存在，就会拒绝执行（退出码 1，并指出文件名）；`--schema <file>` 可以指定 schema 文件名，而不是 `env.schema.js`。
 
-已经有 `.env.example` 但还没有 schema？`env-saaf init --from-example`（也可以用 `--from-example=FILE` 指定其他文件名）会解析示例文件，并根据每个键的示例值推断一条起始规则，优先级顺序如下：看起来像端口的数字（1024-65535 之间的整数）-> `port`，`true`/`false` -> `boolean`，`http(s)` URL -> `url`，电子邮件地址 -> `email`，其他整数 -> `int`，小数 -> `number`，其他任何情况（包括空值）-> `string`。每条推断出的规则都会写上一条注释，说明它是推断出来的、应当复核——示例值本身不会被复制进 schema，因此示例中的密码不可能泄漏到提交的文件中。代码扫描发现但示例中没有列出的键，会像固定脚手架一样被折叠进来作为 `string` 规则。在此模式下，示例文件永远不会被写入或覆盖——只有 schema 文件会被写入，且同样拒绝在没有 `--force` 时覆盖。生成的 schema 能通过示例自身示例值的校验，因此之后 `env-saaf check . --file .env.example --schema env.schema.js` 会立即通过。传入 `--groups`（`env-saaf init --from-example --groups`）可以把共享同一前缀的键折叠成分组 schema（例如 `DB_HOST` 和 `DB_PORT` 会变成一个带 `prefix: 'DB_'` 的 `DB` 分组），前提是该前缀至少有两个字符，且至少有两个键共享它。
+已经有 `.env.example` 但还没有 schema？`env-saaf init --from-example`（也可以用 `--from-example=FILE` 指定其他文件名）会解析示例文件，并根据每个键的示例值推断一条起始规则，优先级顺序如下：UUID -> `uuid`，ISO 日期或日期时间 -> `date`，例如 `30m` 或 `1h30m` 的时长 -> `duration`，例如 `1.4.2` 的语义化版本 -> `semver`，可解析为 JSON 的对象或数组 -> `json`，至少八个字符的偶数长度十六进制字符串 -> `hex`，看起来像端口的数字（1024-65535 之间的整数）-> `port`，其他整数 -> `int`，`true`/`false` -> `boolean`，`http(s)` URL -> `url`，电子邮件地址 -> `email`，小数 -> `number`，其他任何情况（包括空值和 `cafe` 等有歧义的字符串）-> `string`。每个候选类型都会用真正的校验器确认，因此推断出的规则总是接受它所源自的示例值。每条推断出的规则都会写上一条注释，说明它是推断出来的、应当复核（示例值本身不会被复制进 schema，因此示例中的密码不可能泄漏到提交的文件中）。代码扫描发现但示例中没有列出的键，会像固定脚手架一样被折叠进来作为 `string` 规则。在此模式下，示例文件永远不会被写入或覆盖，只有 schema 文件会被写入，且同样拒绝在没有 `--force` 时覆盖。生成的 schema 能通过示例自身示例值的校验，因此之后 `env-saaf check . --file .env.example --schema env.schema.js` 会立即通过。传入 `--groups`（`env-saaf init --from-example --groups`）可以把共享同一前缀的键折叠成分组 schema（例如 `DB_HOST` 和 `DB_PORT` 会变成一个带 `prefix: 'DB_'` 的 `DB` 分组），前提是该前缀至少有两个字符，且至少有两个键共享它。
 
 当 `.env.example`（或用 `--file` 给出的文件）位于被扫描的目录中时，`scan` 还会警告那里声明了但没有代码读取的键，每个键一行输出到 stderr：`UNUSED: OLD_KEY (in .env.example, never used in code)`。使用 `--json` 时，它们会列在 `vars` 旁边的 `unused` 数组中。这只是一个警告：stdout 仍然只包含被使用的变量，`scan` 仍以 0 退出（要在漂移时让 CI 任务失败，请用 `check`）。没有模板文件时，一切照旧。
 
-扫描读取的是代码，而不是注释或字符串、模板字面量中的文本：只在注释中出现的名字（`// set process.env.FOO first`）、字符串（`'see process.env.BAR'`）或模板文本中出现的名字不会被报告，因此它们无法悄悄满足 `check` 或进入 `example` 草稿。模板 `${...}` 内部的读取仍然算读取，`process.env['X']`、``process.env[`X`]`` 和解构也一样。可选链也算读取——`process.env?.MAYBE` 和 `import.meta.env?.VITE_MAYBE` 会像普通点号形式一样被报告（`process.env?.['X']` 和 ``process.env?.[`X`]`` 也是如此）。Vite 的 `import.meta.env` 读取也会以同样方式被找到（点访问、方括号访问和解构），因此 Vite 项目也能正确扫描。
+扫描目录时，`scanDir` 会跳过 `node_modules`、`.git*` 以及常见的构建输出目录（`dist`、`build`、`coverage`、`.next`、`out`、`target`），因此旧的构建产物不会让未使用的键看起来像正在使用；在 CLI 中，`scan` 和 `check` 都支持（可重复使用的）`--exclude <pattern>` 来排除额外的目录或 glob 模式，例如 `fixtures` 或 `'src/generated/**'`。扫描读取的是代码，而不是注释或字符串、模板字面量中的文本：只在注释中出现的名字（`// set process.env.FOO first`）、字符串（`'see process.env.BAR'`）或模板文本中出现的名字不会被报告，因此它们无法悄悄满足 `check` 或进入 `example` 草稿。模板 `${...}` 内部的读取仍然算读取，`process.env['X']`、``process.env[`X`]`` 和解构也一样。可选链也算读取：`process.env?.MAYBE` 和 `import.meta.env?.VITE_MAYBE` 会像普通点号形式一样被报告（`process.env?.['X']` 和 ``process.env?.[`X`]`` 也是如此）。Vite 的 `import.meta.env` 读取也会以同样方式被找到（点访问、方括号访问和解构），因此 Vite 项目也能正确扫描。
 
 当真正的 `.env` 位于模板旁边时，`check` 还会比较两者的键：在 `.env` 中但未记录的键（`EXTRA in .env: FOO (not in .env.example)`）通常是拼写错误，而模板中有但本地没有值的键会报告为 `MISSING in .env: BAR (in .env.example, not set locally)`。`--file` 为这两种比较选择模板；没有 `.env` 文件时，这一额外检查会被跳过。在 `--json` 模式下，结果会以 `envExtra` 和 `envMissing` 的形式出现在已有的 `missing`、`extra`、`unused` 和 `invalid` 字段旁边——`unused` 以 `scan --json` 使用的相同名称列出已记录但未使用的键，`extra` 则为兼容性保留同一份列表。
 
@@ -635,7 +643,9 @@ npx env-saaf init . --from-example --groups  # fold keys sharing a prefix into a
 
 只要打印出任何结果，`check` 就会以 1 退出，`--json` 的 `ok` 也携带相同的值，因此 CI 任务恰好在输出报告问题时失败；完全干净的项目以 0 退出。`UNUSED` 也算一个结果：某个键在其代码用法消失后仍留在模板中，会让运行失败，因此在删除最后一次使用时，请同时把它从模板中删除。唯一的例外是完全没有 `process.env` 用法的项目——例如一个全新的脚手架：此时 `check` 会通过并附带一条说明（在 `--json` 中是一个 `note` 字段），而不是每个键一行 `UNUSED`，因为还没有代码可供模板漂移。
 
-`--schema` 是可选启用的：没有它时，`check` 只比较键是否存在。有了它，`check` 会加载 schema 文件（`module.exports = { PORT: { type: 'port', required: true } }`，相对于被检查的目录解析），并对真正的 `.env` 文件中的值运行库本身使用的同一个 `validateEnv`。类型错误会报告为 `INVALID: PORT: expected a port (0-65535, e.g. 3000), got "not-a-port"`，并使 check 失败（退出码 1）；在 `--json` 模式下，失败会出现在 `invalid` 字段中。显式给出的 `--file` 指定要校验的文件；没有 `.env` 文件且没有显式 `--file` 时，schema 步骤会被跳过——模板的占位符不是真实值。无法加载（或没有导出 schema 对象）的 schema 文件属于用法错误：给出清晰的消息并以 2 退出。使用 `--json-schema` 时，`check` 会把 `--schema` 文件作为 draft 2020-12 JSON Schema 文档打印到 stdout，而不是运行检查，这样编辑器和 CI 校验器可以直接消费它；`.env.example` 永远不会被读取，因此即使示例文件还不存在，schema 也能转换。没有 `--schema` 时就没有可转换的东西，因此该标志属于用法错误（退出码 2）。
+`env-saaf print` 会根据 schema 加载并校验环境文件（默认为 `.env`，或通过 `--file` 指定），并打印生效的配置（包含转换后的值和默认值），同时将所有 `sensitive: true` 规则的值掩码处理；`--json` 会打印同一个对象。校验失败时会输出与 `check --schema` 相同的消息并以 1 退出，因此它也可以作为启动前检查。该命令必须提供 `--schema`。
+
+`--schema` 是可选启用的：没有它时，`check` 只比较键是否存在。有了它，`check` 会加载 schema 文件（`module.exports = { PORT: { type: 'port', required: true } }`，相对于被检查的目录解析），并对真正的 `.env` 文件中的值运行库本身使用的同一个 `validateEnv`。类型错误会报告为 `INVALID: PORT: expected a port (0-65535, e.g. 3000), got "not-a-port"`，并使 check 失败（退出码 1）；在 `--json` 模式下，失败会出现在 `invalid` 字段中。在指定要按 schema 校验的值文件时，`--values <file>` 具有更高优先级（例如 `.env.production` 或 `.env.staging`），同时保留 `.env.example`（或 `--file`）作为模板，且文件不存在属于用法错误；未传 `--values` 时，显式的 `--file` 会选择模板并同时作为被校验的值文件；当没有 `.env` 文件、也没有 `--values` 和显式 `--file` 时，会跳过值校验步骤（模板的占位符不是真实值）。使用 `--schema` 时，`check` 还会将 schema 与示例文件核对：在 schema 中声明但 `.env.example` 中缺失的键会报告为 `NOT DOCUMENTED`，而示例中有但 schema 未声明的键会报告为 `NOT IN SCHEMA`（分组 schema 按展平后的名称比较，例如 `DB_HOST`）。这两种情况都会使检查失败，并在 `--json` 中显示为 `schemaNotDocumented` 和 `documentedNotInSchema`。无法加载（或没有导出 schema 对象）的 schema 文件属于用法错误：给出清晰的消息并以 2 退出。使用 `--json-schema` 时，`check` 会把 `--schema` 文件作为 draft 2020-12 JSON Schema 文档打印到 stdout，而不是运行检查，这样编辑器和 CI 校验器可以直接消费它；`.env.example` 永远不会被读取，因此即使示例文件还不存在，schema 也能转换。没有 `--schema` 时就没有可转换的东西，因此该标志属于用法错误（退出码 2）。
 
 ### 在 GitHub Actions 中运行 `check`
 
