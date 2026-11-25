@@ -2076,6 +2076,29 @@ assert.deepStrictEqual(
   assert.deepStrictEqual(collected.errors, ['N: expected an integer (e.g. 42), got "1e3"']);
 }
 
+// Issue #412: underscore separators in numeric literals ('1_000'), like
+// JavaScript numeric literals — a single '_' between digits only.
+{
+  assert.strictEqual(validateEnv({ N: { type: 'int' } }, { N: '1_000' }).N, 1000);
+  assert.strictEqual(validateEnv({ N: { type: 'int' } }, { N: '-1_000' }).N, -1000);
+  assert.strictEqual(validateEnv({ N: { type: 'int' } }, { N: '1_0_0_0' }).N, 1000);
+  assert.strictEqual(validateEnv({ N: { type: 'number' } }, { N: '1_000' }).N, 1000);
+  assert.strictEqual(validateEnv({ N: { type: 'number' } }, { N: '1_000.5' }).N, 1000.5);
+  assert.strictEqual(validateEnv({ N: { type: 'number' } }, { N: '1_000e2' }).N, 100000);
+  assert.deepStrictEqual(validateEnv({ N: { type: 'array', of: 'int' } }, { N: '1_000,2_000' }).N, [1000, 2000]);
+  // Misplaced underscores are still rejected with the usual messages.
+  for (const raw of ['_100', '100_', '1__000', '1_.5', '1_000_']) {
+    assert.throws(
+      () => validateEnv({ N: { type: 'int' } }, { N: raw }),
+      err => err instanceof EnvSaafError && err.errors[0] === `N: expected an integer (e.g. 42), got "${raw}"`,
+    );
+    assert.throws(
+      () => validateEnv({ N: { type: 'number' } }, { N: raw }),
+      err => err instanceof EnvSaafError && err.errors[0] === `N: expected a number (e.g. 3.14), got "${raw}"`,
+    );
+  }
+}
+
 // Issues #32 + #48: 'json' type (parse JSON values) and minLength/maxLength for strings.
 {
   // json: objects, arrays and primitives are parsed and returned as-is.
@@ -2299,6 +2322,19 @@ assert.deepStrictEqual(
   assert.throws(() => validateEnv({ TIMEOUT: { type: 'duration', required: true } }, {}), EnvSaafError);
   // generateExample suggests a real duration, not a placeholder.
   assert.ok(generateExample({ TIMEOUT: { type: 'duration', required: true } }).includes('TIMEOUT=15m'));
+  // Issue #414: a bounded duration example reads like '2h', never a bare
+  // millisecond count — and the generated value still validates.
+  assert.ok(generateExample({ TIMEOUT: { type: 'duration', min: '2h', max: '1d' } }).includes('TIMEOUT=2h'));
+  assert.ok(generateExample({ TIMEOUT: { type: 'duration', min: '90m', max: '2h' } }).includes('TIMEOUT=1h30m'));
+  assert.ok(generateExample({ TIMEOUT: { type: 'duration', min: '30s', max: '45s' } }).includes('TIMEOUT=45s'));
+  assert.ok(generateExample({ TIMEOUT: { type: 'duration', min: '250ms', max: '750ms' } }).includes('TIMEOUT=750ms'));
+  for (const schema of [
+    { TIMEOUT: { type: 'duration', min: '2h', max: '1d' } },
+    { TIMEOUT: { type: 'duration', min: '90m', max: '2h' } },
+    { TIMEOUT: { type: 'duration', min: '30s', max: '45s' } },
+  ]) {
+    assert.doesNotThrow(() => validateEnv(schema, parseEnvFile(generateExample(schema))));
+  }
   // Issue #176: 'w' is a week of 7 days, case-insensitive, fractional values allowed.
   assert.strictEqual(validateEnv(schema, { TIMEOUT: '1w' }).TIMEOUT, 604800000);
   assert.strictEqual(validateEnv(schema, { TIMEOUT: '2w' }).TIMEOUT, 1209600000);
