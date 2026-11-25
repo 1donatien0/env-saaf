@@ -88,6 +88,7 @@ const KNOWN_RULE_OPTIONS = new Set([
   'minItems',
   'maxItems',
   'unique',
+  'skipEmpty',
   'aliases',
 ]);
 
@@ -269,7 +270,7 @@ function validateSchemaRules(schema, warn, patterns = new Map(), prefix = '', an
     // the runtime check in validateEnvCore), whatever the declared type.
     if (KNOWN_TYPES.has(effectiveType)) {
       if (effectiveType !== 'array') {
-        for (const opt of ['of', 'separator', 'unique']) {
+        for (const opt of ['of', 'separator', 'unique', 'skipEmpty']) {
           if (rule[opt] !== undefined) {
             errors.push(`${key}: "${opt}" only applies to type 'array' (cannot be used with type '${effectiveType}')`);
           }
@@ -410,6 +411,9 @@ function validateSchemaRules(schema, warn, patterns = new Map(), prefix = '', an
     if (rule.unique !== undefined && typeof rule.unique !== 'boolean') {
       errors.push(`${key}: "unique" must be a boolean`);
     }
+    if (rule.skipEmpty !== undefined && typeof rule.skipEmpty !== 'boolean') {
+      errors.push(`${key}: "skipEmpty" must be a boolean`);
+    }
     if (rule.requiredIf !== undefined) {
       const cond = rule.requiredIf;
       const isObj = cond !== null && typeof cond === 'object' && !Array.isArray(cond);
@@ -545,7 +549,7 @@ function decimalNumber(value) {
 // Shared by coerce() and toJsonSchema() so runtime and schema checks match.
 const SEMVER_RE = /^v?(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-((?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*)(?:\.(?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*))*))?(?:\+([0-9a-zA-Z-]+(?:\.[0-9a-zA-Z-]+)*))?$/;
 
-function coerce(key, raw, type, trim = true, protocols, sensitive = false, of = 'string', separator = ',') {
+function coerce(key, raw, type, trim = true, protocols, sensitive = false, of = 'string', separator = ',', skipEmpty = false) {
   // trim: false (issue #84) keeps the raw value exactly as provided — for
   // values where the whitespace IS the value (a password with a significant
   // trailing space). The default stays true: stray spaces from pasted
@@ -820,6 +824,12 @@ function coerce(key, raw, type, trim = true, protocols, sensitive = false, of = 
       } else {
         throw new Error(`${key}: expected a delimited list (e.g. ${TYPE_EXAMPLES.array}), got "${shown}"`);
       }
+      if (skipEmpty) {
+        // Issue #348: drop accidental empty items (trailing or doubled
+        // separators) before indexing, so the error index and the counts match
+        // the items that remain.
+        parts = parts.filter((part) => typeof part === 'string' ? (trim ? part.trim() : part) !== '' : part !== undefined && part !== null);
+      }
       const itemType = of || 'string';
       return parts.map((part, i) => {
         const itemKey = `${key}[${i}]`;
@@ -1028,7 +1038,7 @@ function validateEnvCore(schema, env, options) {
     const shown = sensitive ? maskValue(raw) : raw;
     const type = rule.type || 'string';
     try {
-      const val = coerce(key, raw, type, rule.trim !== false, rule.protocols, sensitive, rule.of, rule.separator);
+      const val = coerce(key, raw, type, rule.trim !== false, rule.protocols, sensitive, rule.of, rule.separator, rule.skipEmpty === true);
       // min/max: allowed range for numeric values (number, int, port, duration).
       // Runs right after coercion, before choices/pattern/transform; the
       // error names the allowed range. min alone or max alone both work.

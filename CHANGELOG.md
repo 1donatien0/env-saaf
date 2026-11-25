@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Added: `skipEmpty: true` on `array` rules drops accidental empty items
+  (`a,b,`, `a,,b`) instead of failing, with `minItems`/`maxItems` and `unique`
+  applying to what remains. The default and its error message are unchanged
+  (fixes #348).
+
 - Added: runnable `examples/fastify/` and `examples/nextjs/` projects, matching
   the Express example's layout, so the Fastify and Next.js recipes are exercised
   instead of living only as README snippets. Both fail with the env-saaf message

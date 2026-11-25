@@ -7081,6 +7081,24 @@ assert.deepStrictEqual(scanCode("const env = process.env; env['DB.PORT']; env[`M
   assert.match(withDir.stderr, /--stdin cannot be combined with a directory argument/);
 }
 
+// Issue #348: skipEmpty drops accidental empty array items
+{
+  const rule = { T: { type: 'array', skipEmpty: true } };
+  assert.deepStrictEqual(validateEnv(rule, { T: 'a,b,' }).T, ['a', 'b']);
+  assert.deepStrictEqual(validateEnv(rule, { T: 'a,,b' }).T, ['a', 'b']);
+  assert.deepStrictEqual(validateEnv(rule, { T: ',,' }).T, []);
+  assert.deepStrictEqual(validateEnv(rule, { T: ['a', '', 'b'] }).T, ['a', 'b']);
+  // Counts and uniqueness apply to what remains.
+  assert.deepStrictEqual(validateEnv({ T: { type: 'array', skipEmpty: true, minItems: 2, unique: true } }, { T: 'a,b,' }).T, ['a', 'b']);
+  assert.throws(() => validateEnv({ T: { type: 'array', skipEmpty: true, minItems: 2 } }, { T: 'a,' }), /expected at least 2 items, got 1/);
+  assert.throws(() => validateEnv({ T: { type: 'array', skipEmpty: true, unique: true } }, { T: 'a,a,' }), /duplicate value/);
+  // Default behaviour and its message are unchanged.
+  assert.throws(() => validateEnv({ T: { type: 'array' } }, { T: 'a,b,' }), /T\[2\]: expected a non-empty value/);
+  // Like the other array-only options, it is rejected elsewhere.
+  assert.throws(() => validateSchema({ T: { type: 'string', skipEmpty: true } }), /only applies to type 'array'/);
+  assert.throws(() => validateSchema({ T: { type: 'array', skipEmpty: 'yes' } }), /"skipEmpty" must be a boolean/);
+}
+
 Promise.all([watchModeTest, watchModeErrorPathTest, watchModeEsmSchemaTest, loadEnvAsyncTest, formatErrorThrowingHookTest])
   .then(() => console.log('env-saaf v1.5.0: all tests passed'))
   .catch((err) => { console.error(err); process.exit(1); });
