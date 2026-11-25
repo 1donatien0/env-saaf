@@ -2991,7 +2991,9 @@ assert.deepStrictEqual(
   const cli = path.join(__dirname, 'cli.js');
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'env-saaf-baddir-'));
   const file = path.join(dir, 'index.js');
+  const nonCodeFile = path.join(dir, 'README.md');
   fs.writeFileSync(file, 'process.env.X;');
+  fs.writeFileSync(nonCodeFile, '# docs\n');
 
   try {
     for (const command of ['scan', 'check', 'example']) {
@@ -3001,18 +3003,28 @@ assert.deepStrictEqual(
       assert.ok(missing.stderr.includes('does not exist'), `${command} missing: ${missing.stderr}`);
       assert.ok(!/at .*readdirSync|ENOENT: no such file or directory, scandir/.test(missing.stderr), 'no stack trace');
 
-      // a file where a directory is expected
-      const asFile = spawnSync(process.execPath, [cli, command, file], { encoding: 'utf8' });
+      // a non-code file where a directory (or code file for scan/check) is expected
+      const asFile = spawnSync(process.execPath, [cli, command, nonCodeFile], { encoding: 'utf8' });
       assert.strictEqual(asFile.status, 2, `${command} file`);
       assert.ok(asFile.stderr.includes('is not a directory'), `${command} file: ${asFile.stderr}`);
       assert.ok(!/at .*readdirSync|ENOTDIR/.test(asFile.stderr), 'no stack trace');
     }
 
+    // example still requires a directory even when handed a .js file (#418 is scan/check only).
+    const exampleCodeFile = spawnSync(process.execPath, [cli, 'example', file], { encoding: 'utf8' });
+    assert.strictEqual(exampleCodeFile.status, 2);
+    assert.ok(exampleCodeFile.stderr.includes('is not a directory'));
+
     // --json keeps stdout parseable with an error field and the same exit code.
-    const json = spawnSync(process.execPath, [cli, 'scan', file, '--json'], { encoding: 'utf8' });
+    const json = spawnSync(process.execPath, [cli, 'scan', nonCodeFile, '--json'], { encoding: 'utf8' });
     assert.strictEqual(json.status, 2);
     assert.strictEqual(JSON.parse(json.stdout).ok, false);
     assert.ok(JSON.parse(json.stdout).error.includes('is not a directory'));
+
+    // Issue #418: scan accepts a single code file; a real directory is still scanned normally.
+    const singleFile = spawnSync(process.execPath, [cli, 'scan', file], { encoding: 'utf8' });
+    assert.strictEqual(singleFile.status, 0);
+    assert.strictEqual(singleFile.stdout.trim(), 'X');
 
     // A real directory is still scanned normally.
     const ok = spawnSync(process.execPath, [cli, 'scan', dir], { encoding: 'utf8' });

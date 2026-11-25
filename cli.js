@@ -11,7 +11,7 @@
  *                           document instead of running the check (issue #268). A scaffold
  *                           with no code usage yet passes with a single note instead of
  *                           one UNUSED line per key (issue #170).
- *   env-saaf scan  [dir | --stdin] [--file name] [--json] [--watch]: just list the env vars your code uses; keys in
+ *   env-saaf scan  [dir | file | --stdin] [--file name] [--json] [--watch]: just list the env vars your code uses; keys in
  *                           .env.example (or the --file given) that no code reads are reported
  *                           as UNUSED warnings (stderr; `unused` in --json), never an exit code
  *   env-saaf print [dir] [--schema file] [--file name] [--json] — load and validate the env file, then print the coerced values with sensitive rules masked
@@ -52,7 +52,7 @@ if (argv.includes('--version') || argv.includes('-v')) {
 // Output is already plain in every mode, including when NO_COLOR is set.
 while (argv[0] === '--no-color') argv.shift();
 const cmd = argv[0];
-const USAGE = 'Usage: env-saaf check [dir] [--file name] [--schema file] [--values file] [--exclude pattern] [--json] [--json-schema] [--watch] | env-saaf scan [dir | --stdin] [--file name] [--exclude pattern] [--json] [--watch] | env-saaf print [dir] [--schema file] [--file name] [--json] | env-saaf example [dir] [--write[=file]] [--force] [--schema file] | env-saaf init [dir] [--schema file] [--force] [--from-example[=file]]\n'
+const USAGE = 'Usage: env-saaf check [dir | file] [--file name] [--schema file] [--values file] [--exclude pattern] [--json] [--json-schema] [--watch] | env-saaf scan [dir | file | --stdin] [--file name] [--exclude pattern] [--json] [--watch] | env-saaf print [dir] [--schema file] [--file name] [--json] | env-saaf example [dir] [--write[=file]] [--force] [--schema file] | env-saaf init [dir] [--schema file] [--force] [--from-example[=file]]\n'
   + 'Global options: --no-color, --version / -v (before or after the command).';
 // --help / -h / help: print usage and exit 0 (asking for help is not an error — this used to exit 2)
 if (cmd === '--help' || cmd === '-h' || cmd === 'help') {
@@ -135,6 +135,49 @@ for (let i = 1; i < argv.length; i++) {
   else positional.push(a);
 }
 let dir = positional[0] || process.cwd();
+// Same code-file extensions directory scanning accepts (see SCAN_EXTENSIONS in index.js).
+const SCAN_EXTENSIONS = /\.(js|cjs|mjs|ts|mts|cts|tsx|jsx|vue|svelte|astro)$/;
+
+function resolveReadableCodeFile(rawPath) {
+  if (!SCAN_EXTENSIONS.test(rawPath)) return null;
+  try {
+    const actualFile = path.join(fs.realpathSync.native(path.dirname(rawPath)), path.basename(rawPath));
+    if (!fs.statSync(actualFile).isFile()) return null;
+    fs.closeSync(fs.openSync(actualFile, 'r'));
+    return actualFile;
+  } catch {
+    return null;
+  }
+}
+
+function findFilePackageDir(actualFile) {
+  const cwdReal = fs.realpathSync.native(process.cwd());
+  for (let d = path.dirname(actualFile); ; ) {
+    if (fs.existsSync(path.join(d, 'package.json'))) return d;
+    if (d === cwdReal) return null;
+    const parent = path.dirname(d);
+    if (parent === d) return null;
+    d = parent;
+  }
+}
+
+let scanFile = null;
+let scanLocationFile = null;
+let filePkgDir = null;
+if ((cmd === 'scan' || cmd === 'check') && positional[0] !== undefined) {
+  scanFile = resolveReadableCodeFile(positional[0]);
+  if (scanFile !== null) {
+    scanLocationFile = positional[0];
+    filePkgDir = findFilePackageDir(scanFile);
+  }
+}
+const COMMAND_FLAGS = {
+  check: ['--file', '--schema', '--values', '--exclude', '--json', '--json-schema', '--watch'],
+  scan: ['--file', '--exclude', '--json', '--watch', '--stdin'],
+  print: ['--schema', '--file', '--json'],
+  example: ['--write', '--force', '--schema'],
+  init: ['--schema', '--force', '--from-example', '--groups'],
+};
 // Issue #354: project config — the CLI reads defaults from the `env-saaf` key
 // in the project's package.json, so `check` / `scan` / `print` / `example` /
 // `init` do not repeat the same --schema / --file on every invocation.
@@ -145,15 +188,15 @@ let dir = positional[0] || process.cwd();
 // unknown-option errors, so a typo'd key cannot silently do nothing. A
 // missing package.json simply means "no config"; a malformed one is an
 // error, because a config the user meant to apply must not be skipped.
+let configPkgDir = null;
 const CONFIG_KEYS = ['schema', 'file', 'dir'];
-if (['check', 'scan', 'print', 'example', 'init'].includes(cmd)) {
-  const configDir = positional[0] || process.cwd();
-  const pkgPath = path.join(configDir, 'package.json');
+if (COMMAND_FLAGS[cmd]) {
+  const configDir = scanFile !== null ? filePkgDir : (positional[0] || process.cwd());
   let pkg = null;
-  // existsSync first: a missing package.json means "no config", and a
-  // directory argument that is actually a file (scan accepts one — issue
-  // #418) has no package.json to read either.
-  if (fs.existsSync(pkgPath)) {
+  // existsSync first: a missing package.json means "no config", and for an
+  // explicit single-file target (#418) findFilePackageDir locates its project.
+  if (configDir !== null && fs.existsSync(path.join(configDir, 'package.json'))) {
+    const pkgPath = path.join(configDir, 'package.json');
     try {
       pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
     } catch (e) {
@@ -189,9 +232,18 @@ if (['check', 'scan', 'print', 'example', 'init'].includes(cmd)) {
       else console.error(message);
       process.exit(2);
     }
+    let usedPkgDefault = false;
     if (positional[0] === undefined && config.dir !== undefined) dir = path.resolve(configDir, config.dir);
-    if (schemaOpt === null && config.schema !== undefined) schemaOpt = config.schema;
-    if (!fileExplicit && config.file !== undefined) { fileOpt = config.file; fileExplicit = true; }
+    if (COMMAND_FLAGS[cmd].includes('--schema') && schemaOpt === null && config.schema !== undefined) {
+      schemaOpt = config.schema;
+      usedPkgDefault = true;
+    }
+    if (COMMAND_FLAGS[cmd].includes('--file') && !fileExplicit && config.file !== undefined) {
+      fileOpt = config.file;
+      fileExplicit = true;
+      usedPkgDefault = true;
+    }
+    if (usedPkgDefault) configPkgDir = fs.realpathSync.native(configDir);
   }
 }
 // Issue #232: with a bare `--from-example`, a second positional names the
@@ -207,13 +259,6 @@ if (fromExampleOpt !== null) {
 // be silently ignored, so `scan --json-schema` ran a plain scan and a typo
 // like `--jsoon` in CI produced text output where JSON was expected. Fail
 // fast with exit 2, in the same message shape as other usage errors.
-const COMMAND_FLAGS = {
-  check: ['--file', '--schema', '--values', '--exclude', '--json', '--json-schema', '--watch'],
-  scan: ['--file', '--exclude', '--json', '--watch', '--stdin'],
-  print: ['--schema', '--file', '--json'],
-  example: ['--write', '--force', '--schema'],
-  init: ['--schema', '--force', '--from-example', '--groups'],
-};
 if (COMMAND_FLAGS[cmd]) {
   const seenFlags = new Set();
   if (fileExplicit) seenFlags.add('--file');
@@ -403,21 +448,53 @@ function schemaFromExample(hint, exampleName, entries, scannedKeys = [], groups 
   return `// Starter schema inferred by env-saaf init --from-example from ${exampleName} — review every rule.\n// ${hint}\nmodule.exports = {\n${inferred.join('\n')}\n${scanned}};\n`;
 }
 
-// Issue #133: validate the directory argument before any command uses it.
-// scanDir's readdirSync otherwise throws a raw Node stack trace for a file
-// path or a missing directory. Report a clear message and exit 2 instead.
+function resolveFileContextDir(actualFile, pkgDir) {
+  if (configPkgDir !== null) return configPkgDir;
+  const cwdReal = fs.realpathSync.native(process.cwd());
+  const probe = jsonSchemaOpt && schemaOpt ? schemaOpt : fileOpt;
+  for (let d = path.dirname(actualFile); ; ) {
+    if (fs.existsSync(path.resolve(d, probe))) return d;
+    if (d === cwdReal) return process.cwd();
+    if (d === pkgDir) return d;
+    const parent = path.dirname(d);
+    if (parent === d) return path.dirname(actualFile);
+    d = parent;
+  }
+}
+
+// Issue #133 / #418: validate the target argument before any command uses it.
+// scan and check also accept one readable supported code file; anything else
+// that is missing or not a directory reports a clear message and exits 2.
 if (cmd === 'scan' || cmd === 'check' || cmd === 'example' || cmd === 'init' || cmd === 'print') {
-  const invalidDir = !fs.existsSync(dir)
-    ? `${dir} does not exist`
-    : !fs.statSync(dir).isDirectory() ? `${dir} is not a directory` : null;
-  if (invalidDir) {
-    const message = `env-saaf: ${invalidDir}`;
-    if (jsonMode) {
-      console.log(JSON.stringify({ ok: false, error: message }));
-    } else {
-      console.error(message);
+  if (scanFile !== null) {
+    dir = resolveFileContextDir(scanFile, filePkgDir);
+  } else {
+    let stat = null;
+    if (fs.existsSync(dir)) {
+      try { stat = fs.statSync(dir); } catch { stat = null; }
     }
-    process.exit(2);
+    let invalidDir = null;
+    if (!stat) {
+      invalidDir = `${dir} does not exist`;
+    } else if (!stat.isDirectory()) {
+      const cfgScanFile = cmd === 'scan' || cmd === 'check' ? resolveReadableCodeFile(dir) : null;
+      if (cfgScanFile !== null) {
+        scanFile = cfgScanFile;
+        scanLocationFile = path.relative(process.cwd(), scanFile).split(path.sep).join('/');
+        dir = resolveFileContextDir(scanFile, null);
+      } else {
+        invalidDir = `${dir} is not a directory`;
+      }
+    }
+    if (invalidDir) {
+      const message = `env-saaf: ${invalidDir}`;
+      if (jsonMode) {
+        console.log(JSON.stringify({ ok: false, error: message }));
+      } else {
+        console.error(message);
+      }
+      process.exit(2);
+    }
   }
 }
 
@@ -558,9 +635,9 @@ function printScanResult(vars, locations) {
   // Issue #63: the reverse drift — keys declared in the template that no code reads any more.
   // Only a warning: stdout stays the plain list of used vars and the exit code is unchanged.
   // Without a template file there is nothing to compare, so the output is exactly as before.
-  // Issue #359: in --stdin mode there is no scanned directory, so only compare when --file is explicit.
+  // Issue #359 / #418: in --stdin or single-file mode there is no scanned directory, so only compare when --file is explicit.
   let unused = null;
-  if (!stdinOpt || fileExplicit) {
+  if ((!stdinOpt && scanFile === null) || fileExplicit) {
     const templatePath = path.join(dir, fileOpt);
     if (fs.existsSync(templatePath) && fs.statSync(templatePath).isFile()) {
       const declared = Object.keys(readEnvFile(templatePath));
@@ -583,7 +660,29 @@ function printScanResult(vars, locations) {
 // Issue #230: the scan/check bodies are plain functions so watch mode can
 // re-run them; the non-watch path below calls them exactly once, keeping
 // output and exit codes byte-for-byte unchanged.
+function readScanFile() {
+  try {
+    return fs.readFileSync(scanFile, 'utf8');
+  } catch (e) {
+    if (watchActive && e.code === 'ENOENT') {
+      const message = `env-saaf: ${scanLocationFile} does not exist`;
+      if (jsonMode) console.log(JSON.stringify({ ok: false, error: message }));
+      else console.error(message);
+      fatalExit(2);
+    }
+    throw e;
+  }
+}
+
 function runScan() {
+  if (scanFile !== null) {
+    const text = readScanFile();
+    if (jsonMode) {
+      const { vars, locations } = scanCodeLocations(text, scanLocationFile);
+      return printScanResult(vars, locations);
+    }
+    return printScanResult(scanCode(text));
+  }
   // Issue #335: JSON mode reuses scanDirLocations so the CLI does not re-walk.
   if (jsonMode) {
     const { vars, locations } = scanDirLocations(dir, { exclude: excludeOpts });
@@ -721,7 +820,9 @@ async function runCheck() {
     fatalExit(2);
   }
   const documented = Object.keys(readEnvFile(examplePath));
-  const used = scanDir(dir, { exclude: excludeOpts });
+  const used = scanFile !== null
+    ? scanCode(readScanFile())
+    : scanDir(dir, { exclude: excludeOpts });
   const { usedNotDocumented, documentedNotUsed } = diffEnv(used, documented);
   // The real .env is not committed, so only compare keys when it is actually present
   const envPath = path.join(dir, '.env');
@@ -888,6 +989,7 @@ function watchLoop() {
     }
   };
   collect(dir);
+  if (scanFile !== null) watchDirs.add(path.dirname(scanFile));
   if (schemaOpt) {
     const schemaDir = path.dirname(path.resolve(dir, schemaOpt));
     const inside = [...watchDirs].some(w => schemaDir === w || schemaDir.startsWith(w + path.sep));
