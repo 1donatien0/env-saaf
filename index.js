@@ -139,6 +139,14 @@ function numericBound(key, rule, value) {
     ? coerce(key, value, 'duration') : value;
 }
 
+// Compare and export duration choices in milliseconds without changing the schema.
+function normalizedChoices(key, rule) {
+  const type = rule.type === 'array' ? rule.of : rule.type;
+  return type === 'duration'
+    ? rule.choices.map(choice => typeof choice === 'string' ? coerce(key, choice, type) : choice)
+    : rule.choices;
+}
+
 // Issue #228: a group rule nests a sub-schema under one prefix, so
 // { DB: { prefix: 'DB_', schema: { HOST: {...} } } } reads the env var
 // DB_HOST and returns { DB: { HOST: ... } }. A rule carrying a `schema`
@@ -445,6 +453,7 @@ function validateSchemaRules(schema, warn, patterns = new Map(), prefix = '', an
     // can never match any real input: the string '1' for an `int`, 'true' for
     // a `boolean`. Coerce each choice the way a value is coerced and reject
     // the ones that fail or come back different from what was written.
+    // Duration strings are allowed: normalize them to milliseconds when comparing.
     // Issue #320: on an `array` rule choices apply to each coerced item, so
     // validate them against `of` (the item type) instead of 'array'.
     // String-typed rules are fine. A `date` value is always a freshly parsed
@@ -459,7 +468,10 @@ function validateSchemaRules(schema, warn, patterns = new Map(), prefix = '', an
         for (const choice of rule.choices) {
           if (typeof choice === 'number' && !Number.isFinite(choice)) continue;
           let matches = false;
-          try { matches = coerce(key, choice, choiceType) === choice; }
+          try {
+            const value = coerce(key, choice, choiceType);
+            matches = value === choice || (choiceType === 'duration' && typeof choice === 'string');
+          }
           catch { /* not a value this type can produce */ }
           if (!matches) {
             const shownChoice = typeof choice === 'string' ? JSON.stringify(choice) : String(choice);
@@ -1338,18 +1350,19 @@ function validateEnvCore(schema, env, options, valueSources) {
         }
       }
       if (rule.choices) {
+        const choices = normalizedChoices(key, rule);
         if (Array.isArray(val)) {
           // Issue #320: `choices` on an array rule constrains each coerced
           // item, not the array itself. Name the key, the bad item and its
           // index so the failure is actionable (as `unique: true` does).
-          const badIndex = val.findIndex(item => !rule.choices.includes(item));
+          const badIndex = val.findIndex(item => !choices.includes(item));
           if (badIndex !== -1) {
             const item = val[badIndex];
             const shownItem = sensitive ? maskValue(safeString(item)) : safeString(item);
             pushErr(`${key}: expected one of [${rule.choices.join(', ')}], got "${shownItem}" (item ${badIndex})`, valueSource());
             continue;
           }
-        } else if (!rule.choices.includes(val)) {
+        } else if (!choices.includes(val)) {
           pushErr(`${key}: expected one of [${rule.choices.join(', ')}], got "${shown}"`, valueSource());
           continue;
         }
@@ -2795,7 +2808,7 @@ function jsonSchemaForRule(key, rule, required) {
     property.pattern = typeof pattern === 'string' ? pattern : pattern.source;
   }
   if (Array.isArray(rule.choices)) {
-    const choices = [...new Set(rule.choices.filter(isJsonPrimitive))];
+    const choices = [...new Set(normalizedChoices(key, rule).filter(isJsonPrimitive))];
     if (choices.length) {
       // Issue #320: on an array rule the enum constrains each item. A
       // top-level enum would mean the whole array must equal a single choice.
