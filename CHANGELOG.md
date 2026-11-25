@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Added: `skipEmpty: true` on `array` rules drops accidental empty items
+  (`a,b,`, `a,,b`) instead of failing, with `minItems`/`maxItems` and `unique`
+  applying to what remains. The default and its error message are unchanged
+  (fixes #348).
 - Fixed: `scanDir` follows a directory reached through a symbolic link (once
   per real path), so a package linked into a workspace is scanned; a symlink
   cycle can no longer hang the walk (fixes #339).
