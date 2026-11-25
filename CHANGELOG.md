@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Added: with `--schema`, `check` also diffs the schema against
+  `.env.example` in both directions — `NOT DOCUMENTED` for schema keys missing
+  from the example and `NOT IN SCHEMA` for example keys the schema does not
+  declare (flattened group names), in text and as `schemaNotDocumented` /
+  `documentedNotInSchema` in `--json` (fixes #358).
+
 - Added: runnable `examples/fastify/` and `examples/nextjs/` projects, matching
   the Express example's layout, so the Fastify and Next.js recipes are exercised
   instead of living only as README snippets. Both fail with the env-saaf message

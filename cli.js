@@ -330,6 +330,19 @@ if (cmd === 'scan' || cmd === 'check' || cmd === 'example' || cmd === 'init') {
   }
 }
 
+// Issue #358: the env names a schema declares, groups flattened to DB_HOST.
+function flattenedSchemaKeys(schema, prefix = '') {
+  const keys = [];
+  for (const [key, rule] of Object.entries(schema)) {
+    if (rule && typeof rule === 'object' && rule.schema && typeof rule.prefix === 'string') {
+      keys.push(...flattenedSchemaKeys(rule.schema, prefix + rule.prefix));
+    } else {
+      keys.push(prefix + key);
+    }
+  }
+  return keys;
+}
+
 function readEnvFile(filePath) {
   const input = fs.readFileSync(filePath, 'utf8');
   try {
@@ -564,8 +577,15 @@ async function runCheck() {
   // is skipped. Failures land in the existing `invalid` field (the library's
   // errors already name the key) and fail the check like a missing key.
   let invalid = [];
+  // Issue #358: the schema is a third source of truth; report both directions
+  // against the example file, using flattened group names.
+  let schemaNotDocumented = [];
+  let documentedNotInSchema = [];
   if (schemaOpt) {
     const schema = await loadSchemaFile();
+    const declared = flattenedSchemaKeys(schema);
+    schemaNotDocumented = declared.filter((key) => !documented.includes(key));
+    documentedNotInSchema = documented.filter((key) => !declared.includes(key));
     const targetName = fileExplicit ? fileOpt : (fs.existsSync(envPath) ? '.env' : null);
     if (targetName) {
       const values = readEnvFile(path.join(dir, targetName));
@@ -585,10 +605,12 @@ async function runCheck() {
   // fails the check exactly as before (#113 is unchanged for a project that
   // already reads at least one variable).
   const scaffoldAhead = used.length === 0 && documentedNotUsed.length > 0
-    && usedNotDocumented.length === 0 && envExtra.length === 0 && envMissing.length === 0 && invalid.length === 0;
+    && usedNotDocumented.length === 0 && envExtra.length === 0 && envMissing.length === 0 && invalid.length === 0
+    && schemaNotDocumented.length === 0 && documentedNotInSchema.length === 0;
   const scaffoldNote = `no process.env usage found in code yet — ${documentedNotUsed.length} ${documentedNotUsed.length === 1 ? 'key' : 'keys'} in ${fileOpt} ${documentedNotUsed.length === 1 ? 'is' : 'are'} not used by any code yet`;
   const ok = scaffoldAhead || (usedNotDocumented.length === 0 && documentedNotUsed.length === 0
-    && envExtra.length === 0 && envMissing.length === 0 && invalid.length === 0);
+    && envExtra.length === 0 && envMissing.length === 0 && invalid.length === 0
+    && schemaNotDocumented.length === 0 && documentedNotInSchema.length === 0);
   if (jsonMode) {
     // Issue #187: `scan --json` names the documented-but-unused keys `unused`,
     // so `check --json` now exposes the same list under the same name. `extra`
@@ -602,6 +624,10 @@ async function runCheck() {
       envExtra,
       envMissing,
     };
+    if (schemaOpt) {
+      result.schemaNotDocumented = schemaNotDocumented;
+      result.documentedNotInSchema = documentedNotInSchema;
+    }
     if (scaffoldAhead) result.note = scaffoldNote;
     console.log(JSON.stringify(result));
   } else if (scaffoldAhead) {
@@ -612,7 +638,10 @@ async function runCheck() {
     envExtra.forEach(k => console.log(`EXTRA in .env: ${k} (not in ${fileOpt})`));
     envMissing.forEach(k => console.log(`MISSING in .env: ${k} (in ${fileOpt}, not set locally)`));
     invalid.forEach(e => console.log(`INVALID: ${e}`));
-    if (!usedNotDocumented.length && !documentedNotUsed.length && !envExtra.length && !envMissing.length && !invalid.length) {
+    schemaNotDocumented.forEach(k => console.log(`NOT DOCUMENTED: ${k} (in schema, missing from ${fileOpt})`));
+    documentedNotInSchema.forEach(k => console.log(`NOT IN SCHEMA: ${k} (in ${fileOpt}, not declared in the schema)`));
+    if (!usedNotDocumented.length && !documentedNotUsed.length && !envExtra.length && !envMissing.length && !invalid.length
+      && !schemaNotDocumented.length && !documentedNotInSchema.length) {
       console.log(`env-saaf: all clean — code and ${fileOpt} match.`);
     }
   }
