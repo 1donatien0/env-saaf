@@ -8583,9 +8583,377 @@ const interpolationOperatorsTest = (async () => {
   }
 })();
 
-Promise.all([watchModeTest, watchModeErrorPathTest, watchModeEsmSchemaTest, loadEnvAsyncTest, formatErrorThrowingHookTest, loadEnvSourceErrorsTest, conflictsWithTest, interpolationOperatorsTest])
+// Issue #346: `options.rules` schema-level cross-field validation hooks.
+const crossFieldRulesTest = (async () => {
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const path = require('node:path');
+  const {
+    validateEnv, loadEnv, loadEnvAsync, EnvSaafError,
+  } = require('./index');
 
+  const baseSchema = {
+    CACHE_TTL: { type: 'duration', default: '5m' },
+    SESSION_TTL: { type: 'duration', required: true },
+    WORKERS: { type: 'int', default: 4 },
+    QUEUE_DEPTH: { type: 'int', default: 5 },
+    MAX_CONNECTIONS: { type: 'int', default: 50 },
+    SENTRY_DSN: { type: 'url' },
+    LOG_FILE: { type: 'string', aliases: ['LEGACY_LOG_FILE'] },
+    FEATURE_TAGS: { type: 'array', of: 'string', default: ['core'] },
+    NORMALIZED: { type: 'string', transform: s => s.toLowerCase() },
+    DB: {
+      prefix: 'DB_',
+      schema: {
+        HOST: { type: 'host', default: 'localhost' },
+        MIN_POOL: { type: 'int', default: 2 },
+        MAX_POOL: { type: 'int', default: 10 },
+      },
+    },
+  };
 
+  // 1. Coerced/typed snapshot (including defaults, aliases, transforms, and frozen groups) + no-error return forms.
+  let inspected = null;
+  const warnings = [];
+  const validEnv = validateEnv(
+    baseSchema,
+    {
+      CACHE_TTL: '2m',
+      SESSION_TTL: '15m',
+      WORKERS: '3',
+      QUEUE_DEPTH: '10',
+      MAX_CONNECTIONS: '40',
+      LEGACY_LOG_FILE: '/var/log/app.log',
+      NORMALIZED: 'MIXED_CASE',
+      DB_MIN_POOL: '4',
+      DB_MAX_POOL: '12',
+    },
+    {
+      onWarn: msg => warnings.push(msg),
+      rules: [
+        (cfg) => {
+          inspected = cfg;
+          assert.strictEqual(Object.isFrozen(cfg), true);
+          assert.strictEqual(Object.isFrozen(cfg.DB), true);
+          assert.strictEqual(typeof cfg.CACHE_TTL, 'number');
+          assert.strictEqual(cfg.CACHE_TTL, 120000);
+          assert.strictEqual(cfg.SESSION_TTL, 900000);
+          assert.strictEqual(cfg.WORKERS, 3);
+          assert.strictEqual(cfg.QUEUE_DEPTH, 10);
+          assert.strictEqual(cfg.MAX_CONNECTIONS, 40);
+          assert.strictEqual(cfg.SENTRY_DSN, undefined);
+          assert.strictEqual(cfg.LOG_FILE, '/var/log/app.log');
+          assert.strictEqual('LEGACY_LOG_FILE' in cfg, false);
+          assert.deepStrictEqual(cfg.FEATURE_TAGS, ['core']);
+          assert.strictEqual(cfg.NORMALIZED, 'mixed_case');
+          assert.deepStrictEqual(cfg.DB, { HOST: 'localhost', MIN_POOL: 4, MAX_POOL: 12 });
+          assert.throws(() => { cfg.WORKERS = 99; }, TypeError);
+          assert.throws(() => { cfg.DB.MIN_POOL = 99; }, TypeError);
+        },
+        () => null,
+        () => '',
+        () => [],
+        () => ['', ''],
+      ],
+    },
+  );
+  assert.strictEqual(inspected, validEnv);
+  assert.deepStrictEqual(warnings, ['env-saaf: LEGACY_LOG_FILE is deprecated; use LOG_FILE instead']);
 
+  // Single no-op hook, empty rules array, and non-throwing clean run all succeed with zero errors.
+  assert.deepStrictEqual(
+    validateEnv({ PORT: { type: 'port', default: 3000 } }, {}, { rules: () => undefined }),
+    { PORT: 3000 },
+  );
+  assert.deepStrictEqual(
+    validateEnv({ PORT: { type: 'port', default: 3000 } }, {}, { rules: [] }),
+    { PORT: 3000 },
+  );
+  const cleanNonThrow = validateEnv(
+    { PORT: { type: 'port', default: 3000 } },
+    {},
+    { throwOnError: false, rules: [() => undefined, () => null, () => []] },
+  );
+  assert.deepStrictEqual(cleanNonThrow, {
+    env: { PORT: 3000 },
+    errors: [],
+    details: [],
+  });
+
+  // 2. Single hook (string and array returns, including 1-char message) & multiple hooks aggregating in order.
+  assert.throws(
+    () => validateEnv({ A: { type: 'int', default: 1 } }, {}, { rules: () => 'x' }),
+    err => err instanceof EnvSaafError
+      && err.message === 'Invalid environment variables:\n  - x'
+      && JSON.stringify(err.errors) === JSON.stringify(['x'])
+      && JSON.stringify(err.details) === JSON.stringify([{ key: '', message: 'x' }]),
+  );
+
+  const crossRules = [
+    cfg => (cfg.CACHE_TTL >= cfg.SESSION_TTL ? 'CACHE_TTL must be smaller than SESSION_TTL' : undefined),
+    cfg => (!cfg.SENTRY_DSN && !cfg.LOG_FILE ? 'At least one of SENTRY_DSN, LOG_FILE must be set' : null),
+    () => undefined,
+    cfg => {
+      const errs = [];
+      if (cfg.WORKERS * cfg.QUEUE_DEPTH > cfg.MAX_CONNECTIONS) {
+        errs.push('WORKERS * QUEUE_DEPTH must not exceed MAX_CONNECTIONS');
+      }
+      if (cfg.DB && cfg.DB.MIN_POOL > cfg.DB.MAX_POOL) {
+        errs.push('DB_MIN_POOL: must not exceed DB_MAX_POOL');
+      }
+      errs.push('');
+      return errs;
+    },
+  ];
+
+  const violatingInput = {
+    CACHE_TTL: '30m',
+    SESSION_TTL: '10m',
+    WORKERS: '8',
+    QUEUE_DEPTH: '10',
+    MAX_CONNECTIONS: '50',
+    DB_MIN_POOL: '20',
+    DB_MAX_POOL: '10',
+  };
+  const expectedCrossErrors = [
+    'CACHE_TTL must be smaller than SESSION_TTL',
+    'At least one of SENTRY_DSN, LOG_FILE must be set',
+    'WORKERS * QUEUE_DEPTH must not exceed MAX_CONNECTIONS',
+    'DB_MIN_POOL: must not exceed DB_MAX_POOL',
+  ];
+  const expectedCrossDetails = [
+    { key: '', message: 'CACHE_TTL must be smaller than SESSION_TTL' },
+    { key: '', message: 'At least one of SENTRY_DSN, LOG_FILE must be set' },
+    { key: '', message: 'WORKERS * QUEUE_DEPTH must not exceed MAX_CONNECTIONS' },
+    { key: 'DB_MIN_POOL', message: 'must not exceed DB_MAX_POOL' },
+  ];
+
+  assert.throws(
+    () => validateEnv(baseSchema, violatingInput, { rules: crossRules }),
+    err => err instanceof EnvSaafError
+      && err.message === 'Invalid environment variables:\n' + expectedCrossErrors.map(e => `  - ${e}`).join('\n')
+      && JSON.stringify(err.errors) === JSON.stringify(expectedCrossErrors)
+      && JSON.stringify(err.details) === JSON.stringify(expectedCrossDetails),
+  );
+
+  // 3. Non-throwing mode (`throwOnError: false`) collects hook errors while keeping the coerced frozen `env`.
+  let fmtCalls = 0;
+  const collected = validateEnv(baseSchema, violatingInput, {
+    throwOnError: false,
+    formatError: () => { fmtCalls++; return 'unused'; },
+    rules: crossRules,
+  });
+  assert.strictEqual(fmtCalls, 0);
+  assert.strictEqual(Object.isFrozen(collected.env), true);
+  assert.strictEqual(Object.isFrozen(collected.env.DB), true);
+  assert.strictEqual(collected.env.CACHE_TTL, 1800000);
+  assert.strictEqual(collected.env.SESSION_TTL, 600000);
+  assert.deepStrictEqual(collected.errors, expectedCrossErrors);
+  assert.deepStrictEqual(collected.details, expectedCrossDetails);
+
+  // `formatError` receives a frozen copy of `errors` including cross-field errors in throwing mode.
+  let formattedSeen = null;
+  assert.throws(
+    () => validateEnv(baseSchema, violatingInput, {
+      rules: crossRules[0],
+      formatError: (errs, ctx) => {
+        formattedSeen = { errs, frozen: Object.isFrozen(errs), keys: ctx.keys };
+        return `CROSS_FAIL(${errs.length})`;
+      },
+    }),
+    err => err instanceof EnvSaafError
+      && err.message === 'CROSS_FAIL(1)'
+      && JSON.stringify(err.errors) === JSON.stringify(['CACHE_TTL must be smaller than SESSION_TTL'])
+      && JSON.stringify(err.details) === JSON.stringify([{ key: '', message: 'CACHE_TTL must be smaller than SESSION_TTL' }]),
+  );
+  assert.strictEqual(formattedSeen.frozen, true);
+  assert.deepStrictEqual(formattedSeen.errs, ['CACHE_TTL must be smaller than SESSION_TTL']);
+
+  // 4. Incomplete-snapshot rule: skip `rules` whenever earlier checks produced 1+ errors.
+  let skippedCalls = 0;
+  const mustNotRun = () => {
+    skippedCalls++;
+    return 'secondary cascade error that must not appear';
+  };
+
+  const incompleteCases = [
+    // Missing required variable (1 error)
+    [{ SESSION_TTL: { type: 'duration', required: true } }, {}, {}],
+    // Multiple per-key errors (2 errors)
+    [{ A: { type: 'port', required: true }, B: { type: 'int', required: true } }, { A: 'bad' }, {}],
+    // Optional key supplied with uncoercible value (prevents bogus "at least one must be set" cascade)
+    [{ SENTRY_DSN: { type: 'url' }, LOG_FILE: { type: 'string' } }, { SENTRY_DSN: 'not-a-url' }, {}],
+    // Bounds failure
+    [{ N: { type: 'int', min: 10 } }, { N: '5' }, {}],
+    // Per-key custom validate failure
+    [{ N: { type: 'int', validate: v => v % 2 === 0 || 'must be even' } }, { N: '3' }, {}],
+    // Per-key transform failure
+    [{ S: { type: 'string', transform: () => { throw new Error('bad transform'); } } }, { S: 'hi' }, {}],
+    // Pass 2a `conflictsWith` failure
+    [{ A: { type: 'string', conflictsWith: 'B' }, B: { type: 'string' } }, { A: '1', B: '2' }, {}],
+    // Pass 2b `requiredIf` failure
+    [{ MODE: { default: 'prod' }, DSN: { type: 'url', requiredIf: { key: 'MODE', equals: 'prod' } } }, {}, {}],
+    // `strict: true` undeclared variable typo (prevents cascading missing-optional cross-field error)
+    [{ SENTRY_DSN: { type: 'url' }, LOG_FILE: { type: 'string' } }, { SENTRY_DNS: 'https://example.com' }, { strict: true }],
+  ];
+
+  for (const [schema, envInput, extraOpts] of incompleteCases) {
+    assert.throws(
+      () => validateEnv(schema, envInput, { ...extraOpts, rules: mustNotRun }),
+      err => err instanceof EnvSaafError && !err.errors.some(e => e.includes('secondary cascade')),
+    );
+    const nonThrowIncomplete = validateEnv(schema, envInput, {
+      ...extraOpts,
+      throwOnError: false,
+      rules: [mustNotRun],
+    });
+    assert.ok(nonThrowIncomplete.errors.length >= 1);
+    assert.ok(!nonThrowIncomplete.errors.some(e => e.includes('secondary cascade')));
+  }
+  // Malformed schema throws Invalid schema without running rules.
+  assert.throws(
+    () => validateEnv({ BAD: { type: 'unknown_type' } }, {}, { rules: mustNotRun }),
+    err => err instanceof EnvSaafError && err.message.startsWith('Invalid schema:'),
+  );
+  assert.strictEqual(skippedCalls, 0);
+
+  // 5. `loadEnv` and `loadEnvAsync` forwarding, `assign: true` atomicity, and source-free cross-field details.
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'env-saaf-346-'));
+  try {
+    const envFile = path.join(dir, '.env');
+    const loadSchema = {
+      PORT: { type: 'port', required: true },
+      ADMIN_PORT: { type: 'port', default: 9000 },
+    };
+    const distinctPortsRule = cfg => (cfg.PORT === cfg.ADMIN_PORT
+      ? ['PORT must differ from ADMIN_PORT', 'PORT: collides with ADMIN_PORT']
+      : undefined);
+
+    fs.writeFileSync(envFile, 'PORT=8080\nADMIN_PORT=9090\n');
+    const targetSync = {};
+    const loadedSync = loadEnv(loadSchema, {
+      path: envFile,
+      env: targetSync,
+      assign: true,
+      rules: distinctPortsRule,
+    });
+    assert.deepStrictEqual(loadedSync, { PORT: 8080, ADMIN_PORT: 9090 });
+    assert.strictEqual(Object.isFrozen(loadedSync), true);
+    assert.deepStrictEqual(targetSync, { PORT: '8080', ADMIN_PORT: '9090' });
+
+    const targetAsync = {};
+    const loadedAsync = await loadEnvAsync(loadSchema, {
+      path: envFile,
+      env: targetAsync,
+      assign: true,
+      rules: [distinctPortsRule],
+    });
+    assert.deepStrictEqual(loadedAsync, { PORT: 8080, ADMIN_PORT: 9090 });
+    assert.strictEqual(Object.isFrozen(loadedAsync), true);
+    assert.deepStrictEqual(targetAsync, { PORT: '8080', ADMIN_PORT: '9090' });
+
+    // Failing cross-field rule in loadEnv / loadEnvAsync throws EnvSaafError (even with throwOnError: false),
+    // leaves `assign: true` target unmutated, honours `formatError`, and never fabricates `details[].source`.
+    fs.writeFileSync(envFile, 'PORT=9000\n');
+    const untouchedSync = { EXISTING: 'keep' };
+    const untouchedAsync = { EXISTING: 'keep' };
+    const assertLoadFailure = (err) => {
+      assert.ok(err instanceof EnvSaafError);
+      assert.strictEqual(err.message, 'LOAD_RULE_ERR:2');
+      assert.deepStrictEqual(err.errors, [
+        'PORT must differ from ADMIN_PORT',
+        'PORT: collides with ADMIN_PORT',
+      ]);
+      assert.deepStrictEqual(err.details, [
+        { key: '', message: 'PORT must differ from ADMIN_PORT' },
+        { key: 'PORT', message: 'collides with ADMIN_PORT' },
+      ]);
+      assert.strictEqual('source' in err.details[0], false);
+      assert.strictEqual('source' in err.details[1], false);
+      return true;
+    };
+
+    assert.throws(
+      () => loadEnv(loadSchema, {
+        path: envFile,
+        env: untouchedSync,
+        assign: true,
+        throwOnError: false,
+        formatError: errs => `LOAD_RULE_ERR:${errs.length}`,
+        rules: distinctPortsRule,
+      }),
+      assertLoadFailure,
+    );
+    await assert.rejects(
+      loadEnvAsync(loadSchema, {
+        path: envFile,
+        env: untouchedAsync,
+        assign: true,
+        throwOnError: false,
+        formatError: errs => `LOAD_RULE_ERR:${errs.length}`,
+        rules: [distinctPortsRule],
+      }),
+      assertLoadFailure,
+    );
+    assert.deepStrictEqual(untouchedSync, { EXISTING: 'keep' });
+    assert.deepStrictEqual(untouchedAsync, { EXISTING: 'keep' });
+
+    // 6. Invalid `options.rules` shapes, invalid hook return types, throwing hooks, and unknown-option messages.
+    const sparseRules = Array(1);
+    for (const badRules of [null, 0, 123, 'fn', true, false, {}, [null], [123], [() => undefined, 'not-fn'], sparseRules]) {
+      assert.throws(
+        () => validateEnv({ REQ: { required: true } }, {}, { throwOnError: false, rules: badRules }),
+        err => err instanceof TypeError && err.message === 'env-saaf: "rules" option must be a function or an array of functions',
+      );
+      assert.throws(
+        () => loadEnv({ OPT: { type: 'string' } }, { path: envFile, env: {}, rules: badRules }),
+        err => err instanceof TypeError && err.message === 'env-saaf: "rules" option must be a function or an array of functions',
+      );
+      await assert.rejects(
+        loadEnvAsync({ OPT: { type: 'string' } }, { path: envFile, env: {}, rules: badRules }),
+        err => err instanceof TypeError && err.message === 'env-saaf: "rules" option must be a function or an array of functions',
+      );
+    }
+
+    const sparseReturn = Array(1);
+    for (const badOutcome of [false, true, 0, 42, {}, Promise.resolve('async'), [123], ['ok', null], sparseReturn]) {
+      assert.throws(
+        () => validateEnv({ PORT: { type: 'port', default: 3000 } }, {}, { throwOnError: false, rules: () => badOutcome }),
+        err => err instanceof TypeError && err.message === 'env-saaf: "rules" hook must return a string, an array of strings, or undefined',
+      );
+    }
+
+    // A hook that throws a programming error propagates unchanged (matching #279 formatError).
+    const bug = new RangeError('unexpected bug inside cross-field hook');
+    assert.throws(
+      () => validateEnv({ PORT: { type: 'port', default: 3000 } }, {}, { throwOnError: false, rules: () => { throw bug; } }),
+      err => err === bug,
+    );
+    assert.throws(
+      () => loadEnv({ PORT: { type: 'port', default: 3000 } }, { path: envFile, env: {}, rules: () => { throw bug; } }),
+      err => err === bug,
+    );
+    await assert.rejects(
+      loadEnvAsync({ PORT: { type: 'port', default: 3000 } }, { path: envFile, env: {}, rules: () => { throw bug; } }),
+      err => err === bug,
+    );
+
+    // Unknown-option diagnostics advertise `rules` on both validateEnv and loadEnv.
+    assert.throws(
+      () => validateEnv({}, {}, { rule: () => undefined }),
+      err => err instanceof EnvSaafError
+        && err.errors[0] === 'unknown option "rule" (validateEnv accepts: throwOnError, strict, onWarn, formatError, rules)',
+    );
+    assert.throws(
+      () => loadEnv({}, { rule: () => undefined }),
+      err => err instanceof EnvSaafError
+        && err.errors[0] === 'unknown option "rule" (loadEnv accepts: path, paths, env, override, assign, throwOnError, strict, onWarn, formatError, rules)',
+    );
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+})();
+
+Promise.all([watchModeTest, watchModeErrorPathTest, watchModeEsmSchemaTest, loadEnvAsyncTest, formatErrorThrowingHookTest, loadEnvSourceErrorsTest, conflictsWithTest, interpolationOperatorsTest, crossFieldRulesTest])
   .then(() => console.log('env-saaf v1.5.0: all tests passed'))
   .catch((err) => { console.error(err); process.exit(1); });
