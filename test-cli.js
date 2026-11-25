@@ -376,6 +376,26 @@ try {
     assert.match(plain.stderr, /No process\.env usage found\./);
   }
 
+  // --- scan/check --exclude: repeatable names and globs (issue #355) --------
+  {
+    const dir = mkProject({
+      'src/app.js': 'process.env.KEEP;\n',
+      'fixtures/a.js': 'process.env.SKIP_FIXTURE;\n',
+      'src/generated/g.js': 'process.env.SKIP_GENERATED;\n',
+      '.env.example': 'KEEP=\n',
+    });
+    const all = JSON.parse(run(['scan', dir, '--json'], dir).stdout);
+    assert.ok(all.vars.includes('SKIP_FIXTURE') && all.vars.includes('SKIP_GENERATED'));
+    const excluded = JSON.parse(run(['scan', dir, '--exclude', 'fixtures', '--exclude', 'src/generated/**', '--json'], dir).stdout);
+    assert.deepStrictEqual(excluded.vars, ['KEEP']);
+    assert.ok(!('excluded' in excluded), 'JSON shape is unchanged');
+    const check = run(['check', dir, '--exclude', 'fixtures', '--exclude', 'src/generated/**'], dir);
+    assert.strictEqual(check.status, 0, check.stdout + check.stderr);
+    const noValue = run(['scan', dir, '--exclude'], dir);
+    assert.strictEqual(noValue.status, 2);
+    assert.match(noValue.stderr, /--exclude needs a value/);
+  }
+
   // --- scan: UNUSED warnings go to stderr and never change the exit code -----
   {
     const dir = mkProject({ 'src/app.js': SRC_WITH_USAGE, '.env.example': EXAMPLE_BOTH + 'LEGACY_KEY=\n' });

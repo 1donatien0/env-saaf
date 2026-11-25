@@ -2149,8 +2149,47 @@ const SCAN_SKIP_DIRECTORIES = new Set([
   'node_modules', 'dist', 'build', 'coverage', '.next', 'out', 'target',
 ]);
 
-function listScanFiles(dir) {
+/** Turn one exclusion glob into an anchored RegExp over a relative path. */
+function globToRegExp(glob) {
+  let out = '';
+  for (let i = 0; i < glob.length; i++) {
+    const ch = glob[i];
+    if (ch === '*') {
+      if (glob[i + 1] === '*') {
+        out += '.*';
+        i++;
+        if (glob[i + 1] === '/') i++;   // `**/` also matches zero directories
+      } else {
+        out += '[^/]*';
+      }
+    } else if (ch === '?') {
+      out += '[^/]';
+    } else {
+      out += ch.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    }
+  }
+  return new RegExp(`^${out}$`);
+}
+
+/** A predicate over a path relative to the scanned root (issue #355). */
+function scanExcluder(patterns) {
+  if (!patterns || !patterns.length) return () => false;
+  const tests = patterns.map((pattern) => {
+    const glob = String(pattern).trim().replace(/\\/g, '/').replace(/^\.\//, '').replace(/\/+$/, '');
+    if (!glob) return () => false;
+    const re = globToRegExp(glob);
+    // A bare name matches that segment anywhere in the tree; a path with a
+    // slash matches the relative path.
+    return glob.includes('/')
+      ? (rel) => re.test(rel)
+      : (rel) => rel.split('/').some((segment) => re.test(segment));
+  });
+  return (rel) => tests.some((test) => test(rel));
+}
+
+function listScanFiles(dir, options = {}) {
   const files = [];
+  const excluded = scanExcluder(options.exclude);
   // A real path is walked once, so a symlinked package is included but a
   // symlink cycle cannot loop forever (issue #339).
   const visited = new Set();
@@ -2166,6 +2205,7 @@ function listScanFiles(dir) {
     for (const e of fs.readdirSync(d, { withFileTypes: true })) {
       if (SCAN_SKIP_DIRECTORIES.has(e.name) || e.name.startsWith('.git')) continue;
       const p = path.join(d, e.name);
+      if (excluded(path.relative(dir, p))) continue;
       let isDirectory = e.isDirectory();
       if (!isDirectory && e.isSymbolicLink()) {
         try {
@@ -2182,9 +2222,9 @@ function listScanFiles(dir) {
   return files;
 }
 
-function scanDir(dir) {
+function scanDir(dir, options = {}) {
   const found = new Set();
-  for (const p of listScanFiles(dir)) {
+  for (const p of listScanFiles(dir, options)) {
     scanCode(fs.readFileSync(p, 'utf8')).forEach(k => found.add(k));
   }
   return [...found].sort();
@@ -2194,9 +2234,9 @@ function scanDir(dir) {
  * Issue #335: directory scan with a `locations` map. File paths are relative to
  * `dir` using forward slashes; lines are 1-based. `vars` matches `scanDir`.
  */
-function scanDirLocations(dir) {
+function scanDirLocations(dir, options = {}) {
   const root = path.resolve(dir);
-  const files = listScanFiles(dir)
+  const files = listScanFiles(dir, options)
     .map((abs) => ({
       abs,
       rel: path.relative(root, abs).split(path.sep).join('/'),
