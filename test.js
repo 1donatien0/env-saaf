@@ -7207,6 +7207,28 @@ assert.deepStrictEqual(scanCode("const env = process.env; env['DB.PORT']; env[`M
   assert.match(withDir.stderr, /--stdin cannot be combined with a directory argument/);
 }
 
+// Issue #349: near-miss key suggestions (case-only and one-edit swaps)
+{
+  const schema = { PORT: { type: 'port', required: true } };
+  assert.throws(() => validateEnv(schema, { port: '3000' }), /did you mean port\? it is set/);
+
+  let err;
+  try { validateEnv(schema, { PROT: '3000' }, { strict: true }); } catch (e) { err = e; }
+  assert.ok(err.errors.some((m) => /PROT: set but not in schema .*did you mean PORT\? it is declared/.test(m)));
+  assert.ok(err.errors.some((m) => /PORT: missing required variable .*did you mean PROT\? it is set/.test(m)));
+
+  // Unrelated keys stay quiet.
+  try { validateEnv(schema, { TIMEOUT: '3' }, { strict: true }); } catch (e) { err = e; }
+  assert.ok(err.errors.every((m) => !m.includes('did you mean')));
+
+  // Only names are suggested; a sensitive value is never echoed.
+  try {
+    validateEnv({ API_TOKEN: { type: 'string', required: true, sensitive: true } }, { api_token: 'secret-value' }, { strict: true });
+  } catch (e) { err = e; }
+  assert.ok(err.errors.some((m) => m.includes('did you mean api_token?')));
+  assert.ok(err.errors.every((m) => !m.includes('secret-value')));
+}
+
 // Issue #335: scan --json reports where each variable is used; plain output and
 // vars/unused stay stable. Library helpers drive the CLI rather than a second walk.
 {
@@ -8486,5 +8508,6 @@ const interpolationOperatorsTest = (async () => {
 })();
 
 Promise.all([watchModeTest, watchModeErrorPathTest, watchModeEsmSchemaTest, loadEnvAsyncTest, formatErrorThrowingHookTest, loadEnvSourceErrorsTest, conflictsWithTest, interpolationOperatorsTest])
+
   .then(() => console.log('env-saaf v1.5.0: all tests passed'))
   .catch((err) => { console.error(err); process.exit(1); });
