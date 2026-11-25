@@ -49,6 +49,10 @@
   instead of living only as README snippets. Both fail with the env-saaf message
   when a required value is missing (fixes #364).
 
+- Added: repeatable `--exclude <pattern>` on `scan` and `check`, backed by
+  `scanDir(dir, { exclude })`. A bare name excludes that directory anywhere and
+  a path supports `*` and `**`, so vendored or generated code no longer adds
+  keys to the scan (fixes #355).
 - Added: `init --from-example` infers `uuid`, `date`, `duration`, `semver`,
   `json` and `hex` from unambiguous sample values, each confirmed with the real
   validator, so the generated starter schema needs less hand-editing
