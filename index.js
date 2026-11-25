@@ -98,6 +98,7 @@ const KNOWN_RULE_OPTIONS = new Set([
   'type',
   'required',
   'description',
+  'deprecated',
   'requiredIf',
   'conflictsWith',
   'default',
@@ -298,6 +299,9 @@ function validateSchemaRules(schema, warn, patterns = new Map(), prefix = '', an
     }
     if (rule.description !== undefined && typeof rule.description !== 'string') {
       errors.push(`${key}: "description" must be a string`);
+    }
+    if (rule.deprecated !== undefined && typeof rule.deprecated !== 'boolean' && typeof rule.deprecated !== 'string') {
+      errors.push(`${key}: "deprecated" must be a boolean or a string`);
     }
     if (rule.type !== undefined && !KNOWN_TYPES.has(rule.type)) {
       errors.push(`${key}: unknown type "${rule.type}"`);
@@ -1077,6 +1081,10 @@ function validateEnvCore(schema, env, options, valueSources) {
     // (exactly like `undefined`) — it must not reach coercion and become
     // the literal string "null".
     if (raw === null) raw = undefined;
+    if (raw !== undefined && raw !== '') {
+      const notice = deprecationNotice(rule.deprecated);
+      if (notice) warn(`env-saaf: ${key} is ${notice}`);
+    }
     // Issue #350: remember which env key supplied the selected input (canonical
     // or alias winner). Schema defaults clear this so a bad default is never
     // blamed on a file that only contributed an empty placeholder.
@@ -2347,6 +2355,13 @@ function scalarPlaceholder(rule, stringGrowth) {
   return value.toLocaleString('en-US', { useGrouping: false, maximumSignificantDigits: 21 });
 }
 
+function deprecationNotice(option) {
+  if (option === true) return 'deprecated';
+  if (typeof option !== 'string') return '';
+  const reason = option.trim().replace(/[\r\n]+/g, ' ');
+  return reason ? `deprecated: ${reason}` : 'deprecated';
+}
+
 /** Generate .env.example text from a schema. Values are placeholders/defaults only — never real secrets. */
 function generateExample(schema) {
   // A key that looks like a secret gets an empty placeholder — there is
@@ -2383,6 +2398,8 @@ function generateExample(schema) {
         comment += `; required when ${cond.key} is one of ${cond.in.map(fmt).join(', ')}`;
       }
     }
+    const notice = deprecationNotice(rule.deprecated);
+    if (notice) comment += `; ${notice}`;
     const looksSecret = rule.sensitive === true || key.split('_').some(part => SECRET_WORDS.has(part.toUpperCase()));
     const placeholder = rule.default !== undefined
       ? (rule.type === 'array' && Array.isArray(rule.default) ? rule.default.join(rule.separator || ',') : rule.default)

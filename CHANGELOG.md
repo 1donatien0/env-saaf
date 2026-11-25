@@ -9,6 +9,8 @@
   diagnostics, and validated up front against self-references and undeclared
   keys in `validateSchema` (fixes #345).
 
+- Added: `deprecated` rules warn when a variable is set and annotate generated examples with an optional migration hint (fixes #344).
+
 - Added: `loadEnv` / `loadEnvAsync` validation errors name the winning `.env`
   file a bad value came from (`PORT (from .env.local): ...`) and set
   `error.details[].source` to that path. Ambient-winning and `validateEnv`-only

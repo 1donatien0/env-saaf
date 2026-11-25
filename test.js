@@ -2,6 +2,37 @@
 const assert = require('node:assert');
 const { loadEnv, validateEnv, validateSchema, EnvSaafError, parseEnvFile, scanCode, scanCodeLocations, scanDir, scanDirLocations, diffEnv, maskSecrets, maskValue, generateExample, toJsonSchema } = require('./index');
 
+// Issue #344: deprecating a variable warns about supplied values, never defaults.
+{
+  const schema = {
+    OLD_PORT: { type: 'port', default: 80, deprecated: true, aliases: ['OLDER_PORT'] },
+    LEGACY: { description: 'Legacy setting', deprecated: 'Use MODE instead' },
+    CURRENT: { deprecated: false },
+  };
+  const warnings = [];
+  const options = { onWarn: message => warnings.push(message) };
+  const env = validateEnv(schema, { OLD_PORT: '8080', LEGACY: 'yes', CURRENT: 'ok' }, options);
+  assert.strictEqual(env.OLD_PORT, 8080);
+  assert.deepStrictEqual(warnings.splice(0), [
+    'env-saaf: OLD_PORT is deprecated', 'env-saaf: LEGACY is deprecated: Use MODE instead',
+  ]);
+  for (const source of [{}, { OLD_PORT: '' }, { OLD_PORT: null }]) {
+    assert.strictEqual(validateEnv(schema, source, options).OLD_PORT, 80);
+  }
+  assert.deepStrictEqual(warnings, []);
+  assert.strictEqual(validateEnv(schema, { OLDER_PORT: '90' }, options).OLD_PORT, 90);
+  assert.deepStrictEqual(warnings.splice(0), ['env-saaf: OLDER_PORT is deprecated; use OLD_PORT instead']);
+  assert.throws(() => validateEnv(schema, { OLD_PORT: 'bad' }, options), EnvSaafError);
+  assert.deepStrictEqual(warnings, ['env-saaf: OLD_PORT is deprecated']);
+  for (const bad of [1, null, [], {}]) {
+    assert.throws(() => validateSchema({ A: { deprecated: bad } }), /"deprecated" must be a boolean or a string/);
+  }
+  const example = generateExample(schema);
+  assert.match(example, /; deprecated\nOLD_PORT=/);
+  assert.match(example, /# Legacy setting; type: string; deprecated: Use MODE instead\nLEGACY=/);
+  assert.match(example, /# type: string\nCURRENT=/);
+}
+
 // Issue #322: duration bounds use the value parser without changing numeric bounds.
 {
   const rule = Object.freeze({ type: 'duration', min: '30s', max: '1h30m' });

@@ -26,6 +26,8 @@ export interface EnvRule {
   conflictsWith?: string | readonly string[];
   /** Human documentation for the variable. Shown in the `generateExample` comment and as the JSON Schema property `description`; it never affects validation. */
   description?: string;
+  /** Warn when the variable is set. A string adds a migration note to the warning and generated example. */
+  deprecated?: boolean | string;
   /** A default may be an already-parsed object or array for `type: 'json'` or `type: 'array'`, or a `Date` for `type: 'date'`. */
   default?: string | number | boolean | Date | Record<string, unknown> | unknown[] | null;
   choices?: Array<string | number | boolean>;

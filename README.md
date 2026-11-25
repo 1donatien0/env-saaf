@@ -232,6 +232,8 @@ Default stays off — many apps share one environment with other tools.
 
 ### Renaming variables safely with `aliases`
 
+To retire a variable, set `deprecated: true` or supply a migration hint such as `deprecated: 'Use MODE instead'`. A populated key emits a warning through `onWarn` (default `console.warn`) and follows its usual validation rules. Missing or empty values and schema defaults are silent. The generated example documents the deprecation alongside the variable's description.
+
 Renaming an environment variable across a fleet usually means old and new names coexist for weeks. Declare the old names with `aliases` on the canonical key:
 
 ```js
