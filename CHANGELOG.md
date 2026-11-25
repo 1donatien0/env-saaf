@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Added: `.env` interpolation support in `parseEnvFile` (and `loadEnv` /
+  `loadEnvAsync`) for POSIX `${VAR:?message}` / `${VAR?message}` required-value
+  checks and `${VAR:+alt}` / `${VAR+alt}` alternate expansions, including nested
+  references, escape and quote preservation, and key/line/file error provenance
+  (fixes #347).
+
 - Added: `conflictsWith` rule option (a key name or list of key names) to
   reject mutually exclusive variables when both are set after aliases and
   defaults resolve, including across grouped schemas. Checks are symmetric for

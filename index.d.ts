@@ -300,6 +300,12 @@ export interface LoadEnvOptions {
 
 export function loadEnv<S extends EnvSchema>(schema: S, options?: LoadEnvOptions): EnvResult<S>;
 export function loadEnvAsync<S extends EnvSchema>(schema: S, options?: LoadEnvOptions): Promise<EnvResult<S>>;
+/**
+ * Parse `.env` text into `{ KEY: value }`, handling quotes, `export `, inline
+ * comments, multiline quoted values, and static `${VAR}` parameter expansion
+ * (`${VAR}`, `${VAR:-default}`, `${VAR-default}`, `${VAR:?message}`,
+ * `${VAR?message}`, `${VAR:+alt}`, `${VAR+alt}`).
+ */
 export function parseEnvFile(text: string): Record<string, string>;
 /**
  * Find every env read in JS/TS source text — `process.env.KEY`,

@@ -43,7 +43,7 @@ const env = validateEnv({
 
 ### How validation works
 
-`loadEnv` parses the file and expands `${VAR:-default}` first; after that, both `validateEnv` and `loadEnv` run the same pipeline, so the order below is the whole contract:
+`loadEnv` parses the file and expands `${VAR}` parameter forms (`:-`, `-`, `:?`, `?`, `:+`, `+`) first; after that, both `validateEnv` and `loadEnv` run the same pipeline, so the order below is the whole contract:
 
 1. **Options and schema** are checked before any value: an unknown option or a malformed rule throws even when the variable is absent.
 2. **Groups are flattened** to full names (`DB_HOST`), so every later step works on the name that appears in the environment and errors name it.
@@ -514,7 +514,13 @@ HOST=example.com
 API_URL=https://${HOST}/api
 ```
 
-Use `${VAR:-fallback}` to supply a fallback when a value is unset or expands to an empty string. Use `${VAR-fallback}` to supply it only when the name is unset. For example, `API_URL=https://${HOST:-localhost}/api` uses `localhost` when `HOST` has no value. Defaults can include references such as `${HOST:-${DEFAULT_HOST}}`.
+Standard POSIX-style parameter expansions are resolved statically (no shell is invoked):
+
+- `${VAR:-fallback}` uses `fallback` when `VAR` is unset or expands to `''`; `${VAR-fallback}` uses it only when `VAR` is unset (for example, `API_URL=https://${HOST:-localhost}/api`).
+- `${VAR:+alt}` expands to `alt` when `VAR` is set and non-empty, or `''` otherwise; `${VAR+alt}` expands to `alt` whenever `VAR` is set (even if `''`), or `''` when unset.
+- `${VAR:?message}` throws an error naming the key, line number, `VAR`, and `message` (plus `(from <path>)` when loaded via `loadEnv` / `loadEnvAsync`) if `VAR` is unset or empty, and otherwise expands to `VAR`'s value; `${VAR?message}` throws only when `VAR` is unset.
+
+Defaults, alternates, and error messages may include nested references such as `${HOST:-${DEFAULT_HOST}}` or `${SSL:+https://${HOST}:8443}`.
 
 Quoted values may also span several lines (PEM keys, JSON blobs) — parsing continues until the closing quote. A backslash-escaped quote (`\'` inside single quotes, `\"` inside double quotes) stays part of the value, so `B='it\'s'` is `it's`; other backslashes, such as a Windows path, are kept as-is. Inside double quotes, `\n` and `\r` become a real newline and carriage return (as in dotenv), so a PEM key can be written on one line as `PRIVATE_KEY="-----BEGIN-----\n..."`; write `\\n` for a literal backslash-n, and use single quotes when every backslash must stay literal.
 
