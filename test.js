@@ -2365,9 +2365,19 @@ assert.deepStrictEqual(
   assert.strictEqual(validateEnv(schema, { HOST: '::1' }).HOST, '::1');
   assert.strictEqual(validateEnv(schema, { HOST: '2001:db8::1' }).HOST, '2001:db8::1');
   assert.strictEqual(validateEnv(schema, { HOST: 'DB.EXAMPLE.COM' }).HOST, 'DB.EXAMPLE.COM');
+  // Issue #413: one DNS root dot is accepted and preserved.
+  const longestHost = ['a'.repeat(63), 'b'.repeat(63), 'c'.repeat(63), 'd'.repeat(61)].join('.');
+  for (const host of ['example.com.', 'localhost.', 'DB.EXAMPLE.COM.', longestHost + '.']) {
+    assert.strictEqual(validateEnv(schema, { HOST: host }).HOST, host);
+  }
+  assert.strictEqual(validateEnv({ HOST: { type: 'host', default: 'example.com.' } }, {}).HOST, 'example.com.');
+  assert.deepStrictEqual(validateEnv({ HOSTS: { type: 'array', of: 'host' } }, { HOSTS: 'example.com.,db.internal.' }).HOSTS,
+    ['example.com.', 'db.internal.']);
+  assert.throws(() => validateEnv({ HOST: { type: 'host', maxLength: 11 } }, { HOST: 'example.com.' }), /at most 11 characters/);
+  assert.strictEqual(validateEnv({ HOST: { type: 'host', pattern: '\\.$' } }, { HOST: 'example.com.' }).HOST, 'example.com.');
   // A scheme, a path or a port is rejected, naming the key.
   for (const bad of ['https://db.internal', 'http://localhost:3000', 'db.internal:8080', 'localhost:3000',
-    'db/x', 'db.internal/', 'http://[::1]:8080', '-bad-.example.com', 'bad..host', '.example.com', 'example.com.']) {
+    'db/x', 'db.internal/', 'http://[::1]:8080', '-bad-.example.com', 'bad..host', '.example.com', 'example..com', 'example.com..', '.', '.example.com.', longestHost + 'x.', longestHost + 'x']) {
     assert.throws(() => validateEnv(schema, { HOST: bad }), /expected a hostname or IP address/);
   }
   assert.throws(() => validateEnv({ HOST: { type: 'host', required: true } }, {}), EnvSaafError);

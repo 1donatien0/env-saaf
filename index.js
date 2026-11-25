@@ -917,7 +917,8 @@ function coerce(key, raw, type, trim = true, protocols, sensitive = false, of = 
       if (s.includes(':')) {
         throw new Error(`${key}: expected a hostname or IP address (e.g. ${TYPE_EXAMPLES.host}), got "${shown}"`);
       }
-      if (!/^(?=.{1,253}$)([A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?)(\.[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?)*$/.test(s)) {
+      const hostname = s.endsWith('.') ? s.slice(0, -1) : s;
+      if (!/^(?=.{1,253}$)([A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?)(\.[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?)*$/.test(hostname)) {
         throw new Error(`${key}: expected a hostname or IP address (e.g. ${TYPE_EXAMPLES.host}), got "${shown}"`);
       }
       return s;
