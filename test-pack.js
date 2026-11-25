@@ -20,8 +20,8 @@ const TSC = path.join(ROOT, 'node_modules', 'typescript', 'bin', 'tsc');
 
 const EXPECTED_EXPORTS = [
   'EnvSaafError', 'diffEnv', 'generateExample', 'loadEnv', 'loadEnvAsync', 'maskSecrets',
-  'maskValue', 'parseEnvFile', 'scanCode', 'scanDir', 'toJsonSchema', 'validateEnv',
-  'validateSchema',
+  'maskValue', 'parseEnvFile', 'scanCode', 'scanCodeLocations', 'scanDir', 'scanDirLocations',
+  'toJsonSchema', 'validateEnv', 'validateSchema',
 ];
 
 let tmp;
@@ -124,7 +124,11 @@ function main() {
 
   writeProject(path.join(cjs, 'scan-fixture'), 'commonjs', { 'app.js': 'console.log(process.env.PACKED_KEY);\n' });
   const scan = must(run([bin, 'scan', '.', '--json'], path.join(cjs, 'scan-fixture')), 'env-saaf scan --json');
-  assert.deepStrictEqual(JSON.parse(scan.stdout), { ok: true, vars: ['PACKED_KEY'] });
+  assert.deepStrictEqual(JSON.parse(scan.stdout), {
+    ok: true,
+    vars: ['PACKED_KEY'],
+    locations: { PACKED_KEY: [{ file: 'app.js', line: 1 }] },
+  });
 
   // Types: a consumer file compiled against the installed declarations.
   writeProject(esm, 'module', {

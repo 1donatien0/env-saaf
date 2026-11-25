@@ -3,13 +3,28 @@
 ## Unreleased
 
 - Fixed: `check --schema` reports when a missing `.env` skips value validation, including `envFileFound: false` in JSON output (fixes #338).
+- Added: an optional `description` string on any rule. It is validated, leads
+  the generated `.env.example` comment and becomes the JSON Schema property
+  `description`; it never affects validation (fixes #343).
 
 - Added: runnable `examples/fastify/` and `examples/nextjs/` projects, matching
   the Express example's layout, so the Fastify and Next.js recipes are exercised
   instead of living only as README snippets. Both fail with the env-saaf message
   when a required value is missing (fixes #364).
 
+- Added: `scan --json` includes a `locations` map from each variable to `{ file, line }` uses (relative paths, 1-based lines), driven by `scanCodeLocations` / `scanDirLocations`; plain output and `vars` / `unused` stay unchanged (fixes #335).
+
+- Added: `toJsonSchema` emits a `pattern` for `base64` rules, so a consumer
+  validating against the exported schema accepts exactly the standard,
+  unpadded and URL-safe forms the runtime accepts and rejects a mixed alphabet
+  or bad padding (fixes #351).
+
 - Fixed: `validateSchema` rejects `required: true` together with a `default` (the default means the key can never be missing, so `required` was dead config). The `init` starter schema no longer sets both on `PORT` (fixes #340).
+
+- Added: an `exports` map exposing `.` (`types`, `import`, `require`) and
+  `./package.json`, so only the public entry resolves; deep imports such as
+  `env-saaf/cli.js` now fail with `ERR_PACKAGE_PATH_NOT_EXPORTED`. `main` and
+  `types` stay for older resolvers (fixes #357).
 
 - Fixed: duration bound errors name the duration and show milliseconds for numeric bounds, while preserving explicit units in string bounds (fixes #341).
 

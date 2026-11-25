@@ -138,13 +138,22 @@ try {
       '.env.example': 'USED_KEY=\nOLD_KEY=\n',
     });
     const parsed = JSON.parse(run(['scan', dir, '--json'], dir).stdout);
-    assert.deepStrictEqual(parsed, { ok: true, vars: ['USED_KEY'], unused: ['OLD_KEY'] });
+    assert.deepStrictEqual(parsed, {
+      ok: true,
+      vars: ['USED_KEY'],
+      unused: ['OLD_KEY'],
+      locations: { USED_KEY: [{ file: 'src/app.js', line: 1 }] },
+    });
   }
 
   {
     // Without a template there is nothing to compare: no unused field at all.
     const dir = mkProject({ 'src/app.js': 'console.log(process.env.ONLY);\n' });
-    assert.deepStrictEqual(JSON.parse(run(['scan', dir, '--json'], dir).stdout), { ok: true, vars: ['ONLY'] });
+    assert.deepStrictEqual(JSON.parse(run(['scan', dir, '--json'], dir).stdout), {
+      ok: true,
+      vars: ['ONLY'],
+      locations: { ONLY: [{ file: 'src/app.js', line: 1 }] },
+    });
   }
 
   // --- check --schema: an invalid value in the real .env fails the check ----
@@ -242,7 +251,7 @@ try {
     const dir = mkProject({ 'README.md': '# nothing here\n' });
     const r = run(['scan', dir, '--json'], dir);
     assert.strictEqual(r.status, 0);
-    assert.deepStrictEqual(JSON.parse(r.stdout), { ok: true, vars: [] });
+    assert.deepStrictEqual(JSON.parse(r.stdout), { ok: true, vars: [], locations: {} });
     const plain = run(['scan', dir], dir);
     assert.strictEqual(plain.status, 0);
     assert.match(plain.stderr, /No process\.env usage found\./);
@@ -819,7 +828,7 @@ try {
 
   // --- issue #359: scan --stdin reads piped code via scanCode ----------------
   {
-    const { scanCode } = require('./index');
+    const { scanCode, scanCodeLocations } = require('./index');
     const { spawn } = require('node:child_process');
     const dir = mkProject({
       'src/disk.js': 'console.log(process.env.DISK_ONLY_KEY);\n',
@@ -849,12 +858,17 @@ try {
     assert.strictEqual(plain.stderr, '');
     assert.strictEqual(plain.stdout, expectedVars.join('\n') + '\n');
 
-    // JSON mode (both flag orders): standard { ok: true, vars } shape without implicit cwd template noise.
+    // JSON mode (both flag orders): vars + locations from scanCodeLocations; no implicit cwd template noise.
+    const expectedStdinJson = scanCodeLocations(piped, '-');
     for (const args of [['scan', '--stdin', '--json'], ['scan', '--json', '--stdin']]) {
       const js = run(args, dir, piped);
       assert.strictEqual(js.status, 0, `${js.stdout}${js.stderr}`);
       assert.strictEqual(js.stderr, '');
-      assert.deepStrictEqual(JSON.parse(js.stdout), { ok: true, vars: expectedVars });
+      assert.deepStrictEqual(JSON.parse(js.stdout), {
+        ok: true,
+        vars: expectedVars,
+        locations: expectedStdinJson.locations,
+      });
     }
 
     // Explicit --file compares stdin keys against the named template file.
@@ -864,6 +878,7 @@ try {
       ok: true,
       vars: ['PORT'],
       unused: ['CWD_TEMPLATE_UNUSED'],
+      locations: { PORT: [{ file: '-', line: 1 }] },
     });
 
     // Empty stdin and comment-only stdin print existing no-usage output rather than hanging or crashing.
@@ -876,7 +891,7 @@ try {
       const emptyJson = run(['scan', '--stdin', '--json'], dir, emptyInput);
       assert.strictEqual(emptyJson.status, 0);
       assert.strictEqual(emptyJson.stderr, '');
-      assert.deepStrictEqual(JSON.parse(emptyJson.stdout), { ok: true, vars: [] });
+      assert.deepStrictEqual(JSON.parse(emptyJson.stdout), { ok: true, vars: [], locations: {} });
     }
 
     // Combining --stdin with a directory argument exits 2 with a clear message (text and --json).
@@ -922,7 +937,14 @@ try {
         try {
           assert.strictEqual(code, 0, err);
           assert.strictEqual(err, '');
-          assert.deepStrictEqual(JSON.parse(out), { ok: true, vars: ['PIPE_FIRST', 'PIPE_SECOND'] });
+          assert.deepStrictEqual(JSON.parse(out), {
+            ok: true,
+            vars: ['PIPE_FIRST', 'PIPE_SECOND'],
+            locations: {
+              PIPE_FIRST: [{ file: '-', line: 2 }],
+              PIPE_SECOND: [{ file: '-', line: 3 }],
+            },
+          });
           resolve();
         } catch (assertionErr) {
           reject(assertionErr);
