@@ -6440,6 +6440,28 @@ assert.deepStrictEqual(
     ['A', 'AFTER_STRING', 'AFTER_TEMPLATE', 'ARGS', 'B', 'BEFORE_SOURCE', 'COMMA', 'COMMENTED', 'DECREMENT', 'DIRECT', 'EXPRESSION', 'INCREMENT', 'SELECTED', 'VISIBLE', 'VITE_DIRECT', 'VITE_X', 'Z']);
 }
 
+// Issue #425: destructured `process` aliases (`const { env } = process`, `const { env: myEnv } = process`).
+{
+  assert.deepStrictEqual(scanCode('const { env } = process;\nconst k = env.DB_URL;'), ['DB_URL']);
+  assert.deepStrictEqual(scanCode('const { env: myEnv } = process;\nconst k = myEnv.DB_URL;'), ['DB_URL']);
+  assert.deepStrictEqual(scanCode('const { argv } = process; argv.DB_URL;'), []);
+  assert.deepStrictEqual(scanCode('const { argv, env: myEnv, pid = 1 } = process; argv.IGNORED; myEnv.PORT; pid.NOPE;'), ['PORT']);
+  assert.deepStrictEqual(scanCode('let { env = { FALLBACK: "1" } } = process; env["API_KEY"];'), ['API_KEY']);
+  assert.deepStrictEqual(scanCode('var { "env": cfg = {} } = /* note */ process; cfg[`DB.HOST`];'), ['DB.HOST']);
+  assert.deepStrictEqual(scanCode('const { notEnv: env } = process; env.IGNORED;'), []);
+  assert.deepStrictEqual(scanCode('const { env } = process.env; env.IGNORED;'), ['env']);
+  assert.deepStrictEqual(scanCode('const { env } = process || {}; env.IGNORED;'), []);
+  assert.deepStrictEqual(scanCode('// const { env } = process;\n"const { env: s } = process;"; env.A; s.B;'), []);
+  assert.deepStrictEqual(scanCode('env.BEFORE;\nconst { env } = process;\nenv.AFTER;'), ['AFTER']);
+  assert.deepStrictEqual(scanCode('const { env: myEnv } = process, x = myEnv.COMMA;'), ['COMMA']);
+  assert.deepStrictEqual(scanCode('const { env: { NESTED } } = process;'), []);
+  const located = scanCodeLocations('const { env: myEnv } = process;\nconst k = myEnv.DB_URL;\n', 'app.js');
+  assert.deepStrictEqual(located, {
+    vars: ['DB_URL'],
+    locations: { DB_URL: [{ file: 'app.js', line: 2 }] },
+  });
+}
+
 // Issue #230: watch-mode integration test — spawn `cli.js check --watch` as a
 // subprocess, edit files, and assert it re-runs (debounced) and exits 0 on Ctrl-C.
 const watchModeTest = (async () => {
