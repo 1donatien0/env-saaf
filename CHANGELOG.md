@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- Added: `check` flags values in `.env.example` (or `--file`) that look like real secrets — known credential shapes (`sk-...`, `AKIA...`, URLs with non-empty passwords, hex tokens) and long high-entropy strings — exiting `1` with the key named, the value redacted from all output, and a `secrets` key list in `--json`, while keeping empty values, common placeholders and `generateExample` outputs valid (fixes #416).
+- Added: `check` flags values in `.env.example` (or `--file`) that look like real secrets, including known credential shapes (`sk-...`, `AKIA...`, URLs with non-empty passwords, hex tokens) and long high-entropy strings. It exits `1`, names the key, redacts the value from output, and adds the key to `secrets` in `--json` while keeping empty values, common placeholders and `generateExample` outputs valid (fixes #416).
 
 - Docs: list the shared conflictsWith and description options in the four translated READMEs.
 
