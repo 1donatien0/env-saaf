@@ -235,6 +235,84 @@ try {
     assert.match(noSchema.stderr, /--values needs --schema/);
   }
 
+  // --- project config: package.json "env-saaf" key supplies defaults (issue #354)
+  {
+    const base = {
+      'src/app.js': SRC_WITH_USAGE,
+      '.env.example': EXAMPLE_BOTH,
+      '.env': 'PORT=3000\nDATABASE_URL=postgres://localhost/app\n',
+      'env.schema.js': SCHEMA,
+    };
+    // config schema is used when no --schema flag is given: a bad value fails.
+    {
+      const dir = mkProject({ ...base, 'package.json': '{"name":"tmp","env-saaf":{"schema":"env.schema.js"}}' });
+      const ok = run(['check', dir], dir);
+      assert.strictEqual(ok.status, 0, ok.stdout + ok.stderr);
+      const badDir = mkProject({ ...base, '.env': 'PORT=nope\nDATABASE_URL=postgres://localhost/app\n', 'package.json': '{"name":"tmp","env-saaf":{"schema":"env.schema.js"}}' });
+      const bad = run(['check', badDir], badDir);
+      assert.strictEqual(bad.status, 1);
+      assert.match(bad.stdout, /INVALID: PORT/);
+    }
+    // an explicit flag beats the config: --schema points elsewhere.
+    {
+      const dir = mkProject({
+        ...base,
+        '.env': 'PORT=nope\nDATABASE_URL=postgres://localhost/app\n',
+        'package.json': '{"name":"tmp","env-saaf":{"schema":"env.schema.js"}}',
+        'other.schema.js': "module.exports = { PORT: { type: 'string' }, DATABASE_URL: { type: 'string' } };\n",
+      });
+      const r = run(['check', dir, '--schema', 'other.schema.js'], dir);
+      assert.strictEqual(r.status, 0, r.stdout + r.stderr);
+    }
+    // config file: the template name comes from the config when --file is absent.
+    {
+      const dir = mkProject({
+        'src/app.js': SRC_WITH_USAGE,
+        '.env.sample': EXAMPLE_BOTH,
+        'package.json': '{"name":"tmp","env-saaf":{"file":".env.sample"}}',
+      });
+      const r = run(['check', dir], dir);
+      assert.strictEqual(r.status, 0, r.stdout + r.stderr);
+      assert.match(r.stdout, /code and \.env\.sample match/);
+    }
+    // config dir: with no directory argument, the configured directory is checked.
+    {
+      const dir = mkProject({
+        'app/src/app.js': SRC_WITH_USAGE,
+        'app/.env.example': EXAMPLE_BOTH,
+        'package.json': '{"name":"tmp","env-saaf":{"dir":"app"}}',
+      });
+      const r = run(['check'], dir);
+      assert.strictEqual(r.status, 0, r.stdout + r.stderr);
+      // an explicit directory argument beats the config dir.
+      const r2 = run(['check', 'app'], dir);
+      assert.strictEqual(r2.status, 0, r2.stdout + r2.stderr);
+    }
+    // unknown config keys, a non-object config and a malformed package.json
+    // are usage errors (exit 2), never silently ignored.
+    {
+      const unknown = mkProject({ ...base, 'package.json': '{"name":"tmp","env-saaf":{"bogus":1}}' });
+      const r = run(['check', unknown], unknown);
+      assert.strictEqual(r.status, 2);
+      assert.match(r.stderr, /unknown key.*bogus/);
+      const notObj = mkProject({ ...base, 'package.json': '{"name":"tmp","env-saaf":"env.schema.js"}' });
+      const r2 = run(['check', notObj], notObj);
+      assert.strictEqual(r2.status, 2);
+      assert.match(r2.stderr, /must be an object/);
+      const broken = mkProject({ ...base, 'package.json': '{"name":' });
+      const r3 = run(['check', broken], broken);
+      assert.strictEqual(r3.status, 2);
+      assert.match(r3.stderr, /cannot read project config/);
+    }
+    // print works from the config schema alone (it requires --schema).
+    {
+      const dir = mkProject({ ...base, 'package.json': '{"name":"tmp","env-saaf":{"schema":"env.schema.js"}}' });
+      const r = run(['print', dir], dir);
+      assert.strictEqual(r.status, 0, r.stdout + r.stderr);
+      assert.match(r.stdout, /PORT=3000/);
+    }
+  }
+
   // --- print: coerced values, defaults and masked sensitive rules (#353) ---
   {
     const schema = "module.exports = {\n"

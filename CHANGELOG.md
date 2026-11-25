@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Added: the CLI reads defaults from an `env-saaf` key in the project's
+  `package.json` (`schema`, `file` and `dir`), so `check` / `scan` / `print` /
+  `example` / `init` no longer repeat the same flags; explicit flags always
+  win, unknown config keys are a usage error, and projects without the key
+  behave as before (fixes #354).
 - Added: with `--schema`, `check` also diffs the schema against
   `.env.example` in both directions — `NOT DOCUMENTED` for schema keys missing
   from the example and `NOT IN SCHEMA` for example keys the schema does not
