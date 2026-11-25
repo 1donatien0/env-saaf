@@ -1524,7 +1524,7 @@ function* loadEnvSteps(schema, options) {
       continue;
     }
     foundAny = true;
-    const parsed = parseEnvFile(fileText);
+    const parsed = parseEnvFileWithSource(fileText, filePath);
     for (const key of Object.keys(parsed)) {
       fileEnv[key] = parsed[key];
       fileSources[key] = filePath;
@@ -1602,7 +1602,8 @@ function expandDoubleQuotedEscapes(inner) {
 }
 
 /** Parse .env text -> { KEY: value }. Handles quotes, `export `, comments,
- * multiline quoted values, and ${VAR} interpolation. */
+ * multiline quoted values, and POSIX-style ${VAR} parameter expansion
+ * (`:-`, `-`, `:?`, `?`, `:+`, `+`). */
 /**
  * Index of the first `quote` in `text` that is not escaped by a backslash,
  * starting at `from`; -1 when the value is still unterminated (multiline).
@@ -1618,6 +1619,10 @@ function closingQuoteIndex(text, quote, from = 1) {
 }
 
 function parseEnvFile(text) {
+  return parseEnvFileWithSource(text, undefined);
+}
+
+function parseEnvFileWithSource(text, sourceFile) {
   // A file path passed by mistake (e.g. parseEnvFile('.env')) used to silently
   // return {} because no line matched KEY=VALUE. Detect that confusion: a
   // single-line string with no '=' that looks like a path is almost certainly
@@ -1691,7 +1696,7 @@ function parseEnvFile(text) {
   // protected until all expansion rounds are complete.
   const ESC = String.fromCharCode(92) + '${';
   const PH = String.fromCharCode(1);
-  const openRef = /\$\{([A-Za-z_][A-Za-z0-9_]*)(:-|-|(?=\}))/g;
+  const openRef = /\$\{([A-Za-z_][A-Za-z0-9_]*)(:-|:\?|:\+|-|\+|\?|(?=\}))/g;
   const expandRefs = (text, remaining, self) => {
     let result = '';
     let cursor = 0;
@@ -1701,7 +1706,8 @@ function parseEnvFile(text) {
       const start = match.index + match[0].length;
       let end = start;
       let depth = 0;
-      // A default may contain nested references, including protected escapes.
+      // Operands (defaults, alternates, error messages) may contain nested
+      // references, literal brace pairs, or protected `\${` escapes.
       for (; end < text.length; end++) {
         if (text[end] === '{' || text[end] === PH) depth++;
         else if (text[end] === '}') {
@@ -1712,18 +1718,38 @@ function parseEnvFile(text) {
       if (end === text.length) break; // Leave an unterminated reference literal.
 
       // While the line that sets `self` is being resolved, its own value is
-      // not set yet (#185): with a `:-`/`-` operator present, the reference
-      // falls back to the default instead of re-reading the unresolved raw
-      // text. Without an operator the raw text is read, as before.
+      // not set yet (#185): with any parameter-expansion operator present, the
+      // reference treats `self` as unset instead of re-reading the unresolved
+      // raw text. Without an operator the raw text is read, as before.
       const value = name === self && operator ? undefined
         : Object.prototype.hasOwnProperty.call(raw, name)
           ? raw[name].split(ESC).join(PH)
-          : process.env[name];
-      const useDefault = operator && (value === undefined
-        || (operator === ':-' && expandValue(value, remaining, self) === ''));
-      result += text.slice(cursor, match.index) + (useDefault
-        ? text.slice(start, end)
-        : (value ?? ''));
+          : (Object.prototype.hasOwnProperty.call(process.env, name) ? process.env[name] : undefined);
+      const operand = text.slice(start, end);
+      let replacement;
+      if (!operator) {
+        replacement = value ?? '';
+      } else {
+        const colon = operator[0] === ':';
+        const missing = value === undefined || (colon && expandValue(value, remaining, self) === '');
+        if (operator === ':-' || operator === '-') {
+          replacement = missing ? operand : value;
+        } else if (operator === ':+' || operator === '+') {
+          replacement = missing ? '' : operand;
+        } else {
+          if (missing) {
+            const detail = expandValue(operand, remaining, self).split(PH).join('${')
+              || (colon ? 'is unset or empty' : 'is unset');
+            const err = new Error(sourceFile !== undefined
+              ? `env-saaf: ${self} (from ${sourceFile}) at line ${seen.get(self)}: ${name}: ${detail}`
+              : `env-saaf: ${self} at line ${seen.get(self)}: ${name}: ${detail}`);
+            if (sourceFile !== undefined) err.source = sourceFile;
+            throw err;
+          }
+          replacement = value;
+        }
+      }
+      result += text.slice(cursor, match.index) + replacement;
       cursor = end + 1;
     }
     return result + text.slice(cursor);

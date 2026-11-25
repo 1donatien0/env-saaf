@@ -8057,6 +8057,406 @@ const conflictsWithTest = (async () => {
   }
 })();
 
-Promise.all([watchModeTest, watchModeErrorPathTest, watchModeEsmSchemaTest, loadEnvAsyncTest, formatErrorThrowingHookTest, loadEnvSourceErrorsTest, conflictsWithTest])
+// Issue #347: POSIX `${VAR:?message}`, `${VAR?message}`, `${VAR:+alt}`, and `${VAR+alt}` interpolation.
+const interpolationOperatorsTest = (async () => {
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const path = require('node:path');
+  const { spawnSync } = require('node:child_process');
+  const {
+    parseEnvFile, loadEnv, loadEnvAsync, EnvSaafError,
+  } = require('./index');
+
+  assert.strictEqual(parseEnvFile.length, 1);
+  // Extra callback arguments (e.g. Array.prototype.map) must never leak as file provenance.
+  assert.deepStrictEqual(['A=1\n'].map(parseEnvFile), [{ A: '1' }]);
+  assert.throws(
+    () => ['A=${ENV_SAAF_347_ABSENT:?missing in map}\n'].map(parseEnvFile),
+    err => err instanceof Error
+      && err.message === 'env-saaf: A at line 1: ENV_SAAF_347_ABSENT: missing in map'
+      && !('source' in err),
+  );
+
+  const missingKey = 'ENV_SAAF_347_MISSING';
+  const extSetKey = 'ENV_SAAF_347_EXT_SET';
+  const extEmptyKey = 'ENV_SAAF_347_EXT_EMPTY';
+  const extOverrideKey = 'ENV_SAAF_347_EXT_OVERRIDE';
+  const prior = {
+    [missingKey]: process.env[missingKey],
+    [extSetKey]: process.env[extSetKey],
+    [extEmptyKey]: process.env[extEmptyKey],
+    [extOverrideKey]: process.env[extOverrideKey],
+  };
+
+  try {
+    delete process.env[missingKey];
+    process.env[extSetKey] = 'from-process';
+    process.env[extEmptyKey] = '';
+    process.env[extOverrideKey] = 'proc-non-empty';
+
+    // 1. Set, empty, expanded-empty, process.env, and unset cases for `:+`, `+`, `:?`, `?`, `:-`, `-`, and plain `${VAR}`.
+    const expanded = parseEnvFile([
+      'SET=alpha',
+      'ZERO=0',
+      'FALSE_STR=false',
+      'SPACE=" "',
+      'EMPTY=',
+      `ALIAS=\${${missingKey}}`,
+      'CHAIN=${SET}',
+      `${extOverrideKey}=`,
+      // `:+` (set and non-empty -> alt; empty or unset -> '')
+      'COLON_PLUS_SET=${SET:+yes}',
+      'COLON_PLUS_ZERO=${ZERO:+zero-set}',
+      'COLON_PLUS_FALSE=${FALSE_STR:+false-set}',
+      'COLON_PLUS_SPACE=${SPACE:+space-set}',
+      'COLON_PLUS_CHAIN=${CHAIN:+chained-yes}',
+      `COLON_PLUS_EXT_SET=\${${extSetKey}:+proc-yes}`,
+      'COLON_PLUS_EMPTY=${EMPTY:+no}',
+      'COLON_PLUS_ALIAS=${ALIAS:+no}',
+      `COLON_PLUS_EXT_EMPTY=\${${extEmptyKey}:+no}`,
+      `COLON_PLUS_FILE_EMPTY_WINS=\${${extOverrideKey}:+no}`,
+      `COLON_PLUS_UNSET=\${${missingKey}:+no}`,
+      'COLON_PLUS_EMPTY_ALT=x${SET:+}y',
+      // `+` (set even when empty -> alt; unset -> '')
+      'PLUS_SET=${SET+yes}',
+      'PLUS_EMPTY=${EMPTY+empty-still-set}',
+      'PLUS_ALIAS=${ALIAS+alias-still-set}',
+      `PLUS_EXT_SET=\${${extSetKey}+proc-yes}`,
+      `PLUS_EXT_EMPTY=\${${extEmptyKey}+proc-empty-set}`,
+      `PLUS_FILE_EMPTY_WINS=\${${extOverrideKey}+file-empty-set}`,
+      `PLUS_UNSET=\${${missingKey}+no}`,
+      'PLUS_EMPTY_ALT=x${EMPTY+}y',
+      // `:?` and `?` when satisfied (non-empty for `:?`; set including empty for `?`)
+      'REQ_COLON_SET=https://${SET:?missing set}/api',
+      'REQ_COLON_ZERO=${ZERO:?missing zero}',
+      'REQ_COLON_SPACE="${SPACE:?missing space}"',
+      'REQ_COLON_CHAIN=${CHAIN:?missing chain}',
+      `REQ_COLON_EXT=\${${extSetKey}:?missing ext}`,
+      'REQ_PLAIN_SET=${SET?missing set}',
+      'REQ_PLAIN_EMPTY=x${EMPTY?unset only}y',
+      'REQ_PLAIN_ALIAS=x${ALIAS?unset only}y',
+      `REQ_PLAIN_EXT_EMPTY=x\${${extEmptyKey}?unset only}y`,
+      'REQ_EMPTY_MSG_SATISFIED=${SET:?}/${EMPTY?}',
+      // Existing plain, `:-`, and `-` forms stay unchanged alongside new forms
+      'PLAIN_REF=${SET}-${EMPTY}-' + `\${${missingKey}}`,
+      'DEF_COLON_EMPTY=${EMPTY:-def}',
+      'DEF_DASH_EMPTY=${EMPTY-def}',
+      `DEF_DASH_UNSET=\${${missingKey}-def}`,
+    ].join('\n'));
+
+    assert.deepStrictEqual(expanded, {
+      SET: 'alpha',
+      ZERO: '0',
+      FALSE_STR: 'false',
+      SPACE: ' ',
+      EMPTY: '',
+      ALIAS: '',
+      CHAIN: 'alpha',
+      [extOverrideKey]: '',
+      COLON_PLUS_SET: 'yes',
+      COLON_PLUS_ZERO: 'zero-set',
+      COLON_PLUS_FALSE: 'false-set',
+      COLON_PLUS_SPACE: 'space-set',
+      COLON_PLUS_CHAIN: 'chained-yes',
+      COLON_PLUS_EXT_SET: 'proc-yes',
+      COLON_PLUS_EMPTY: '',
+      COLON_PLUS_ALIAS: '',
+      COLON_PLUS_EXT_EMPTY: '',
+      COLON_PLUS_FILE_EMPTY_WINS: '',
+      COLON_PLUS_UNSET: '',
+      COLON_PLUS_EMPTY_ALT: 'xy',
+      PLUS_SET: 'yes',
+      PLUS_EMPTY: 'empty-still-set',
+      PLUS_ALIAS: 'alias-still-set',
+      PLUS_EXT_SET: 'proc-yes',
+      PLUS_EXT_EMPTY: 'proc-empty-set',
+      PLUS_FILE_EMPTY_WINS: 'file-empty-set',
+      PLUS_UNSET: '',
+      PLUS_EMPTY_ALT: 'xy',
+      REQ_COLON_SET: 'https://alpha/api',
+      REQ_COLON_ZERO: '0',
+      REQ_COLON_SPACE: ' ',
+      REQ_COLON_CHAIN: 'alpha',
+      REQ_COLON_EXT: 'from-process',
+      REQ_PLAIN_SET: 'alpha',
+      REQ_PLAIN_EMPTY: 'xy',
+      REQ_PLAIN_ALIAS: 'xy',
+      REQ_PLAIN_EXT_EMPTY: 'xy',
+      REQ_EMPTY_MSG_SATISFIED: 'alpha/',
+      PLAIN_REF: 'alpha--',
+      DEF_COLON_EMPTY: 'def',
+      DEF_DASH_EMPTY: '',
+      DEF_DASH_UNSET: 'def',
+    });
+
+    // 2. Unsatisfied `:?` and `?` throw plain Error with key, 1-based line, variable name, and message (no source field).
+    const assertParseThrows = (input, expectedMessage) => {
+      assert.throws(
+        () => parseEnvFile(input),
+        err => err instanceof Error
+          && !(err instanceof SyntaxError)
+          && !(err instanceof EnvSaafError)
+          && err.message === expectedMessage
+          && !('source' in err),
+        `expected "${expectedMessage}" for input ${JSON.stringify(input)}`,
+      );
+    };
+
+    assertParseThrows(
+      `A=\${${missingKey}:?need it}\n`,
+      `env-saaf: A at line 1: ${missingKey}: need it`,
+    );
+    assertParseThrows(
+      `EMPTY=\nA=\${EMPTY:?cannot be blank}\n`,
+      'env-saaf: A at line 2: EMPTY: cannot be blank',
+    );
+    assertParseThrows(
+      `ALIAS=\${${missingKey}}\nA=\${ALIAS:?expanded blank}\n`,
+      'env-saaf: A at line 2: ALIAS: expanded blank',
+    );
+    assertParseThrows(
+      `A=\${${extEmptyKey}:?process blank}\n`,
+      `env-saaf: A at line 1: ${extEmptyKey}: process blank`,
+    );
+    assertParseThrows(
+      `${extOverrideKey}=\nA=\${${extOverrideKey}:?file blank overrides process}\n`,
+      `env-saaf: A at line 2: ${extOverrideKey}: file blank overrides process`,
+    );
+    assertParseThrows(
+      `A=\${${missingKey}?must be defined}\n`,
+      `env-saaf: A at line 1: ${missingKey}: must be defined`,
+    );
+    // Omitted message after `:?` and `?` falls back to distinct clear defaults.
+    assertParseThrows(
+      `A=\${${missingKey}:?}\n`,
+      `env-saaf: A at line 1: ${missingKey}: is unset or empty`,
+    );
+    assertParseThrows(
+      'EMPTY=\nA=${EMPTY:?}\n',
+      'env-saaf: A at line 2: EMPTY: is unset or empty',
+    );
+    assertParseThrows(
+      `A=\${${missingKey}?}\n`,
+      `env-saaf: A at line 1: ${missingKey}: is unset`,
+    );
+
+    // 3. Nested defaults/alternates/messages, untaken branches, quotes, escapes, and unterminated spans.
+    assert.deepStrictEqual(
+      parseEnvFile([
+        'FLAG=1',
+        'EMPTY=',
+        'HOST=service.internal',
+        // Nested inside `:+` and `+`, including JSON braces and nested `:-`
+        'NESTED_ALT=${FLAG:+https://${HOST}:${PORT_UNSET_347:-8443}/health}',
+        'NESTED_PLUS=${EMPTY+${FLAG:+inner-alt}}',
+        'BRACE_ALT=${FLAG:+{"enabled":true}}',
+        // Nested `:+` inside `:-`
+        'FALLBACK_TO_ALT=${EMPTY:-${FLAG:+from-alt}}',
+        // Untaken branches containing `:?` / `?` must NOT evaluate or throw
+        `UNTAKEN_COLON_DEF=\${FLAG:-\${${missingKey}:?must not fire}}`,
+        `UNTAKEN_DASH_DEF=\${EMPTY-\${${missingKey}:?must not fire}}`,
+        `UNTAKEN_COLON_PLUS=\${EMPTY:+\${${missingKey}:?must not fire}}`,
+        `UNTAKEN_PLUS=\${${missingKey}+\${${missingKey}?must not fire}}`,
+        // Single quotes, backslash escapes, double-quote escapes, and unterminated spans
+        `SINGLE_REQ='\${${missingKey}:?literal single}'`,
+        "SINGLE_ALT='${FLAG:+literal single}'",
+        `ESCAPED_REQ=\\\${${missingKey}:?literal escaped}`,
+        'ESCAPED_ALT=\\${FLAG:+literal escaped}',
+        `NESTED_ESCAPED_ALT=\${FLAG:+\\\${${missingKey}:?still literal}}`,
+        'DOUBLE_ESCAPED="${FLAG:+line1\\n\\"quoted\\"}"',
+        `UNTERMINATED_REQ=ok \${${missingKey}:?unterminated`,
+        'UNTERMINATED_ALT=ok ${FLAG:+unterminated',
+      ].join('\n')),
+      {
+        FLAG: '1',
+        EMPTY: '',
+        HOST: 'service.internal',
+        NESTED_ALT: 'https://service.internal:8443/health',
+        NESTED_PLUS: 'inner-alt',
+        BRACE_ALT: '{"enabled":true}',
+        FALLBACK_TO_ALT: 'from-alt',
+        UNTAKEN_COLON_DEF: '1',
+        UNTAKEN_DASH_DEF: '',
+        UNTAKEN_COLON_PLUS: '',
+        UNTAKEN_PLUS: '',
+        SINGLE_REQ: `\${${missingKey}:?literal single}`,
+        SINGLE_ALT: '${FLAG:+literal single}',
+        ESCAPED_REQ: `\${${missingKey}:?literal escaped}`,
+        ESCAPED_ALT: '${FLAG:+literal escaped}',
+        NESTED_ESCAPED_ALT: `\${${missingKey}:?still literal}`,
+        DOUBLE_ESCAPED: 'line1\n"quoted"',
+        UNTERMINATED_REQ: `ok \${${missingKey}:?unterminated`,
+        UNTERMINATED_ALT: 'ok ${FLAG:+unterminated',
+      },
+    );
+
+    // Taken branches with nested `:?` DO evaluate and report the outer assignment key and line.
+    assertParseThrows(
+      `EMPTY=\nTAKEN_DEF=\${EMPTY:-\${${missingKey}:?fallback missing}}\n`,
+      `env-saaf: TAKEN_DEF at line 2: ${missingKey}: fallback missing`,
+    );
+    assertParseThrows(
+      `FLAG=1\nTAKEN_ALT=\${FLAG:+\${${missingKey}:?dependent missing}}\n`,
+      `env-saaf: TAKEN_ALT at line 2: ${missingKey}: dependent missing`,
+    );
+    // Nested interpolation and escaped `\${...}` inside `:?` error messages resolve cleanly without control-char leaks.
+    assertParseThrows(
+      `STAGE=staging\nAPI_KEY=\${${missingKey}:?missing key for \${STAGE} (set \\\${API_KEY})}\n`,
+      `env-saaf: API_KEY at line 2: ${missingKey}: missing key for staging (set \${API_KEY})`,
+    );
+
+    // 4. Self-references (#185), bounded cycles, and Object.prototype property names.
+    assert.deepStrictEqual(parseEnvFile('A=${A:+alt}\nB=${B+alt}\nSET=1\nC=${SET:+${C:-self-fb}}\n'), {
+      A: '',
+      B: '',
+      SET: '1',
+      C: 'self-fb',
+    });
+    assertParseThrows('A=${A:?self unset}\n', 'env-saaf: A at line 1: A: self unset');
+    assertParseThrows('A=${A?self unset plain}\n', 'env-saaf: A at line 1: A: self unset plain');
+    assert.doesNotThrow(() => parseEnvFile('A=${B:+cycle}\nB=${A}\n'));
+
+    for (const protoKey of ['toString', 'constructor', 'hasOwnProperty']) {
+      if (!Object.prototype.hasOwnProperty.call(process.env, protoKey)) {
+        assert.deepStrictEqual(
+          parseEnvFile(`DEF=\${${protoKey}:-proto-fb}\nALT=\${${protoKey}:+nope}\nPLUS=\${${protoKey}+nope}\n`),
+          { DEF: 'proto-fb', ALT: '', PLUS: '' },
+        );
+        assertParseThrows(
+          `REQ=\${${protoKey}:?proto missing}\n`,
+          `env-saaf: REQ at line 1: ${protoKey}: proto missing`,
+        );
+      }
+    }
+
+    // 5. Multiline preceding values, CRLF/LF line numbers, value secrecy, loadEnv / loadEnvAsync provenance, and CLI.
+    for (const nl of ['\n', '\r\n']) {
+      const withMultiline = [
+        '# header comment',
+        '',
+        'CERT="line-one',
+        'line-two',
+        'line-three"',
+        `export TARGET_URL = https://\${SECRET_PART}@\${${missingKey}:?missing target host}`,
+        'SECRET_PART=synthetic_token_991122',
+      ].join(nl);
+      assert.throws(
+        () => parseEnvFile(withMultiline),
+        err => err.message === `env-saaf: TARGET_URL at line 6: ${missingKey}: missing target host`
+          && !err.message.includes('synthetic_token_991122')
+          && !('source' in err),
+      );
+    }
+
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'env-saaf-347-'));
+    try {
+      const baseFile = path.join(dir, '.env');
+      const localFile = path.join(dir, '.env.local');
+      const validSchema = {
+        HOST: { type: 'host', required: true },
+        TLS: { type: 'boolean', default: false },
+        ENDPOINT: { type: 'url', required: true },
+      };
+
+      fs.writeFileSync(baseFile, 'HOST=api.example.com\nTLS=true\n');
+      fs.writeFileSync(localFile, [
+        'HOST=local.example.com',
+        'TLS=1',
+        'ENDPOINT=https://${HOST:?missing host}${TLS:+:8443}/v1',
+      ].join('\n'));
+
+      assert.deepStrictEqual(loadEnv(validSchema, { paths: [baseFile, localFile], env: {} }), {
+        HOST: 'local.example.com',
+        TLS: true,
+        ENDPOINT: 'https://local.example.com:8443/v1',
+      });
+      assert.deepStrictEqual(await loadEnvAsync(validSchema, { paths: [baseFile, localFile], env: {} }), {
+        HOST: 'local.example.com',
+        TLS: true,
+        ENDPOINT: 'https://local.example.com:8443/v1',
+      });
+
+      // Failing `:?` inside layered `.env.local` preserves exact file, key, line, variable, and message without mutating env.
+      fs.writeFileSync(localFile, [
+        'SECRET_TOKEN=synthetic_secret_445566',
+        `ENDPOINT=https://\${SECRET_TOKEN}@\${${missingKey}:?need endpoint host}`,
+      ].join('\n'));
+      const callerEnv = { KEEP: 'untouched' };
+      const expectedLoadMsg = `env-saaf: ENDPOINT (from ${localFile}) at line 2: ${missingKey}: need endpoint host`;
+
+      assert.throws(
+        () => loadEnv(validSchema, { paths: [baseFile, localFile], env: callerEnv, assign: true }),
+        err => err instanceof Error
+          && !(err instanceof EnvSaafError)
+          && err.message === expectedLoadMsg
+          && err.source === localFile
+          && !err.message.includes('synthetic_secret_445566'),
+      );
+      await assert.rejects(
+        loadEnvAsync(validSchema, { paths: [baseFile, localFile], env: callerEnv, assign: true }),
+        err => err instanceof Error
+          && !(err instanceof EnvSaafError)
+          && err.message === expectedLoadMsg
+          && err.source === localFile
+          && !err.message.includes('synthetic_secret_445566'),
+      );
+      assert.deepStrictEqual(callerEnv, { KEEP: 'untouched' });
+
+      // Invalid value produced by `:+` keeps #350 winning-file validation provenance.
+      fs.writeFileSync(localFile, 'FLAG=1\nPORT=${FLAG:+not-a-port}\n');
+      for (const runLoader of [
+        () => {
+          try { loadEnv({ PORT: { type: 'port', required: true } }, { path: localFile, env: {} }); assert.fail('expected throw'); }
+          catch (e) { return e; }
+        },
+        async () => {
+          try { await loadEnvAsync({ PORT: { type: 'port', required: true } }, { path: localFile, env: {} }); assert.fail('expected reject'); }
+          catch (e) { return e; }
+        },
+      ]) {
+        const err = await runLoader();
+        assert.ok(err instanceof EnvSaafError);
+        assert.deepStrictEqual(err.errors, [`PORT (from ${localFile}): expected a port (0-65535, e.g. 3000), got "not-a-port"`]);
+        assert.strictEqual(err.details[0].source, localFile);
+      }
+
+      // CLI `check` (text and `--json`) formats relative file provenance with a single `env-saaf: ` prefix and no secret leak.
+      const cliDir = path.join(dir, 'cli-proj');
+      fs.mkdirSync(cliDir);
+      fs.writeFileSync(path.join(cliDir, 'app.js'), 'void process.env.ENDPOINT;\n');
+      fs.writeFileSync(path.join(cliDir, '.env.example'), 'ENDPOINT=\n');
+      fs.writeFileSync(
+        path.join(cliDir, '.env'),
+        `SECRET_PART=synthetic_cli_778899\nENDPOINT=https://\${SECRET_PART}@\${${missingKey}:?cli host required}\n`,
+      );
+      const cliPath = path.join(__dirname, 'cli.js');
+      const humanCli = spawnSync(process.execPath, [cliPath, 'check', cliDir], { encoding: 'utf8' });
+      assert.strictEqual(humanCli.status, 2);
+      assert.strictEqual(
+        humanCli.stderr.trim(),
+        `env-saaf: .env: ENDPOINT at line 2: ${missingKey}: cli host required`,
+      );
+      assert.ok(!humanCli.stderr.includes('synthetic_cli_778899'));
+
+      const jsonCli = spawnSync(process.execPath, [cliPath, 'check', cliDir, '--json'], { encoding: 'utf8' });
+      assert.strictEqual(jsonCli.status, 2);
+      assert.strictEqual(jsonCli.stderr, '');
+      const parsedCli = JSON.parse(jsonCli.stdout);
+      assert.deepStrictEqual(parsedCli, {
+        ok: false,
+        error: `.env: ENDPOINT at line 2: ${missingKey}: cli host required`,
+      });
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  } finally {
+    for (const [k, v] of Object.entries(prior)) {
+      if (v === undefined) delete process.env[k];
+      else process.env[k] = v;
+    }
+  }
+})();
+
+Promise.all([watchModeTest, watchModeErrorPathTest, watchModeEsmSchemaTest, loadEnvAsyncTest, formatErrorThrowingHookTest, loadEnvSourceErrorsTest, conflictsWithTest, interpolationOperatorsTest])
   .then(() => console.log('env-saaf v1.5.0: all tests passed'))
   .catch((err) => { console.error(err); process.exit(1); });
