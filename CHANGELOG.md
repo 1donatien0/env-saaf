@@ -36,6 +36,10 @@
   instead of living only as README snippets. Both fail with the env-saaf message
   when a required value is missing (fixes #364).
 
+- Added: a near-miss hint on a missing required key and on a strict-mode extra
+  when a set key is the same name ignoring case or one edit away (a `PROT` /
+  `PORT` swap), e.g. `PORT: missing required variable (did you mean PROT? it is
+  set but not in the schema)`. Only key names are suggested (fixes #349).
 - Added: `scan --json` includes a `locations` map from each variable to `{ file, line }` uses (relative paths, 1-based lines), driven by `scanCodeLocations` / `scanDirLocations`; plain output and `vars` / `unused` stay unchanged (fixes #335).
 
 - Added: `toJsonSchema` emits a `pattern` for `base64` rules, so a consumer
