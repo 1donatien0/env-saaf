@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Added: an `ipv6` type. It accepts what `net.isIP` reports as IPv6 (compressed
+  forms, IPv4-mapped addresses, `fe80::1%eth0`), joins the string-valued types
+  for `minLength`/`maxLength`/`pattern`, emits `format: 'ipv6'` from
+  `toJsonSchema` and a valid `::1` example (fixes #342).
 - Added: `skipEmpty: true` on `array` rules drops accidental empty items
   (`a,b,`, `a,,b`) instead of failing, with `minItems`/`maxItems` and `unique`
   applying to what remains. The default and its error message are unchanged
