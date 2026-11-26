@@ -942,6 +942,7 @@ npx env-saaf check .        # compare code against .env.example
 npx env-saaf check . --file .env.sample  # compare against a differently-named template file instead
 npx env-saaf check . --json # machine-readable check results for CI or tooling
 npx env-saaf check . --schema ./env.schema.js  # also validate the values in .env against a schema — exit 1 on a type error
+npx env-saaf check . --fix  # append missing keys to .env.example (placeholders from --schema when given) instead of only reporting them
 npx env-saaf check . --schema ./env.schema.js --values .env.production  # validate another environment file's values
 npx env-saaf print . --schema ./env.schema.js  # print the coerced values (defaults applied, sensitive rules masked)
 
