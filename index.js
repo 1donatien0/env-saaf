@@ -70,6 +70,7 @@ const TYPE_EXAMPLES = {
   email: 'user@example.com',
   number: '3.14',
   int: '42',
+  bigint: '9007199254740993',
   json: '{"key":"value"}',
   boolean: 'true/false, yes/no, on/off, 1/0, y/n',
   url: 'https://example.com',
@@ -141,6 +142,22 @@ function usesDurationBounds(rule) {
 function numericBound(key, rule, value) {
   return usesDurationBounds(rule) && typeof value === 'string'
     ? coerce(key, value, 'duration') : value;
+}
+
+// Issue #417: normalize a `bigint` min/max bound to a bigint. Bounds may be
+// a bigint, an integer, or an integer string ('9007199254740993', '1_000').
+// Anything else (a fraction, a non-integer string, another type) is not a
+// usable bound and returns null so callers can reject or skip it.
+function bigintBound(key, rule, value) {
+  if (typeof value === 'bigint') return value;
+  if (typeof value === 'number') {
+    if (!Number.isInteger(value)) return null;
+    return BigInt(value);
+  }
+  if (typeof value === 'string') {
+    try { return coerce(key, value, 'bigint'); } catch { return null; }
+  }
+  return null;
 }
 
 // Compare and export duration choices in milliseconds without changing the schema.
@@ -417,6 +434,26 @@ function validateSchemaRules(schema, warn, patterns = new Map(), prefix = '', an
       if (parsed.min !== undefined && parsed.max !== undefined && parsed.min > parsed.max) {
         errors.push(`${key}: "min" must not exceed "max"`);
       }
+    } else if (effectiveType === 'bigint') {
+      // Issue #417: for `bigint` rules, `min` / `max` may be a bigint, an
+      // integer, or an integer string (e.g. min: 9007199254740993n or
+      // '9007199254740993') — a plain number would lose precision above
+      // the safe-integer range, so all three spellings are accepted. A
+      // fraction or a non-integer string is a schema bug, as is a `min`
+      // above `max` (issue #220).
+      const parsed = {};
+      for (const opt of ['min', 'max']) {
+        if (rule[opt] === undefined) continue;
+        const bound = bigintBound(key, rule, rule[opt]);
+        if (bound === null) {
+          errors.push(`${key}: "${opt}" must be a bigint, an integer, or an integer string for type 'bigint' (e.g. '9007199254740993')`);
+        } else {
+          parsed[opt] = bound;
+        }
+      }
+      if (parsed.min !== undefined && parsed.max !== undefined && parsed.min > parsed.max) {
+        errors.push(`${key}: "min" must not exceed "max"`);
+      }
     } else {
       for (const opt of ['min', 'max']) {
         if (rule[opt] !== undefined && (typeof rule[opt] !== 'number' || !Number.isFinite(rule[opt]))) {
@@ -468,7 +505,7 @@ function validateSchemaRules(schema, warn, patterns = new Map(), prefix = '', an
       const choiceType = effectiveType === 'array' ? (rule.of || 'string') : effectiveType;
       if (choiceType === 'date') {
         errors.push(`${key}: "choices" cannot be used with type 'date' (a parsed date is a new Date object, so no choice can ever match)`);
-      } else if (['number', 'int', 'port', 'boolean', 'duration'].includes(choiceType)) {
+      } else if (['number', 'int', 'port', 'bigint', 'boolean', 'duration'].includes(choiceType)) {
         for (const choice of rule.choices) {
           if (typeof choice === 'number' && !Number.isFinite(choice)) continue;
           let matches = false;
@@ -743,6 +780,26 @@ function coerce(key, raw, type, trim = true, protocols, sensitive = false, of = 
       const n = decimalNumber(digits);
       if (v === '' || !Number.isFinite(n) || !Number.isInteger(n)) throw new Error(`${key}: expected an integer (e.g. ${TYPE_EXAMPLES.int}), got "${shown}"`);
       return n;
+    }
+    case 'bigint': {
+      // Exact integers beyond Number.MAX_SAFE_INTEGER: order IDs,
+      // snowflake IDs, wei amounts. Same plain-literal shape as `int` —
+      // optional sign + digits ('9007199254740993', '-3', '007') — but
+      // the value comes back as a real bigint instead of a lossy double.
+      // Decimal and scientific spellings ('1.0', '1e3') are rejected like
+      // `int` (issue #277), as are radix prefixes ('0x10'). Underscore
+      // separators ('1_000') are accepted like `int` (issue #412). A
+      // bigint or an integer passed directly (e.g. as a default) is
+      // converted; anything else fails with the usual message (issue #417).
+      if (typeof v === 'bigint') return v;
+      if (typeof v === 'number') {
+        if (!Number.isInteger(v)) throw new Error(`${key}: expected a bigint (e.g. ${TYPE_EXAMPLES.bigint}), got "${shown}"`);
+        return BigInt(v);
+      }
+      if (typeof v !== 'string') throw new Error(`${key}: expected a bigint (e.g. ${TYPE_EXAMPLES.bigint}), got "${shown}"`);
+      const digits = stripNumericUnderscores(v);
+      if (!/^[+-]?\d+$/.test(String(digits).trim())) throw new Error(`${key}: expected a bigint (e.g. ${TYPE_EXAMPLES.bigint}), got "${shown}"`);
+      return BigInt(digits);
     }
     case 'json': {
       // Structured config in one variable: '{"beta":true,"maxItems":3}'.
@@ -1034,6 +1091,11 @@ function verifyTransformedType(key, val, type, protocols, sensitive, of) {
         throw new Error(`${key}: expected an integer (e.g. ${TYPE_EXAMPLES.int}), got "${shown}"`);
       }
       return val;
+    case 'bigint':
+      if (typeof val !== 'bigint') {
+        throw new Error(`${key}: expected a bigint (e.g. ${TYPE_EXAMPLES.bigint}), got "${shown}"`);
+      }
+      return val;
     case 'port':
       if (typeof val !== 'number' || !Number.isInteger(val) || val < 0 || val > 65535) {
         throw new Error(`${key}: expected a port (0-65535, e.g. ${TYPE_EXAMPLES.port}), got "${shown}"`);
@@ -1267,6 +1329,22 @@ function validateEnvCore(schema, env, options, valueSources) {
           const shownItem = durationItems && sensitive ? maskValue(item) : item;
           const name = durationItems ? `${key}[${badIndex}]` : key;
           pushErr(`${name}: expected ${duration ? 'a duration' : 'a number'} ${range}, got "${shownItem}"`, valueSource());
+          continue;
+        }
+      }
+      // Issue #417: min/max bounds for `bigint` values — the bound may be
+      // a bigint, an integer, or an integer string, compared exactly (no
+      // lossy double in between). Inclusive on both ends. Bounds are
+      // validated up front in validateSchema, so an unusable bound here
+      // can only come from a schema that skipped validation; it is skipped
+      // rather than crashing the run.
+      if (typeof val === 'bigint' && (rule.min !== undefined || rule.max !== undefined)) {
+        const lo = rule.min !== undefined ? bigintBound(key, rule, rule.min) : null;
+        const hi = rule.max !== undefined ? bigintBound(key, rule, rule.max) : null;
+        if ((lo !== null && val < lo) || (hi !== null && val > hi)) {
+          const range = lo !== null && hi !== null ? `${String(rule.min)}–${String(rule.max)}`
+            : lo !== null ? `at least ${String(rule.min)}` : `at most ${String(rule.max)}`;
+          pushErr(`${key}: expected a bigint ${range}, got "${shown}"`, valueSource());
           continue;
         }
       }
@@ -2481,6 +2559,7 @@ const ARRAY_ITEM_EXAMPLES = {
   email: ['user@example.com', 'admin@example.com', 'dev@example.com'],
   number: ['1.5', '2.5', '3.5'],
   int: ['1', '2', '3'],
+  bigint: ['9007199254740993', '9007199254740994', '9007199254740995'],
   boolean: ['true', 'false', 'true'],
   url: ['https://a.example', 'https://b.example', 'https://c.example'],
   uuid: ['550e8400-e29b-41d4-a716-446655440000', '6ba7b810-9dad-11d1-80b4-00c04fd430c8', '7c9e6679-7425-40de-944b-e07fc1f90ae7'],
@@ -2732,7 +2811,7 @@ function scalarPlaceholder(rule, stringGrowth) {
     : type === 'date' ? '2026-01-31' : type === 'duration' ? '15m' : type === 'host' ? 'localhost'
     : type === 'file' ? './config.json'
     : type === 'email' ? 'user@example.com' : type === 'uuid' ? '550e8400-e29b-41d4-a716-446655440000'
-    : type === 'number' ? '3.14' : type === 'int' ? '42' : type === 'boolean' ? 'true'
+    : type === 'number' ? '3.14' : type === 'int' ? '42' : type === 'bigint' ? '9007199254740993' : type === 'boolean' ? 'true'
     : type === 'json' ? '{"key":"value"}' : type === 'base64' ? 'aGVsbG8=' : type === 'hex' ? 'deadbeef'
     : 'your_value_here';
   if (STRING_TYPES.has(type) && (rule.minLength !== undefined || rule.maxLength !== undefined)) {
@@ -2758,7 +2837,21 @@ function scalarPlaceholder(rule, stringGrowth) {
     } catch (_) { /* keep the default example */ }
     return example;
   }
-  if (!['number', 'int', 'port', 'duration'].includes(type)) return placeholder;
+  if (!['number', 'int', 'port', 'duration', 'bigint'].includes(type)) return placeholder;
+
+  // Issue #417: a bigint placeholder stays above the safe-integer range
+  // (that is the point of the type), clamped to the rule's bounds when
+  // they exclude it. Bounds may be bigints, integers or integer strings.
+  if (type === 'bigint') {
+    const lo = rule.min !== undefined ? bigintBound('placeholder', rule, rule.min) : null;
+    const hi = rule.max !== undefined ? bigintBound('placeholder', rule, rule.max) : null;
+    if (lo !== null && hi !== null && lo > hi) return placeholder;
+    const sample = 9007199254740993n;
+    let value = sample;
+    if (lo !== null && value < lo) value = lo;
+    if (hi !== null && value > hi) value = hi;
+    return String(value);
+  }
 
   const lower = numericBound('placeholder', rule, rule.min);
   const upper = numericBound('placeholder', rule, rule.max);
@@ -2856,6 +2949,7 @@ function generateExample(schema) {
 function jsonSchemaForScalar(type, protocols) {
   switch (type) {
     case 'int': return { type: 'integer' };
+    case 'bigint': return { type: 'string', pattern: '^-?[0-9]+$' };
     case 'port': return { type: 'integer', minimum: 0, maximum: 65535 };
     case 'number': return { type: 'number' };
     case 'duration': return { type: 'number', minimum: 0 };
@@ -2909,6 +3003,9 @@ function jsonSchemaDefault(key, rule, type) {
   const trim = rule.trim !== false;
   const convert = (raw, valueType) => {
     if (valueType === 'json') return copyJsonDefault(coerce(key, raw, valueType, trim));
+    // Issue #417: JSON has no bigint, so a bigint default is exported as
+    // the digit string the schema pattern accepts.
+    if (valueType === 'bigint') return String(coerce(key, raw, valueType, trim));
     if (valueType === 'date' && raw instanceof Date) return Date.prototype.toISOString.call(raw);
     if (!isJsonPrimitive(raw)) throw new TypeError('not a primitive default');
     if (valueType === 'date' && typeof raw === 'string' && raw.includes('T')

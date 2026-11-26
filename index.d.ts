@@ -1,4 +1,4 @@
-export type EnvScalarType = 'string' | 'number' | 'int' | 'boolean' | 'url' | 'port' | 'email' | 'json' | 'uuid' | 'hex' | 'ipv4' | 'ipv6' | 'semver' | 'base64' | 'date' | 'file' | 'duration' | 'host';
+export type EnvScalarType = 'string' | 'number' | 'int' | 'bigint' | 'boolean' | 'url' | 'port' | 'email' | 'json' | 'uuid' | 'hex' | 'ipv4' | 'ipv6' | 'semver' | 'base64' | 'date' | 'file' | 'duration' | 'host';
 export type EnvType = EnvScalarType | 'array';
 
 export type RequiredIfCondition =
@@ -30,8 +30,8 @@ export interface EnvRule {
   deprecated?: boolean | string;
   /** A default may be an already-parsed object or array for `type: 'json'` or `type: 'array'`, or a `Date` for `type: 'date'`. */
   default?: string | number | boolean | Date | Record<string, unknown> | unknown[] | null;
-  /** Allowed coerced values. Duration choices may also be human duration strings (e.g. '15m'), including for array items. */
-  choices?: Array<string | number | boolean>;
+  /** Allowed coerced values. Duration choices may also be human duration strings (e.g. '15m'), including for array items. Bigint choices must be bigints (e.g. `9007199254740993n`). */
+  choices?: Array<string | number | boolean | bigint>;
   /**
    * Allowed range for numeric values (`number`, `int`, `port`, `duration`).
    * `min` alone or `max` alone both work; out-of-range values are
@@ -42,11 +42,14 @@ export interface EnvRule {
    * Use `minItems` / `maxItems` for the array's length. For `date` rules the
    * bounds are ISO date (or datetime) strings instead, e.g. `min: '2026-01-01'`,
    * compared chronologically against the parsed value; a number is rejected
-   * up front for `date` rules.
+   * up front for `date` rules. For `bigint` rules the bounds may be a bigint,
+   * an integer, or an integer string, e.g. `min: 9007199254740993n` or
+   * `min: '9007199254740993'`, compared exactly; a fraction or a non-integer
+   * string is rejected up front.
    */
-  min?: number | string;
+  min?: number | string | bigint;
   /** See `min`. */
-  max?: number | string;
+  max?: number | string | bigint;
   /**
    * Allowed length for string values (`string`, `email`, `url`, `file`, `uuid`, `hex`,
    * `ipv4`, `semver`, `base64`, `host`).
@@ -168,6 +171,7 @@ export type EnvSchema = Record<string, EnvRule | EnvGroupRule>;
 
 type EnvScalarValue<T> =
   T extends 'number' | 'int' | 'port' | 'duration' ? number :
+  T extends 'bigint' ? bigint :
   T extends 'boolean' ? boolean :
   T extends 'json' ? unknown :
   T extends 'date' ? Date :
@@ -175,7 +179,8 @@ type EnvScalarValue<T> =
 
 /**
  * The value type of a rule, from the schema's `type` field:
- * 'number' / 'int' / 'port' / 'duration' -> number, 'boolean' -> boolean,
+ * 'number' / 'int' / 'port' / 'duration' -> number, 'bigint' -> bigint,
+ * 'boolean' -> boolean,
  * 'json' -> unknown (parsed JSON can be any shape), 'date' -> Date,
  * 'array' -> array of the `of` item type (default `string[]`),
  * everything else (string / url / file / email / uuid / hex / ipv4 / semver / base64
@@ -190,6 +195,7 @@ export type EnvValue<R extends EnvRule> =
   R extends { type: 'int' } ? number :
   R extends { type: 'port' } ? number :
   R extends { type: 'duration' } ? number :
+  R extends { type: 'bigint' } ? bigint :
   R extends { type: 'boolean' } ? boolean :
   R extends { type: 'json' } ? unknown :
   R extends { type: 'date' } ? Date :

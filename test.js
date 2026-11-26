@@ -390,6 +390,7 @@ function assertDraft202012Schema(schema, path = '#', root = true) {
     string: { type: 'string' },
     number: { type: 'number' },
     int: { type: 'integer' },
+    bigint: { type: 'string', pattern: '^-?[0-9]+$' },
     boolean: { type: 'boolean' },
     url: { type: 'string', format: 'uri' },
     port: { type: 'integer', minimum: 0, maximum: 65535 },
@@ -2136,6 +2137,62 @@ assert.deepStrictEqual(
   assert.throws(() => validateEnv({ P: { type: 'port', max: 1024 } }, { P: '8080' }), /at most 1024/);
   // min/max leave non-numeric values alone.
   assert.strictEqual(validateEnv({ S: { type: 'string', min: 1 } }, { S: 'x' }).S, 'x');
+}
+
+// Issue #417: 'bigint' type — exact integers beyond Number.MAX_SAFE_INTEGER.
+{
+  const big = validateEnv({ ID: { type: 'bigint', required: true } }, { ID: '9007199254740993' });
+  assert.strictEqual(big.ID, 9007199254740993n);
+  assert.strictEqual(typeof big.ID, 'bigint');
+  assert.strictEqual(validateEnv({ ID: { type: 'bigint' } }, { ID: '-3' }).ID, -3n);
+  assert.strictEqual(validateEnv({ ID: { type: 'bigint' } }, { ID: '+42' }).ID, 42n);
+  assert.strictEqual(validateEnv({ ID: { type: 'bigint' } }, { ID: '007' }).ID, 7n);
+  // Underscore separators, like `int` (issue #412).
+  assert.strictEqual(validateEnv({ ID: { type: 'bigint' } }, { ID: '1_000' }).ID, 1000n);
+  // A bigint or integer default passes through as a bigint.
+  assert.strictEqual(validateEnv({ ID: { type: 'bigint', default: 9007199254740993n } }, {}).ID, 9007199254740993n);
+  assert.strictEqual(validateEnv({ ID: { type: 'bigint', default: 42 } }, {}).ID, 42n);
+  // Decimals, exponents, radix prefixes and non-digits are rejected.
+  for (const raw of ['1.0', '3.5', '1e3', '1.5e2', '0x10', 'abc']) {
+    assert.throws(() => validateEnv({ ID: { type: 'bigint' } }, { ID: raw }), /expected a bigint/);
+  }
+  assert.throws(() => validateEnv({ ID: { type: 'bigint', default: 1.5 } }, {}), /expected a bigint/);
+  // min/max: bigint, integer and integer-string bounds; inclusive ends.
+  const bounded = { ID: { type: 'bigint', min: '9007199254740993', max: 9007199254740995n } };
+  assert.strictEqual(validateEnv(bounded, { ID: '9007199254740993' }).ID, 9007199254740993n);
+  assert.strictEqual(validateEnv(bounded, { ID: '9007199254740995' }).ID, 9007199254740995n);
+  assert.throws(() => validateEnv(bounded, { ID: '9007199254740992' }), /9007199254740993\u20139007199254740995/);
+  assert.throws(() => validateEnv(bounded, { ID: '9007199254740996' }), /9007199254740993\u20139007199254740995/);
+  assert.strictEqual(validateEnv({ ID: { type: 'bigint', min: 100 } }, { ID: '200' }).ID, 200n);
+  // min alone / max alone name the single bound.
+  assert.throws(() => validateEnv({ ID: { type: 'bigint', min: 100n } }, { ID: '99' }), /at least 100/);
+  assert.throws(() => validateEnv({ ID: { type: 'bigint', max: 100n } }, { ID: '101' }), /at most 100/);
+  // Bad bounds are schema errors.
+  assert.throws(() => validateSchema({ ID: { type: 'bigint', min: 1.5 } }), /"min" must be a bigint/);
+  assert.throws(() => validateSchema({ ID: { type: 'bigint', max: 'abc' } }), /"max" must be a bigint/);
+  assert.throws(() => validateSchema({ ID: { type: 'bigint', min: 10n, max: 5n } }), /"min" must not exceed "max"/);
+  // choices compare as bigints.
+  assert.strictEqual(validateEnv({ ID: { type: 'bigint', choices: [9007199254740993n] } }, { ID: '9007199254740993' }).ID, 9007199254740993n);
+  assert.throws(() => validateEnv({ ID: { type: 'bigint', choices: [9007199254740993n] } }, { ID: '1' }), /expected one of \[9007199254740993\]/);
+  assert.throws(() => validateSchema({ ID: { type: 'bigint', choices: ['9007199254740993'] } }), /can never match/);
+  // Arrays of bigints coerce each item.
+  assert.deepStrictEqual(
+    validateEnv({ IDS: { type: 'array', of: 'bigint' } }, { IDS: '9007199254740993,9007199254740994' }).IDS,
+    [9007199254740993n, 9007199254740994n]);
+  // JSON Schema has no bigint: a digit-string pattern, no numeric bounds.
+  assert.deepStrictEqual(toJsonSchema({ ID: { type: 'bigint', min: 0 } }).properties.ID,
+    { type: 'string', pattern: '^-?[0-9]+$' });
+  assert.deepStrictEqual(toJsonSchema({ ID: { type: 'bigint', default: 9007199254740993n } }).properties.ID,
+    { type: 'string', pattern: '^-?[0-9]+$', default: '9007199254740993' });
+  // generateExample emits a value above the safe-integer range.
+  const example = generateExample({ ORDER_ID: { type: 'bigint', required: true } });
+  assert.match(example, /^ORDER_ID=9007199254740993$/m);
+  assert.strictEqual(validateEnv({ ORDER_ID: { type: 'bigint', required: true } }, parseEnvFile(example)).ORDER_ID, 9007199254740993n);
+  const boundedExample = generateExample({ ID: { type: 'bigint', min: '9007199254740993', max: '9007199254740995' } });
+  assert.match(boundedExample, /^ID=9007199254740993$/m);
+  // A transform must still return a bigint.
+  assert.throws(() => validateEnv({ ID: { type: 'bigint', transform: () => 42 } }, { ID: '1' }), /expected a bigint/);
+  assert.strictEqual(validateEnv({ ID: { type: 'bigint', transform: v => v + 1n } }, { ID: '1' }).ID, 2n);
 }
 
 // Issue #219: numeric env strings are decimal, not JavaScript radix literals.
