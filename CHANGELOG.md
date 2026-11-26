@@ -280,6 +280,8 @@
 - Fixed: `generateExample` adjusts numeric placeholders to `min`/`max`, respecting integer, port and duration constraints, so generated values round-trip through their own schema (fixes #274).
 - Fixed: `generateExample` adjusts built-in string placeholders to feasible `minLength`/`maxLength` bounds without losing their type's format (fixes #275).
 
+- Added: `check --fix` appends keys the code uses but `.env.example` (or `--file`) does not document yet, using the schema placeholder when `--schema` is given and an empty value otherwise; it never removes or overwrites a key and never touches the real `.env`. The fixed keys are reported as `fixed` in `--json` output, and the check passes once they are added (fixes #428).
+
 ## 1.5.0 — 2026-11-20
 
 - Added: `host` type — validates a hostname or an IPv4/IPv6 address (`db.internal`, `localhost`, `10.0.0.5`, `::1`) and rejects values with a scheme, path or port; `minLength`/`maxLength`/`pattern` work on it, and `generateExample` suggests `localhost` (fixes #44)

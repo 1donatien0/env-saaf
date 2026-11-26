@@ -10,7 +10,11 @@
  *                           of the real .env file against the schema the file exports
  *                           (issue #90); --json emits machine-readable output. --json-schema
  *                           prints the schema file as a draft 2020-12 JSON Schema
- *                           document instead of running the check (issue #268). A scaffold
+ *                           document instead of running the check (issue #268). --fix
+ *                           appends the missing keys to .env.example (placeholders
+ *                           from the schema when one is given) instead of only
+ *                           reporting them, and the check then passes (issue #428).
+ *                           A scaffold
  *                           with no code usage yet passes with a single note instead of
  *                           one UNUSED line per key (issue #170).
  *   env-saaf scan  [dir | file | --stdin] [--file name] [--json] [--watch]: just list the env vars your code uses; keys in
@@ -55,7 +59,7 @@ if (argv.includes('--version') || argv.includes('-v')) {
 // Output is already plain in every mode, including when NO_COLOR is set.
 while (argv[0] === '--no-color') argv.shift();
 const cmd = argv[0];
-const USAGE = 'Usage: env-saaf check [dir | file] [--file name] [--schema file] [--values file] [--exclude pattern] [--json] [--json-schema] [--watch] | env-saaf scan [dir | file | --stdin] [--file name] [--exclude pattern] [--json] [--watch] | env-saaf print [dir] [--schema file] [--file name] [--json] | env-saaf example [dir] [--write[=file]] [--force] [--schema file] | env-saaf init [dir] [--schema file] [--force] [--from-example[=file]]\n'
+const USAGE = 'Usage: env-saaf check [dir | file] [--file name] [--schema file] [--values file] [--exclude pattern] [--json] [--json-schema] [--watch] [--fix] | env-saaf scan [dir | file | --stdin] [--file name] [--exclude pattern] [--json] [--watch] | env-saaf print [dir] [--schema file] [--file name] [--json] | env-saaf example [dir] [--write[=file]] [--force] [--schema file] | env-saaf init [dir] [--schema file] [--force] [--from-example[=file]]\n'
   + 'Global options: --no-color, --version / -v (before or after the command).';
 // --help / -h / help: print usage and exit 0 (asking for help is not an error — this used to exit 2)
 if (cmd === '--help' || cmd === '-h' || cmd === 'help') {
@@ -69,6 +73,11 @@ if (cmd === '--help' || cmd === '-h' || cmd === 'help') {
 // --json-schema ('check' only): print the --schema file as a draft 2020-12
 // JSON Schema document to stdout instead of running the check (issue #268).
 // Without --schema there is nothing to convert, so the flag errors out.
+// --fix ('check' only): append the keys the code uses but the template does
+// not document yet to the template file (issue #428) instead of only
+// reporting them — placeholders from the schema when one is given, otherwise
+// the bare key with an empty value. It only ever adds: existing keys and
+// values are untouched, nothing is removed, and the real .env is never written.
 // --write / --write=<file> ('example' only): save the draft to .env.example (or the file
 // named) instead of printing it; --force allows overwriting an existing file
 // --watch ('check' and 'scan' only): run once, then re-run (debounced) whenever the scanned
@@ -83,6 +92,8 @@ let forceOpt = false;
 // Issue #230: --watch ('check' and 'scan' only) re-runs the command when watched inputs change.
 let watchOpt = false;
 let stdinOpt = false;
+// Issue #428: --fix ('check' only) appends missing keys to the template file.
+let fixOpt = false;
 // Issue #352: check --schema --values validates another file's values.
 let valuesOpt = null;
 // Issue #355: repeatable --exclude patterns for scan and check.
@@ -128,6 +139,7 @@ for (let i = 1; i < argv.length; i++) {
   else if (a.startsWith('--write=')) writeOpt = a.slice('--write='.length) || '.env.example';
   else if (a === '--force') forceOpt = true;
   else if (a === '--watch') watchOpt = true;
+  else if (a === '--fix') fixOpt = true;
   else if (a === '--stdin') stdinOpt = true;
   else if (a === '--from-example') fromExampleOpt = true;
   else if (a.startsWith('--from-example=')) fromExampleOpt = a.slice('--from-example='.length) || '.env.example';
@@ -175,7 +187,7 @@ if ((cmd === 'scan' || cmd === 'check') && positional[0] !== undefined) {
   }
 }
 const COMMAND_FLAGS = {
-  check: ['--file', '--schema', '--values', '--exclude', '--json', '--json-schema', '--watch'],
+  check: ['--file', '--schema', '--values', '--exclude', '--json', '--json-schema', '--watch', '--fix'],
   scan: ['--file', '--exclude', '--json', '--watch', '--stdin'],
   print: ['--schema', '--file', '--json'],
   example: ['--write', '--force', '--schema'],
@@ -271,6 +283,7 @@ if (COMMAND_FLAGS[cmd]) {
   if (writeOpt !== null) seenFlags.add('--write');
   if (forceOpt) seenFlags.add('--force');
   if (watchOpt) seenFlags.add('--watch');
+  if (fixOpt) seenFlags.add('--fix');
   if (stdinOpt) seenFlags.add('--stdin');
   if (valuesOpt !== null) seenFlags.add('--values');
   if (excludeOpts.length) seenFlags.add('--exclude');
@@ -512,6 +525,37 @@ function flattenedSchemaKeys(schema, prefix = '') {
     }
   }
   return keys;
+}
+
+// Issue #428: the schema rules by flattened env name (groups flattened to
+// DB_HOST, like flattenedSchemaKeys), so --fix can look up the rule for a
+// missing key.
+function flattenedSchemaRules(schema, prefix = '') {
+  const rules = new Map();
+  for (const [key, rule] of Object.entries(schema)) {
+    if (rule && typeof rule === 'object' && rule.schema && typeof rule.prefix === 'string') {
+      for (const [k, r] of flattenedSchemaRules(rule.schema, prefix + rule.prefix)) rules.set(k, r);
+    } else {
+      rules.set(prefix + key, rule);
+    }
+  }
+  return rules;
+}
+
+// Issue #428: the placeholder generateExample would write for one key's rule.
+// A single-key schema reuses every placeholder rule (defaults, bounds,
+// choices, empty values for secret-looking keys); anything generateExample
+// cannot render falls back to the bare key with an empty value.
+function placeholderForKey(key, rules) {
+  const rule = rules ? rules.get(key) : undefined;
+  if (rule === undefined) return '';
+  try {
+    const generated = generateExample({ [key]: rule });
+    const line = generated.split('\n').find(l => l.startsWith(`${key}=`));
+    return line === undefined ? '' : line.slice(key.length + 1);
+  } catch {
+    return '';
+  }
 }
 
 // Issue #416: detect values in .env.example that look like real secrets rather
@@ -1100,7 +1144,10 @@ async function runCheck() {
     return 0;
   }
   const examplePath = path.join(dir, fileOpt);
-  if (!fs.existsSync(examplePath)) {
+  // Issue #428: with --fix a missing template is created below instead of
+  // erroring out — every used key is missing, so the fix drafts the file.
+  const exampleExists = fs.existsSync(examplePath);
+  if (!exampleExists && !fixOpt) {
     // Issue #89: point at the command that drafts the file instead of dead-ending
     // a new user. --json keeps stdout parseable, so the hint travels as a field.
     const hint = `run \`env-saaf example\` to draft one, or generate it from your schema with generateExample()`;
@@ -1111,13 +1158,13 @@ async function runCheck() {
     }
     fatalExit(2);
   }
-  const documented = Object.keys(readEnvFile(examplePath));
-  const isolatedExample = readExampleValuesIsolated(examplePath);
+  const documented = exampleExists ? Object.keys(readEnvFile(examplePath)) : [];
+  const isolatedExample = exampleExists ? readExampleValuesIsolated(examplePath) : {};
   const secrets = documented.filter(k => isSecretExampleValue(isolatedExample[k]));
   const used = scanFile !== null
     ? scanCode(readScanFile())
     : scanDir(dir, { exclude: excludeOpts });
-  const { usedNotDocumented, documentedNotUsed } = diffEnv(used, documented);
+  let { usedNotDocumented, documentedNotUsed } = diffEnv(used, documented);
   // The real .env is not committed, so only compare keys when it is actually present
   const envPath = path.join(dir, '.env');
   const envFileFound = fs.existsSync(envPath);
@@ -1141,8 +1188,11 @@ async function runCheck() {
   // against the example file, using flattened group names.
   let schemaNotDocumented = [];
   let documentedNotInSchema = [];
+  // Issue #428: the loaded schema, when one is given, so --fix can look up
+  // each missing key's rule for its placeholder.
+  let schema = null;
   if (schemaOpt) {
-    const schema = await loadSchemaFile();
+    schema = await loadSchemaFile();
     const declared = flattenedSchemaKeys(schema);
     schemaNotDocumented = declared.filter((key) => !documented.includes(key));
     documentedNotInSchema = documented.filter((key) => !declared.includes(key));
@@ -1174,6 +1224,29 @@ async function runCheck() {
         invalid = guard ? guardValidationErrors(e.errors, guard) : e.errors;
       }
     }
+  }
+  // Issue #428: --fix appends the missing keys to the template file instead
+  // of only reporting them. It only ever adds: existing keys and values are
+  // left untouched, nothing is removed, and the real .env is never written —
+  // only the template file (--file names it when given). With a schema, each
+  // key gets the placeholder generateExample would emit for its rule;
+  // without one the bare key is appended with an empty value. A missing
+  // template is created with the same header generateExample writes. The
+  // fixed keys stop counting as findings, so the check passes when they were
+  // the only drift; every other finding is still reported and still fails.
+  let fixed = [];
+  if (fixOpt && usedNotDocumented.length) {
+    const rules = schema ? flattenedSchemaRules(schema) : null;
+    const lines = usedNotDocumented.map(key => `${key}=${placeholderForKey(key, rules)}`);
+    if (!exampleExists) {
+      fs.writeFileSync(examplePath, '# Generated by env-saaf — put real values in .env (never commit .env)\n' + lines.join('\n') + '\n');
+    } else {
+      const existing = fs.readFileSync(examplePath, 'utf8');
+      fs.appendFileSync(examplePath, (existing.length && !existing.endsWith('\n') ? '\n' : '') + lines.join('\n') + '\n');
+    }
+    fixed = usedNotDocumented;
+    usedNotDocumented = [];
+    schemaNotDocumented = schemaNotDocumented.filter(k => !fixed.includes(k));
   }
   // Issue #170: a fresh scaffold has no code using any variable yet, so every
   // documented key looks UNUSED. That is the scaffold waiting for code, not
@@ -1216,10 +1289,12 @@ async function runCheck() {
     }
     if (skippedValues) result.envFileFound = false;
     if (scaffoldAhead) result.note = scaffoldNote;
+    if (fixOpt) result.fixed = fixed;
     console.log(JSON.stringify(result));
   } else if (scaffoldAhead) {
     console.log(`env-saaf: ${scaffoldNote}.`);
   } else {
+    fixed.forEach(k => console.log(`FIXED in ${fileOpt}: ${k} (added to ${fileOpt})`));
     usedNotDocumented.forEach(k => console.log(`MISSING in ${fileOpt}: ${k} (used in code)`));
     documentedNotUsed.forEach(k => console.log(`UNUSED: ${k} (in ${fileOpt}, never used in code)`));
     secrets.forEach(k => console.log(`SECRET in ${fileOpt}: ${k} (value [REDACTED] looks like a real secret; use an empty value or placeholder)`));
