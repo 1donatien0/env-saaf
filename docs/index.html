@@ -133,7 +133,7 @@
       <div class="cmd"><code>npx env-saaf scan ./src</code><p>Lists every env var your code actually uses — dot access, bracket access and destructuring.</p></div>
       <div class="cmd"><code>npx env-saaf check .</code><p>Diffs code usage against .env.example — and with <code style="font-family:var(--mono)">--schema</code>, validates the real values too (use <code style="font-family:var(--mono)">--values</code> for another environment file). Exit code 1 if anything used is undocumented — or add <code style="font-family:var(--mono)">--fix</code> and let check append the missing keys for you.</p></div>
       <div class="cmd"><code>npx env-saaf example ./src</code><p>Drafts a fresh .env.example straight from a code scan.</p></div>
-      <div class="cmd"><code>npx env-saaf print . --schema ./env.schema.js</code><p>Prints the effective configuration — coerced values and defaults — with sensitive rules masked.</p></div>
+      <div class="cmd"><code>npx env-saaf print . --schema ./env.schema.js</code><p>Prints the effective configuration — coerced values and defaults — with sensitive rules and secret-named keys masked; <code>--reveal</code> shows the real values.</p></div>
       <div class="cmd"><code>npx env-saaf init .</code><p>Scaffolds a starter env.schema.js and a matching .env.example, or infers the schema from an existing example with <code style="font-family:var(--mono)">--from-example</code>.</p></div>
       <div class="cmd"><code>maskSecrets(process.env)</code><p>Log your config safely — secrets print masked (<span style="font-family:var(--mono)">sk***56</span>), never in full.</p></div>
     </div>
