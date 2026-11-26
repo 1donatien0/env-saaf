@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Fixed: whitespace-only environment values now count as unset for required checks, defaults and optional keys; trimmed values are shown in validation errors, while `trim: false` preserves whitespace (fixes #439).
+
 ## 1.6.0 — 2026-11-26
 
 - Fixed: malformed schema rules and non-object schema or env inputs now throw `EnvSaafError`. Rule errors name the affected key, including group prefixes (fixes #440).
