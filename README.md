@@ -1371,6 +1371,7 @@ const env = loadEnv({
 - **v1.5.0** — `duration` and `host` types, `date` and `file` types, non-throwing mode, `${VAR:-default}` interpolation, CLI `--schema` validation, duplicate-key and bare-line errors in `.env` files, `scan`/`check`/`example` directory validation, Express example, README types reference table.
 - **v1.4.0** — `ipv4`, `semver` and `base64` types, CLI `check` compares real `.env` keys, CLI `--version`, `example --write`, `scan` UNUSED warnings, `check` exits 1 on every finding, `scanCode` ignores comments/strings, defaults validated like provided values, `--help` after a subcommand, escaped quotes in `parseEnvFile`, `port` accepts 0, GitHub Actions workflow docs.
 - **v1.3.0** — `json`, `uuid` and `hex` types, `minLength`/`maxLength` and `hex` `length` options, `trim: false`, `loadEnv` return-type inference, safer `.env.example` generation for secret keys, `assign: true` JSON fix.
+- **v1.6.0** — `bigint` and `ipv6` types, grouped (nested) schemas, `array` type with per-item coercion, `requiredIf`/`aliases`/`conflictsWith`/`deprecated` rule options, `loadEnvAsync`, `toJsonSchema` export, CLI `init` and `print` commands, `check --fix`, real-secret detection in `check`, single-file `scan`/`check`, property-based fuzz tests — the biggest release yet, with many outside contributions.
 
 ## Contributing
 
