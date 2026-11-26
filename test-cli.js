@@ -405,18 +405,22 @@ try {
   }
 
   // --- print: coerced values, defaults and masked sensitive rules (#353) ---
+  // Issue #447: secret-named keys are masked too, without `sensitive: true`,
+  // in text and --json alike — including grouped keys (flat name DB_TOKEN).
+  // Issue #474: --reveal prints the real values in both modes.
   {
     const schema = "module.exports = {\n"
       + "  PORT: { type: 'port', required: true },\n"
       + "  DEBUG: { type: 'boolean', default: false },\n"
       + "  API_TOKEN: { type: 'string', required: true, sensitive: true },\n"
-      + "  DB: { prefix: 'DB_', schema: { HOST: { type: 'string', default: 'localhost' } } },\n"
+      + "  PASSWORD: { type: 'string', required: true },\n"
+      + "  DB: { prefix: 'DB_', schema: { HOST: { type: 'string', default: 'localhost' }, TOKEN: { type: 'string' } } },\n"
       + "};\n";
     const dir = mkProject({
       'src/app.js': 'console.log(process.env.PORT);\n',
       'env.schema.js': schema,
-      '.env': 'PORT=3000\nAPI_TOKEN=supersecretvalue\n',
-      '.env.production': 'PORT=3100\nAPI_TOKEN=other-secret\n',
+      '.env': 'PORT=3000\nAPI_TOKEN=supersecretvalue\nPASSWORD=hunter2secret\nDB_TOKEN=dbtokenvalue\n',
+      '.env.production': 'PORT=3100\nAPI_TOKEN=other-secret\nPASSWORD=prod-pass\nDB_TOKEN=prod-db-token\n',
     });
     const text = run(['print', dir, '--schema', 'env.schema.js'], dir);
     assert.strictEqual(text.status, 0, text.stdout + text.stderr);
@@ -425,17 +429,50 @@ try {
     assert.match(text.stdout, /^DB_HOST=localhost$/m);
     assert.ok(!text.stdout.includes('supersecretvalue'), 'sensitive value leaked in text output');
     assert.match(text.stdout, /^API_TOKEN=su\*\*\*ue$/m);
+    assert.ok(!text.stdout.includes('hunter2secret'), 'secret-named value leaked in text output');
+    assert.match(text.stdout, /^PASSWORD=hu\*\*\*et$/m);
+    assert.ok(!text.stdout.includes('dbtokenvalue'), 'grouped secret-named value leaked in text output');
+    assert.match(text.stdout, /^DB_TOKEN=db\*\*\*ue$/m);
 
     const json = JSON.parse(run(['print', dir, '--schema', 'env.schema.js', '--json'], dir).stdout);
     assert.strictEqual(json.PORT, 3000);
     assert.strictEqual(json.DEBUG, false);
     assert.strictEqual(json.DB.HOST, 'localhost');
     assert.notStrictEqual(json.API_TOKEN, 'supersecretvalue');
+    assert.notStrictEqual(json.PASSWORD, 'hunter2secret');
+    assert.match(json.PASSWORD, /^hu\*\*\*et$/);
+    assert.notStrictEqual(json.DB.TOKEN, 'dbtokenvalue');
+    assert.match(json.DB.TOKEN, /^db\*\*\*ue$/);
     assert.ok(!JSON.stringify(json).includes('supersecretvalue'));
+    assert.ok(!JSON.stringify(json).includes('hunter2secret'));
+    assert.ok(!JSON.stringify(json).includes('dbtokenvalue'));
+
+    // --reveal shows the real values in both modes; non-secrets are identical.
+    const revealed = run(['print', dir, '--schema', 'env.schema.js', '--reveal'], dir);
+    assert.strictEqual(revealed.status, 0, revealed.stdout + revealed.stderr);
+    assert.ok(revealed.stdout.includes('PASSWORD=hunter2secret'), 'reveal should show the real password');
+    assert.ok(revealed.stdout.includes('API_TOKEN=supersecretvalue'), 'reveal should show the real token');
+    assert.ok(revealed.stdout.includes('DB_TOKEN=dbtokenvalue'), 'reveal should show the real grouped token');
+    assert.match(revealed.stdout, /^PORT=3000$/m);
+    assert.match(revealed.stdout, /^DEBUG=false$/m);
+    assert.match(revealed.stdout, /^DB_HOST=localhost$/m);
+    const revealedJson = JSON.parse(run(['print', dir, '--schema', 'env.schema.js', '--json', '--reveal'], dir).stdout);
+    assert.strictEqual(revealedJson.PASSWORD, 'hunter2secret');
+    assert.strictEqual(revealedJson.API_TOKEN, 'supersecretvalue');
+    assert.strictEqual(revealedJson.DB.TOKEN, 'dbtokenvalue');
+    assert.strictEqual(revealedJson.PORT, 3000);
+    assert.strictEqual(revealedJson.DEBUG, false);
+    assert.strictEqual(revealedJson.DB.HOST, 'localhost');
+    // --reveal belongs to print only.
+    const revealElsewhere = run(['check', dir, '--reveal'], dir);
+    assert.strictEqual(revealElsewhere.status, 2);
+    assert.match(revealElsewhere.stderr, /not supported for check/);
 
     const other = JSON.parse(run(['print', dir, '--schema', 'env.schema.js', '--file', '.env.production', '--json'], dir).stdout);
     assert.strictEqual(other.PORT, 3100);
     assert.ok(!JSON.stringify(other).includes('other-secret'));
+    assert.ok(!JSON.stringify(other).includes('prod-pass'));
+    assert.ok(!JSON.stringify(other).includes('prod-db-token'));
 
     fs.writeFileSync(path.join(dir, '.env'), 'PORT=nope\nAPI_TOKEN=x\n');
     const bad = run(['print', dir, '--schema', 'env.schema.js'], dir);

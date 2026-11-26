@@ -20,7 +20,7 @@
  *   env-saaf scan  [dir | file | --stdin] [--file name] [--json] [--watch]: just list the env vars your code uses; keys in
  *                           .env.example (or the --file given) that no code reads are reported
  *                           as UNUSED warnings (stderr; `unused` in --json), never an exit code
- *   env-saaf print [dir] [--schema file] [--file name] [--json] — load and validate the env file, then print the coerced values with sensitive rules masked
+ *   env-saaf print [dir] [--schema file] [--file name] [--json] [--reveal] — load and validate the env file, then print the coerced values with sensitive rules and secret-named keys masked; --reveal prints the real values instead (local debugging only, never in CI logs)
  *   env-saaf example [dir] [--write[=file]] [--force] [--schema file] — print a .env.example draft from code
  *                           usage (v1.0.0); --write saves it to .env.example (or the file
  *                           named) instead, refusing to overwrite unless --force is given
@@ -59,7 +59,7 @@ if (argv.includes('--version') || argv.includes('-v')) {
 // Output is already plain in every mode, including when NO_COLOR is set.
 while (argv[0] === '--no-color') argv.shift();
 const cmd = argv[0];
-const USAGE = 'Usage: env-saaf check [dir | file] [--file name] [--schema file] [--values file] [--exclude pattern] [--json] [--json-schema] [--watch] [--fix] | env-saaf scan [dir | file | --stdin] [--file name] [--exclude pattern] [--json] [--watch] | env-saaf print [dir] [--schema file] [--file name] [--json] | env-saaf example [dir] [--write[=file]] [--force] [--schema file] | env-saaf init [dir] [--schema file] [--force] [--from-example[=file]]\n'
+const USAGE = 'Usage: env-saaf check [dir | file] [--file name] [--schema file] [--values file] [--exclude pattern] [--json] [--json-schema] [--watch] [--fix] | env-saaf scan [dir | file | --stdin] [--file name] [--exclude pattern] [--json] [--watch] | env-saaf print [dir] [--schema file] [--file name] [--json] [--reveal] | env-saaf example [dir] [--write[=file]] [--force] [--schema file] | env-saaf init [dir] [--schema file] [--force] [--from-example[=file]]\n'
   + 'Global options: --no-color, --version / -v (before or after the command).';
 // --help / -h / help: print usage and exit 0 (asking for help is not an error — this used to exit 2)
 if (cmd === '--help' || cmd === '-h' || cmd === 'help') {
@@ -86,6 +86,9 @@ let fileOpt = '.env.example';
 let fileExplicit = false;
 let schemaOpt = null;
 let jsonMode = false;
+// Issue #474: --reveal ('print' only) prints the real values instead of the
+// masked ones — an explicit opt-in for local debugging, never for CI logs.
+let revealOpt = false;
 let jsonSchemaOpt = false;
 let writeOpt = null;
 let forceOpt = false;
@@ -134,6 +137,7 @@ for (let i = 1; i < argv.length; i++) {
   else if (a === '--exclude' && argv[i + 1]) excludeOpts.push(argv[++i]);
   else if (a.startsWith('--exclude=')) excludeOpts.push(a.slice('--exclude='.length));
   else if (a === '--json') jsonMode = true;
+  else if (a === '--reveal') revealOpt = true;
   else if (a === '--json-schema') jsonSchemaOpt = true;
   else if (a === '--write') writeOpt = '.env.example';
   else if (a.startsWith('--write=')) writeOpt = a.slice('--write='.length) || '.env.example';
@@ -189,7 +193,7 @@ if ((cmd === 'scan' || cmd === 'check') && positional[0] !== undefined) {
 const COMMAND_FLAGS = {
   check: ['--file', '--schema', '--values', '--exclude', '--json', '--json-schema', '--watch', '--fix'],
   scan: ['--file', '--exclude', '--json', '--watch', '--stdin'],
-  print: ['--schema', '--file', '--json'],
+  print: ['--schema', '--file', '--json', '--reveal'],
   example: ['--write', '--force', '--schema'],
   init: ['--schema', '--force', '--from-example', '--groups'],
 };
@@ -279,6 +283,7 @@ if (COMMAND_FLAGS[cmd]) {
   if (fileExplicit) seenFlags.add('--file');
   if (schemaOpt !== null) seenFlags.add('--schema');
   if (jsonMode) seenFlags.add('--json');
+  if (revealOpt) seenFlags.add('--reveal');
   if (jsonSchemaOpt) seenFlags.add('--json-schema');
   if (writeOpt !== null) seenFlags.add('--write');
   if (forceOpt) seenFlags.add('--force');
@@ -901,13 +906,22 @@ function readStdin() {
 }
 
 // Issue #353: print the effective configuration, masking sensitive rules.
-function maskBySchema(schema, values) {
+// Issue #447: keys whose name looks like a secret are masked too, even without
+// `sensitive: true` — the same word list `generateExample` uses in index.js.
+// Grouped keys are judged by their full flat name (prefix + key), so DB_TOKEN
+// is masked while a bare TOKEN-free name like DB_HOST is not.
+const SECRET_WORDS = new Set(['SECRET', 'KEY', 'TOKEN', 'PASSWORD', 'PASSWD', 'PRIVATE', 'CREDENTIAL']);
+function looksSecretName(name) {
+  return name.split('_').some((part) => SECRET_WORDS.has(part.toUpperCase()));
+}
+
+function maskBySchema(schema, values, prefix = '') {
   const out = Array.isArray(values) ? [...values] : { ...values };
   for (const [key, rule] of Object.entries(schema)) {
     if (!Object.prototype.hasOwnProperty.call(out, key)) continue;
     if (rule && typeof rule === 'object' && rule.schema && typeof rule.prefix === 'string') {
-      out[key] = maskBySchema(rule.schema, out[key]);
-    } else if (rule && rule.sensitive === true) {
+      out[key] = maskBySchema(rule.schema, out[key], prefix + rule.prefix);
+    } else if (rule && (rule.sensitive === true || looksSecretName(prefix + key))) {
       out[key] = typeof out[key] === 'string' ? maskValue(out[key]) : '[REDACTED]';
     }
   }
@@ -958,7 +972,9 @@ async function runPrint() {
     else error.errors.forEach((line) => console.error(line));
     process.exit(1);
   }
-  const masked = maskBySchema(schema, env);
+  // Issue #474: --reveal prints the real values (text and --json alike) — an
+  // explicit opt-in for local debugging; without it output is always masked.
+  const masked = revealOpt ? env : maskBySchema(schema, env);
   if (jsonMode) {
     console.log(JSON.stringify(masked, null, 2));
   } else {

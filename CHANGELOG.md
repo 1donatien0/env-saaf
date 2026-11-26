@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Fixed: `print` now masks secret-named keys (e.g. `PASSWORD`, `API_TOKEN`) in text and `--json` output, not just `sensitive: true` rules — including grouped keys, judged by their full flat name; added `--reveal` to `print` as the explicit opt-in to unmasked output for local debugging (never in CI logs) (fixes #447, #474).
 - Fixed: `loadEnv` and `loadEnvAsync` assign date values as ISO text without extra quotes (fixes #458).
 - Fixed: whitespace-only environment values now count as unset for required checks, defaults and optional keys; trimmed values are shown in validation errors, while `trim: false` preserves whitespace (fixes #439).
 
