@@ -1606,7 +1606,7 @@ function validateEnvCore(schema, env, options, valueSources) {
   }
   // Non-throwing mode lives in the public wrapper below; the core always
   // returns both the values and the errors (issue #55).
-  return { out, result, errors, errorSources };
+  return { flat, out, result, errors, errorSources };
 }
 
 // Issue #231: an opt-in hook may replace the message. It only ever sees an
@@ -1684,7 +1684,7 @@ function validateEnv(schema, env = process.env, options = {}) {
  *   env      — base env to merge with (default process.env); its values win unless override is true
  *   override — if true, values from the file win over `env` (default false)
  *   assign   — if true, write the validated values back into `env` as strings
- *              (objects/arrays from the json type are JSON-stringified)
+ *              (date values use ISO text; objects/arrays are JSON-stringified)
  *              (default false — process.env is never mutated silently)
  * Any other options are passed through to validateEnv (e.g. { strict: true }).
  * An explicitly passed single `path` that does not exist always throws, naming
@@ -1813,7 +1813,7 @@ function* loadEnvSteps(schema, options) {
   // validateEnv directly when you want to collect the errors (issue #55).
   // The core is used directly so `assign` writes the FLAT env names (a group
   // result nested under DB must not be written back as "DB=[object Object]").
-  const { out, result, errors, errorSources } = validateEnvCore(
+  const { flat, out, result, errors, errorSources } = validateEnvCore(
     schema, merged, { ...rest, throwOnError: true }, sources
   );
   if (errors.length) {
@@ -1825,7 +1825,8 @@ function* loadEnvSteps(schema, options) {
       // A json value (or a transform returning an object/array) must be written
       // back as JSON text so it round-trips through JSON.parse; String() on an
       // object would produce the useless "[object Object]".
-      env[key] = (value !== null && typeof value === 'object') ? JSON.stringify(value) : String(value);
+      if (flat[key].type === 'date') env[key] = value.toISOString();
+      else env[key] = (value !== null && typeof value === 'object') ? JSON.stringify(value) : String(value);
     }
   }
   return result;

@@ -2840,6 +2840,48 @@ assert.deepStrictEqual(
   fs.rmSync(dir, { recursive: true, force: true });
 }
 
+// Issue #458: assigned dates use ISO text without JSON quoting.
+{
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const path = require('node:path');
+  const { loadEnv, validateEnv } = require('./index');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'env-saaf-assign-date-'));
+  const file = path.join(dir, '.env');
+  const key = 'ENV_SAAF_TEST_ASSIGN_DATE_458';
+  const previous = process.env[key];
+  try {
+    delete process.env[key];
+    fs.writeFileSync(file, `${key}=2024-01-15\nJSON_VALUE={}\n`);
+    const schema = { [key]: { type: 'date' } };
+    const loaded = loadEnv(schema, { path: file, assign: true });
+    assert.strictEqual(process.env[key], '2024-01-15T00:00:00.000Z');
+    assert.deepStrictEqual(validateEnv(schema)[key], loaded[key]);
+
+    const target = {};
+    const grouped = {
+      DB: { prefix: 'DB_', schema: { DAY: { type: 'date', default: '2024-01-16' } } },
+      BIG: { type: 'bigint', default: '9007199254740993' },
+      FLAG: { type: 'boolean', default: true },
+      NUM: { type: 'number', default: 42 },
+      ARRAY: { type: 'array', of: 'int', default: '1,2' },
+      JSON_VALUE: { type: 'json', transform: () => new Date('2024-01-17') },
+    };
+    const parsed = loadEnv(grouped, { path: file, env: target, assign: true });
+    assert.strictEqual(target.DB_DAY, '2024-01-16T00:00:00.000Z');
+    assert.strictEqual(target.BIG, '9007199254740993');
+    assert.strictEqual(target.FLAG, 'true');
+    assert.strictEqual(target.NUM, '42');
+    assert.strictEqual(target.ARRAY, '[1,2]');
+    assert.strictEqual(target.JSON_VALUE, '"2024-01-17T00:00:00.000Z"');
+    assert.deepStrictEqual(parsed.DB.DAY, validateEnv({ DB: grouped.DB }, target).DB.DAY);
+  } finally {
+    if (previous === undefined) delete process.env[key];
+    else process.env[key] = previous;
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+}
+
 // Issue #117: parseEnvFile — a backslash-escaped quote inside a quoted value
 // is part of the value, not the end of it. Single and double quotes behave the
 // same way; a plain backslash (C:\path) is not an escape and stays literal.

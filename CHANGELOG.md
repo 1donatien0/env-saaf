@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Fixed: `loadEnv` and `loadEnvAsync` assign date values as ISO text without extra quotes (fixes #458).
 - Fixed: whitespace-only environment values now count as unset for required checks, defaults and optional keys; trimmed values are shown in validation errors, while `trim: false` preserves whitespace (fixes #439).
 
 ## 1.6.0 — 2026-11-26
