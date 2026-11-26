@@ -617,7 +617,7 @@ npx env-saaf check . --file .env.sample  # compare against a differently-named t
 npx env-saaf check . --json # machine-readable check results for CI or tooling
 npx env-saaf check . --schema ./env.schema.js  # also validate the values in .env against a schema — exit 1 on a type error
 npx env-saaf check . --schema ./env.schema.js --values .env.production  # validate another environment file's values
-npx env-saaf print . --schema ./env.schema.js  # print the coerced values (defaults applied, sensitive rules masked)
+npx env-saaf print . --schema ./env.schema.js  # print the coerced values (defaults applied, secrets masked)
 
 npx env-saaf scan ./src --json  # JSON object containing the used vars
 npx env-saaf check . --watch    # re-run check whenever the code, .env.example/.env or schema changes (Ctrl-C to stop)
@@ -643,7 +643,7 @@ npx env-saaf init . --from-example --groups  # fold keys sharing a prefix into a
 
 只要打印出任何结果，`check` 就会以 1 退出，`--json` 的 `ok` 也携带相同的值，因此 CI 任务恰好在输出报告问题时失败；完全干净的项目以 0 退出。`UNUSED` 也算一个结果：某个键在其代码用法消失后仍留在模板中，会让运行失败，因此在删除最后一次使用时，请同时把它从模板中删除。唯一的例外是完全没有 `process.env` 用法的项目——例如一个全新的脚手架：此时 `check` 会通过并附带一条说明（在 `--json` 中是一个 `note` 字段），而不是每个键一行 `UNUSED`，因为还没有代码可供模板漂移。
 
-`env-saaf print` 会根据 schema 加载并校验环境文件（默认为 `.env`，或通过 `--file` 指定），并打印生效的配置（包含转换后的值和默认值），同时将所有 `sensitive: true` 规则的值掩码处理；`--json` 会打印同一个对象。校验失败时会输出与 `check --schema` 相同的消息并以 1 退出，因此它也可以作为启动前检查。该命令必须提供 `--schema`。
+`env-saaf print` 会根据 schema 加载并校验环境文件（默认为 `.env`，或通过 `--file` 指定），并打印生效的配置（包含转换后的值和默认值），同时将所有 `sensitive: true` 规则以及名称看似密钥的键的值掩码处理，文本和 `--json` 输出均如此；`--json` 会打印同一个对象。`--reveal` 会打印真实值，仅用于本地调试——切勿在 CI 日志中使用。校验失败时会输出与 `check --schema` 相同的消息并以 1 退出，因此它也可以作为启动前检查。该命令必须提供 `--schema`。
 
 `--schema` 是可选启用的：没有它时，`check` 只比较键是否存在。有了它，`check` 会加载 schema 文件（`module.exports = { PORT: { type: 'port', required: true } }`，相对于被检查的目录解析），并对真正的 `.env` 文件中的值运行库本身使用的同一个 `validateEnv`。类型错误会报告为 `INVALID: PORT: expected a port (0-65535, e.g. 3000), got "not-a-port"`，并使 check 失败（退出码 1）；在 `--json` 模式下，失败会出现在 `invalid` 字段中。在指定要按 schema 校验的值文件时，`--values <file>` 具有更高优先级（例如 `.env.production` 或 `.env.staging`），同时保留 `.env.example`（或 `--file`）作为模板，且文件不存在属于用法错误；未传 `--values` 时，显式的 `--file` 会选择模板并同时作为被校验的值文件；当没有 `.env` 文件、也没有 `--values` 和显式 `--file` 时，会跳过值校验步骤（模板的占位符不是真实值）。使用 `--schema` 时，`check` 还会将 schema 与示例文件核对：在 schema 中声明但 `.env.example` 中缺失的键会报告为 `NOT DOCUMENTED`，而示例中有但 schema 未声明的键会报告为 `NOT IN SCHEMA`（分组 schema 按展平后的名称比较，例如 `DB_HOST`）。这两种情况都会使检查失败，并在 `--json` 中显示为 `schemaNotDocumented` 和 `documentedNotInSchema`。无法加载（或没有导出 schema 对象）的 schema 文件属于用法错误：给出清晰的消息并以 2 退出。使用 `--json-schema` 时，`check` 会把 `--schema` 文件作为 draft 2020-12 JSON Schema 文档打印到 stdout，而不是运行检查，这样编辑器和 CI 校验器可以直接消费它；`.env.example` 永远不会被读取，因此即使示例文件还不存在，schema 也能转换。没有 `--schema` 时就没有可转换的东西，因此该标志属于用法错误（退出码 2）。
 
