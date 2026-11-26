@@ -1201,7 +1201,9 @@ function validateEnvCore(schema, env, options, valueSources) {
   }
   const rules = normalizeRules(options.rules);
   const warn = options.onWarn || ((msg) => console.warn(msg));
-  const setKeys = Object.keys(env).filter((k) => env[k] !== undefined && env[k] !== '');
+  const isUnset = (value, trim = true) => value === undefined || value === null || value === ''
+    || (trim && typeof value === 'string' && value.trim() === '');
+  const setKeys = Object.keys(env).filter((k) => !isUnset(env[k]));
   if (options.strict) {
     const knownAliases = new Set();
     for (const rule of Object.values(flat)) {
@@ -1213,7 +1215,7 @@ function validateEnvCore(schema, env, options, valueSources) {
     for (const key of Object.keys(env)) {
       if (!Object.prototype.hasOwnProperty.call(flat, key)
         && !knownAliases.has(key)
-        && env[key] !== undefined && env[key] !== '') {
+        && !isUnset(env[key])) {
         const hint = nearMissKey(key, declaredKeys);
         const src = valueSources && Object.prototype.hasOwnProperty.call(valueSources, key)
           ? valueSources[key] : undefined;
@@ -1231,7 +1233,7 @@ function validateEnvCore(schema, env, options, valueSources) {
     // (exactly like `undefined`) — it must not reach coercion and become
     // the literal string "null".
     if (raw === null) raw = undefined;
-    if (raw !== undefined && raw !== '') {
+    if (!isUnset(raw, rule.trim !== false)) {
       const notice = deprecationNotice(rule.deprecated);
       if (notice) warn(`env-saaf: ${key} is ${notice}`);
     }
@@ -1240,20 +1242,16 @@ function validateEnvCore(schema, env, options, valueSources) {
     // blamed on a file that only contributed an empty placeholder.
     let originKey;
     // Issue #53: aliases let a renamed variable migrate without a flag day.
-    // If the canonical key is set it wins and any populated alias is noted
-    // as ignored; if unset, the first populated alias supplies the value
-    // with a deprecation warning. Empty strings count as unset everywhere.
+    // Empty and whitespace-only strings count as unset unless trim is false.
     if (Array.isArray(rule.aliases) && rule.aliases.length) {
       const seenAliases = new Set([key]);
       const populatedAliases = [];
       for (const alias of rule.aliases) {
         if (seenAliases.has(alias)) continue;
         seenAliases.add(alias);
-        if (env[alias] !== undefined && env[alias] !== null && env[alias] !== '') {
-          populatedAliases.push(alias);
-        }
+        if (!isUnset(env[alias], rule.trim !== false)) populatedAliases.push(alias);
       }
-      if (raw !== undefined && raw !== '') {
+      if (!isUnset(raw, rule.trim !== false)) {
         originKey = key;
         for (const alias of populatedAliases) {
           warn(`env-saaf: ${alias} is ignored because ${key} is set`);
@@ -1266,14 +1264,18 @@ function validateEnvCore(schema, env, options, valueSources) {
         for (const alias of ignored) {
           warn(`env-saaf: ${alias} is ignored because ${winner} is set; use ${key} instead`);
         }
-      } else if (raw === '') {
+      } else if (raw !== undefined) {
         originKey = key;
       }
-    } else if (raw !== undefined && raw !== '') {
+    } else if (!isUnset(raw, rule.trim !== false)) {
       originKey = key;
-    } else if (raw === '') {
+    } else if (raw !== undefined) {
       originKey = key;
     }
+    // Keep the original value for type-error diagnostics. Coercion applies
+    // trimming where appropriate; the unset check still treats blank input
+    // as absent unless trim is explicitly disabled.
+    if (isUnset(raw, rule.trim !== false)) raw = undefined;
     const valueSource = () => (
       valueSources && originKey !== undefined
         && Object.prototype.hasOwnProperty.call(valueSources, originKey)
@@ -1432,7 +1434,8 @@ function validateEnvCore(schema, env, options, valueSources) {
         if (val.length < lo || val.length > hi) {
           const range = rule.minLength !== undefined && rule.maxLength !== undefined ? `${rule.minLength}–${rule.maxLength} characters`
             : rule.minLength !== undefined ? `at least ${rule.minLength} characters` : `at most ${rule.maxLength} characters`;
-          pushErr(`${key}: expected a string ${range} long, got "${shown}"`, valueSource());
+          const shownLength = sensitive ? shown : (typeof raw === 'string' && rule.trim !== false ? raw.trim() : shown);
+          pushErr(`${key}: expected a string ${range} long, got "${shownLength}"`, valueSource());
           continue;
         }
       }
@@ -1560,7 +1563,7 @@ function validateEnvCore(schema, env, options, valueSources) {
       refVal = out[cond.key];
     } else if (!Object.prototype.hasOwnProperty.call(flat, cond.key)
       && Object.prototype.hasOwnProperty.call(env, cond.key)
-      && env[cond.key] !== undefined && env[cond.key] !== '') {
+      && !isUnset(env[cond.key])) {
       hasRef = true;
       refVal = env[cond.key];
     }
@@ -2764,8 +2767,8 @@ function boundedStringPlaceholder(type, example, rule, limit) {
   }
   const length = Math.min(max, Math.max(min, example.length));
   if (length === 0) {
-    // An empty assignment is missing, but a quoted space survives parsing and trims to ''.
-    return type === 'string' && rule.trim !== false ? "' '" : example;
+    // An empty assignment is valid only when trimming is enabled.
+    return rule.trim === false ? example : '';
   }
   // Only built-in ASCII examples are resized. Author-supplied values are left alone.
   switch (type) {

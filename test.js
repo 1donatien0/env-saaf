@@ -36,6 +36,35 @@ const { loadEnv, validateEnv, validateSchema, EnvSaafError, parseEnvFile, scanCo
   assert.deepStrictEqual(loadEnv(portSchema, { paths: [], env: nullProtoEnv }), { PORT: 8000 });
 }
 
+// Issue #439: whitespace-only values follow the same unset and trimming rules as empty strings.
+{
+  const required = { NAME: { type: 'string', required: true } };
+  assert.throws(() => validateEnv(required, { NAME: '   ' }), {
+    name: 'EnvSaafError', message: /NAME: missing required variable/,
+  });
+  assert.deepStrictEqual(validateEnv({ NAME: { type: 'string', default: 'fallback' } }, { NAME: '   ' }),
+    { NAME: 'fallback' });
+  assert.deepStrictEqual(validateEnv({ NAME: { type: 'string' } }, { NAME: '   ' }), {});
+  assert.deepStrictEqual(validateEnv({ NAME: { type: 'string', aliases: ['OLD'] } },
+    { NAME: '   ', OLD: 'legacy' }), { NAME: 'legacy' });
+  assert.deepStrictEqual(validateEnv({ NAME: { type: 'string', default: 'fallback', trim: false } },
+    { NAME: '   ' }), { NAME: '   ' });
+  assert.deepStrictEqual(validateEnv({ NAME: { type: 'string', required: true, trim: false } },
+    { NAME: '   ' }), { NAME: '   ' });
+
+  // Array input must retain trailing separators until splitting so empty items are rejected.
+  const arraySchema = { ITEMS: { type: 'array', separator: ' ' } };
+  assert.deepStrictEqual(validateEnv(arraySchema, { ITEMS: 'a b' }).ITEMS, ['a', 'b']);
+  assert.throws(() => validateEnv(arraySchema, { ITEMS: 'a b ' }), /ITEMS\[2\]/);
+  const commaArray = { ITEMS: { type: 'array', separator: ',' } };
+  assert.deepStrictEqual(validateEnv(commaArray, { ITEMS: ' a , b ' }).ITEMS, ['a', 'b']);
+
+  const result = validateEnv({ NAME: { type: 'string', minLength: 3 } }, { NAME: '  x  ' },
+    { throwOnError: false });
+  assert.deepStrictEqual(result.errors, ['NAME: expected a string at least 3 characters long, got "x"']);
+  assert.deepStrictEqual(result.details, [{ key: 'NAME', message: 'expected a string at least 3 characters long, got "x"' }]);
+}
+
 // Issue #344: deprecating a variable warns about supplied values, never defaults.
 {
   const schema = {
@@ -714,9 +743,10 @@ assert.throws(() => validateEnv({ A: { required: true } }, {}), EnvSaafError);
   const schema = { PORT: { type: 'port', required: true } };
   assert.strictEqual(validateEnv(schema, { PORT: '0' }).PORT, 0);
   assert.strictEqual(validateEnv(schema, { PORT: '65535' }).PORT, 65535);
-  for (const raw of ['-1', '65536', '3.5', 'abc', ' \t ', false]) {
+  for (const raw of ['-1', '65536', '3.5', 'abc', false]) {
     assert.throws(() => validateEnv(schema, { PORT: raw }), /expected a port \(0-65535, e\.g\. 3000\)/);
   }
+  assert.throws(() => validateEnv(schema, { PORT: ' \t ' }), /missing required variable/);
   // Issue #276: `null` counts as "not set", not as the string "null".
   assert.throws(() => validateEnv(schema, { PORT: null }), /missing required variable/);
   const untrimmed = { PORT: { ...schema.PORT, trim: false } };
@@ -4695,8 +4725,8 @@ assert.deepStrictEqual(
     }
   }
 }
-// Issue #186: validateEnv treats an empty string ('') as unset across
-// optional, required, and default rules, while whitespace-only input is provided.
+// Issue #186: validateEnv treats empty and whitespace-only strings as unset
+// across optional, required, and default rules unless trim is disabled.
 {
   const optional = validateEnv({ NICK: { type: 'string' } }, { NICK: '' });
   assert.deepStrictEqual(optional, {});
@@ -4716,8 +4746,8 @@ assert.deepStrictEqual(
   );
   assert.deepStrictEqual(defaulted, { HOST: 'localhost', PORT: 3000 });
 
-  // Whitespace-only is provided, not unset: trimmed to '' by default, preserved with trim: false.
-  assert.deepStrictEqual(validateEnv({ NICK: { type: 'string' } }, { NICK: '   ' }), { NICK: '' });
+  // Whitespace-only input is unset by default, but trim: false preserves it.
+  assert.deepStrictEqual(validateEnv({ NICK: { type: 'string' } }, { NICK: '   ' }), {});
   assert.deepStrictEqual(validateEnv({ NICK: { type: 'string', trim: false } }, { NICK: '   ' }), { NICK: '   ' });
 
   // parseEnvFile preserves KEY= as '', which validateEnv then treats as unset.
@@ -6159,6 +6189,12 @@ assert.deepStrictEqual(
   for (const [type, bounds, length] of cases) {
     const schema = { VALUE: { type, required: true, ...bounds } };
     const example = generateExample(schema);
+    if (bounds.maxLength === 0) {
+      assert.match(example, /^VALUE=$/m);
+      const optionalSchema = { VALUE: { type, ...bounds } };
+      assert.deepStrictEqual(validateEnv(optionalSchema, parseEnvFile(example)), {});
+      continue;
+    }
     assert.strictEqual(validateEnv(schema, parseEnvFile(example)).VALUE.length, length, example);
   }
 }
@@ -8342,10 +8378,10 @@ const conflictsWithTest = (async () => {
     );
   }
 
-  // Whitespace-only input on a string rule counts as provided (unlike ''), so it conflicts.
-  assert.throws(
-    () => validateEnv({ A: { type: 'string', conflictsWith: 'B' }, B: { type: 'string' } }, { A: '   ', B: 'ok' }),
-    err => err instanceof EnvSaafError && err.errors[0] === 'A: conflicts with B (cannot set both)',
+  // Whitespace-only input is unset by default, so it does not conflict.
+  assert.deepStrictEqual(
+    validateEnv({ A: { type: 'string', conflictsWith: 'B' }, B: { type: 'string' } }, { A: '   ', B: 'ok' }),
+    { B: 'ok' },
   );
 
   // 3. List form + grouped / nested-grouped schemas using full flattened names.
