@@ -2,6 +2,40 @@
 const assert = require('node:assert');
 const { loadEnv, validateEnv, validateSchema, EnvSaafError, parseEnvFile, scanCode, scanCodeLocations, scanDir, scanDirLocations, diffEnv, maskSecrets, maskValue, generateExample, toJsonSchema } = require('./index');
 
+// Issue #440: malformed inputs fail before any values can bypass validation.
+{
+  const portSchema = { PORT: { type: 'port' } };
+  const badRule = { name: 'EnvSaafError', message: /PORT: rule must be an object/ };
+  for (const rule of ['port', 3000, [], null]) {
+    const schema = { PORT: rule };
+    assert.throws(() => validateEnv(schema, { PORT: 'abc' }), badRule);
+    assert.throws(() => validateEnv(schema, {}, { throwOnError: false }), badRule);
+    assert.throws(() => validateSchema(schema), badRule);
+    assert.throws(() => loadEnv(schema, { paths: [], env: {} }), badRule);
+  }
+  const groupSchema = { DB: { prefix: 'DB_', schema: { PORT: null } } };
+  assert.throws(() => validateEnv(groupSchema, {}), {
+    name: 'EnvSaafError', message: /DB_PORT: rule must be an object/,
+  });
+  for (const bad of ['nope', 42, [], null]) {
+    assert.throws(() => validateEnv(bad, {}), { name: 'EnvSaafError', message: /schema.*object/ });
+    assert.throws(() => validateSchema(bad), { name: 'EnvSaafError', message: /schema.*object/ });
+    assert.throws(() => validateEnv(portSchema, bad), { name: 'EnvSaafError', message: /env.*object/ });
+    assert.throws(() => loadEnv(portSchema, { paths: [], env: bad }), {
+      name: 'EnvSaafError', message: /env.*object/,
+    });
+  }
+
+  const schema = Object.assign(Object.create({ IGNORED: null }), {
+    PORT: Object.create({ type: 'port' }),
+    DB: { prefix: 'DB_', schema: { HOST: { default: 'localhost' } } },
+  });
+  const env = Object.create({ PORT: '3000' });
+  assert.deepStrictEqual(validateEnv(schema, env), { PORT: 3000, DB: { HOST: 'localhost' } });
+  const nullProtoEnv = Object.assign(Object.create(null), { PORT: '8000' });
+  assert.deepStrictEqual(loadEnv(portSchema, { paths: [], env: nullProtoEnv }), { PORT: 8000 });
+}
+
 // Issue #344: deprecating a variable warns about supplied values, never defaults.
 {
   const schema = {
@@ -1145,12 +1179,12 @@ assert.ok(!ex.includes('sk_live'));
 {
   const { loadEnv } = require('./index');
   const message = "loadEnv expects a schema object as the first argument — did you mean loadEnv(schema, { path: '.env' })?";
-  assert.throws(() => loadEnv('.env', { PORT: { type: 'port' } }), { name: 'TypeError', message });
+  assert.throws(() => loadEnv('.env', { PORT: { type: 'port' } }), { name: 'EnvSaafError', message });
   for (const schema of [null, undefined, [], 42, false, 1n, Symbol('schema'), () => { }, new Date(), new Map(), new (class Schema { })()]) {
-    assert.throws(() => loadEnv(schema), { name: 'TypeError', message });
+    assert.throws(() => loadEnv(schema), { name: 'EnvSaafError', message });
   }
   // Argument validation must happen before reading options or files.
-  assert.throws(() => loadEnv('.env', { get path() { throw new Error('options read too soon'); } }), { name: 'TypeError', message });
+  assert.throws(() => loadEnv('.env', { get path() { throw new Error('options read too soon'); } }), { name: 'EnvSaafError', message });
   assert.deepStrictEqual(loadEnv({}, { paths: [], env: {} }), {});
   const schema = Object.assign(Object.create(null), { PORT: { type: 'port' } });
   assert.strictEqual(loadEnv(schema, { paths: [], env: { PORT: '3000' } }).PORT, 3000);
@@ -6791,6 +6825,12 @@ const loadEnvAsyncTest = (async () => {
       });
     }
 
+    await assert.rejects(loadEnvAsync({ PORT: null }, { paths: [], env: {} }), {
+      name: 'EnvSaafError', message: /PORT: rule must be an object/,
+    });
+    await assert.rejects(loadEnvAsync(schema, { paths: [], env: null }), {
+      name: 'EnvSaafError', message: /env.*object/,
+    });
     await assertSameError(schema, { path: missing, env: {} });
     await assertSameError(schema, { paths: [missing], env: { PORT: '5000' } });
     await assertSameError(schema, { paths: [missing, dir], env: {} });
@@ -8224,8 +8264,11 @@ const conflictsWithTest = (async () => {
       && err.errors[0] === '__proto__: conflicts with toString (cannot set both)',
   );
 
-  // Group container rules reject `conflictsWith` directly on the group object; null rules do not crash root checks.
-  assert.doesNotThrow(() => validateSchema({ N: null, A: { conflictsWith: 'N' } }));
+  // Group containers reject `conflictsWith`; a malformed target rule reports its own key.
+  assert.throws(
+    () => validateSchema({ N: null, A: { conflictsWith: 'N' } }),
+    { name: 'EnvSaafError', message: /N: rule must be an object/ },
+  );
   assert.throws(
     () => validateSchema({ A: {}, DB: { prefix: 'DB_', conflictsWith: 'A', schema: { HOST: {} } } }),
     err => err instanceof EnvSaafError
