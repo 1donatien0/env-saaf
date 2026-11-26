@@ -2203,6 +2203,83 @@ assert.deepStrictEqual(
   assert.strictEqual(validateEnv({ S: { type: 'string', min: 1 } }, { S: 'x' }).S, 'x');
 }
 
+// Issue #460: integer literals must not silently round outside the safe range.
+{
+  const unsafe = '9007199254740993';
+  const precisionError = /N: integer magnitude exceeds Number\.MAX_SAFE_INTEGER \(9007199254740991\); use type: 'bigint'/;
+  for (const type of ['int', 'number']) {
+    const schema = { N: { type } };
+    for (const [raw, expected] of [
+      ['9007199254740991', Number.MAX_SAFE_INTEGER],
+      ['-9007199254740991', Number.MIN_SAFE_INTEGER],
+      ['+009007199254740991', Number.MAX_SAFE_INTEGER],
+      ['9_007_199_254_740_991', Number.MAX_SAFE_INTEGER],
+      ['-9_007_199_254_740_991', Number.MIN_SAFE_INTEGER],
+      ['000', 0], ['-0', -0],
+    ]) {
+      assert.strictEqual(validateEnv(schema, { N: raw }).N, expected);
+    }
+    for (const raw of [
+      '9007199254740992', unsafe, '-9007199254740992', `-${unsafe}`,
+      `+00${unsafe}`, '9_007_199_254_740_993', '-9_007_199_254_740_993',
+      '9'.repeat(80),
+    ]) {
+      for (const trim of [true, false]) {
+        assert.throws(() => validateEnv({ N: { type, trim } }, { N: ` ${raw} ` }),
+          err => err instanceof EnvSaafError && precisionError.test(err.errors[0]));
+      }
+    }
+    assert.throws(() => validateEnv({ N: { type, default: unsafe } }, {}), precisionError);
+    assert.deepStrictEqual(
+      validateEnv({ N: { type: 'array', of: type } }, { N: '9007199254740991,-9007199254740991' }).N,
+      [Number.MAX_SAFE_INTEGER, Number.MIN_SAFE_INTEGER],
+    );
+    assert.throws(
+      () => validateEnv({ N: { type: 'array', of: type } }, { N: `1,${unsafe}` }),
+      /N\[1\]: integer magnitude exceeds Number\.MAX_SAFE_INTEGER/,
+    );
+    assert.throws(
+      () => validateEnv({ N: { type: 'array', of: type, default: ['1', unsafe] } }, {}),
+      /N\[1\]: integer magnitude exceeds Number\.MAX_SAFE_INTEGER/,
+    );
+    const collected = validateEnv({ N: { type, sensitive: true } }, { N: unsafe }, { throwOnError: false });
+    assert.deepStrictEqual(collected.env, {});
+    assert.strictEqual(collected.errors.length, 1);
+    assert.match(collected.errors[0], precisionError);
+    assert.ok(!collected.errors[0].includes(unsafe));
+    assert.deepStrictEqual(collected.details, [{ key: 'N', message: collected.errors[0].slice(3) }]);
+  }
+  // Numeric int defaults must be safe too; safe boundaries remain inclusive.
+  for (const value of [Number.MAX_SAFE_INTEGER + 1, Number.MIN_SAFE_INTEGER - 1]) {
+    assert.throws(() => validateEnv({ N: { type: 'int', default: value } }, {}), precisionError);
+  }
+  assert.strictEqual(validateEnv({ N: { type: 'int', default: Number.MAX_SAFE_INTEGER } }, {}).N,
+    Number.MAX_SAFE_INTEGER);
+  // 'number' still supports floating point/exponents, even above the safe range.
+  // Already-numeric values have no literal spelling to check and stay unchanged.
+  for (const raw of ['1.5', '.5', '1e3', '1e20', '9_007_199_254_740_993.0', '-9007199254740993.5', 1e20]) {
+    const expected = Number(typeof raw === 'string' ? raw.replace(/_/g, '') : raw);
+    assert.strictEqual(validateEnv({ N: { type: 'number' } }, { N: raw }).N, expected);
+    assert.strictEqual(validateEnv({ N: { type: 'number', default: raw } }, {}).N, expected);
+  }
+  for (const raw of [unsafe, `-${unsafe}`]) {
+    assert.strictEqual(validateEnv({ N: { type: 'bigint' } }, { N: raw }).N, BigInt(raw));
+  }
+  // Valid floating-point schemas still generate values that can be read back.
+  for (const value of [Number.MAX_SAFE_INTEGER + 1, -(Number.MAX_SAFE_INTEGER + 1), 1e20, -1e21]) {
+    const schema = {
+      BOUND: { type: 'number', min: value, max: value },
+      DEFAULT: { type: 'number', default: value },
+      CHOICE: { type: 'number', choices: [value] },
+      DEFAULTS: { type: 'array', of: 'number', default: [value] },
+      CHOICES: { type: 'array', of: 'number', choices: [value] },
+    };
+    assert.deepStrictEqual(validateEnv(schema, parseEnvFile(generateExample(schema))), {
+      BOUND: value, DEFAULT: value, CHOICE: value, DEFAULTS: [value], CHOICES: [value],
+    });
+  }
+}
+
 // Issue #417: 'bigint' type — exact integers beyond Number.MAX_SAFE_INTEGER.
 {
   const big = validateEnv({ ID: { type: 'bigint', required: true } }, { ID: '9007199254740993' });
@@ -6158,8 +6235,11 @@ assert.deepStrictEqual(
     ['int', { min: 100.2 }, 101],
     ['int', { max: 20.8 }, 20],
     ['int', { min: -5.8, max: -3.2 }, -4],
-    ['int', { min: 1e21, max: 1e21 }, 1e21],
-    ['int', { min: -1e22, max: -1e21 }, -1e21],
+    ['int', { min: Number.MAX_SAFE_INTEGER, max: Number.MAX_SAFE_INTEGER }, Number.MAX_SAFE_INTEGER],
+    ['int', { min: Number.MIN_SAFE_INTEGER, max: Number.MIN_SAFE_INTEGER }, Number.MIN_SAFE_INTEGER],
+    // Issue #460: integers beyond the safe range must use bigint.
+    ['bigint', { min: 1e21, max: 1e21 }, 1000000000000000000000n],
+    ['bigint', { min: -1e22, max: -1e21 }, -1000000000000000000000n],
     ['port', {}, 3000],
     ['port', { min: 4000 }, 4000],
     ['port', { max: 1024 }, 1024],

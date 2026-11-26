@@ -75,8 +75,8 @@ Environment inputs are strings. Output below is before an optional `transform`.
 | Type | Accepted input | JavaScript output | Additional rule options |
 | --- | --- | --- | --- |
 | `string` | Any non-missing text (default type) | `string` | `trim`, `minLength`, `maxLength`, `pattern` (`RegExp` or string) |
-| `number` | Non-empty decimal text, including fractions and exponent notation. Rejects radix prefixes (`0x`, `0b`, `0o`), `NaN` and non-finite values. | `number` | `trim`, `min`, `max` |
-| `int` | Plain integer literal: optional sign + digits, e.g. `42`, `-3`, `007`. Decimal and scientific spellings (`1.0`, `1e3`) are rejected, as are radix prefixes | `number` | `trim`, `min`, `max` |
+| `number` | Non-empty decimal text, including fractions and exponent notation. Plain integer text must be within the safe-integer range. Rejects radix prefixes (`0x`, `0b`, `0o`), `NaN` and non-finite values. | `number` | `trim`, `min`, `max` |
+| `int` | Plain integer literal within the safe-integer range: optional sign + digits, e.g. `42`, `-3`, `007`. Decimal and scientific spellings (`1.0`, `1e3`) are rejected, as are radix prefixes | `number` | `trim`, `min`, `max` |
 | `bigint` | Plain integer literal: optional sign + digits, e.g. `9007199254740993`, `-3`, `007`. Decimal and scientific spellings (`1.0`, `1e3`) are rejected, as are radix prefixes. Values above `Number.MAX_SAFE_INTEGER` keep full precision | `bigint` | `trim`, `min`, `max` (bigint, integer or integer string) |
 | `boolean` | Case-insensitive `true/false`, `1/0`, `yes/no`, `on/off`, `y/n` | `boolean` | None |
 | `url` | Absolute URL accepted by `new URL()`, without normalization | `string` | `trim`, `minLength`, `maxLength`, `pattern`, `protocols` |
@@ -409,6 +409,8 @@ const env = validateEnv({
 ```
 
 `int` is like `number` but only accepts plain integer literals — `42`, `-3` and `007` pass, while `3.5`, `1.0` and `1e3` fail (decimal and scientific spellings are not integer literals, even when the value happens to be whole). `port` follows the same rule. `min` and `max` work on `number`, `int` and `port`; either one can be used alone, and an out-of-range value is rejected with an error naming the allowed range.
+
+`int` values (including numeric defaults) and plain integer text for `number` must be between `-Number.MAX_SAFE_INTEGER` and `Number.MAX_SAFE_INTEGER` (±9007199254740991, inclusive). Larger integers are rejected instead of silently rounding; use `type: 'bigint'` to preserve their exact value. Signs, leading zeroes, whitespace and underscore separators do not bypass this check. Decimal and exponent spellings for `number`, and already-numeric `number` inputs/defaults, keep their floating-point behaviour.
 
 ### `bigint` type and `min`/`max` — exact integers beyond the safe range
 
