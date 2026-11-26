@@ -723,6 +723,12 @@ function stripNumericUnderscores(value) {
   return s.replace(/_/g, '');
 }
 
+function assertSafeInteger(key, value, shown) {
+  if (!Number.isSafeInteger(value)) {
+    throw new Error(`${key}: integer magnitude exceeds Number.MAX_SAFE_INTEGER (${Number.MAX_SAFE_INTEGER}); use type: 'bigint', got "${shown}"`);
+  }
+}
+
 // Semantic version: MAJOR.MINOR.PATCH, no leading zeroes in numeric parts;
 // optional pre-release/build suffixes and one optional lowercase 'v' prefix.
 // Shared by coerce() and toJsonSchema() so runtime and schema checks match.
@@ -769,8 +775,12 @@ function coerce(key, raw, type, trim = true, protocols, sensitive = false, of = 
       // exponent overflow like '1e999'): Number() parses them without error,
       // and a silent Infinity breaks downstream maths (issue #175).
       // Underscore separators ('1_000.5') are stripped first (issue #412).
-      const n = decimalNumber(stripNumericUnderscores(v));
+      const digits = stripNumericUnderscores(v);
+      const n = decimalNumber(digits);
       if (v === '' || !Number.isFinite(n)) throw new Error(`${key}: expected a number (e.g. ${TYPE_EXAMPLES.number}), got "${shown}"`);
+      // Plain integer text must stay exact (issue #460). Fractions,
+      // exponents and already-numeric values retain floating-point behaviour.
+      if (typeof digits === 'string' && /^[+-]?\d+$/.test(digits.trim())) assertSafeInteger(key, n, shown);
       return n;
     }
     case 'int': {
@@ -780,7 +790,7 @@ function coerce(key, raw, type, trim = true, protocols, sensitive = false, of = 
       // when they happen to be whole numbers (issue #277): in a .env file
       // they are almost always a copied float or a formatted export, and
       // silently accepting them hides the mistake. Non-string values (a
-      // number passed directly, e.g. as a default) still just need to be an
+      // number passed directly, e.g. as a default) need to be a safe
       // integer; '3.5', 'abc', and non-finite values ('Infinity', '1e999')
       // do not pass. The shape is checked on the trimmed spelling so
       // surrounding whitespace behaves the same with trim: false.
@@ -791,6 +801,7 @@ function coerce(key, raw, type, trim = true, protocols, sensitive = false, of = 
       if (typeof v === 'string' && !/^[+-]?\d+$/.test(String(digits).trim())) throw new Error(`${key}: expected an integer (e.g. ${TYPE_EXAMPLES.int}), got "${shown}"`);
       const n = decimalNumber(digits);
       if (v === '' || !Number.isFinite(n) || !Number.isInteger(n)) throw new Error(`${key}: expected an integer (e.g. ${TYPE_EXAMPLES.int}), got "${shown}"`);
+      assertSafeInteger(key, n, shown);
       return n;
     }
     case 'bigint': {
@@ -2684,7 +2695,7 @@ function arrayPlaceholder(rule) {
     // Issue #320: use allowed choices so the generated example validates.
     // A choice containing the separator cannot be represented in a delimited
     // value, so prefer ones that can. Dedupe keeps `unique: true` examples valid.
-    const strings = rule.choices.map(choice => String(choice));
+    const strings = rule.choices.map(choice => String(exampleNumber(choice, rule.of)));
     const usable = [...new Set(strings.filter(s => !s.includes(separator)))];
     examples = usable.length ? usable : [...new Set(strings)];
   } else {
@@ -2799,6 +2810,14 @@ function decimalExample(value) {
   return value.toLocaleString('en-US', { useGrouping: false, maximumSignificantDigits: 21 });
 }
 
+// A numeric `number` default/choice or bound can exceed the safe-integer
+// range. Keep it floating point in the example instead of emitting integer
+// text that the precision check would reject when the file is read back.
+function exampleNumber(value, type) {
+  return type === 'number' && typeof value === 'number' && Number.isInteger(value) && !Number.isSafeInteger(value)
+    ? value.toExponential() : value;
+}
+
 const DURATION_UNITS = [['w', 604800000], ['d', 86400000], ['h', 3600000], ['m', 60000], ['s', 1000], ['ms', 1]];
 
 /** Format milliseconds back as a human duration ('2h', '1h30m', '45s',
@@ -2893,6 +2912,7 @@ function scalarPlaceholder(rule, stringGrowth) {
   // exactly — beyond that the re-parsed sum drifts by a few ms, so huge
   // or fractional values keep the numeric spelling (which round-trips).
   if (type === 'duration') return formatDuration(value);
+  if (type === 'number' && !Number.isSafeInteger(value) && Number.isInteger(value)) return exampleNumber(value, type);
   // int/port and duration reject exponent notation, even for a valid value.
   return decimalExample(value);
 }
@@ -2944,7 +2964,8 @@ function generateExample(schema) {
     if (notice) comment += `; ${notice}`;
     const looksSecret = rule.sensitive === true || key.split('_').some(part => SECRET_WORDS.has(part.toUpperCase()));
     const placeholder = rule.default !== undefined
-      ? (rule.type === 'array' && Array.isArray(rule.default) ? rule.default.join(rule.separator || ',') : rule.default)
+      ? (rule.type === 'array' && Array.isArray(rule.default)
+        ? rule.default.map(value => exampleNumber(value, rule.of)).join(rule.separator || ',') : rule.default)
       : looksSecret ? ''
       // Issue #223/#320: build the array placeholder from the `of` item type's
       // own examples, or from the allowed choices when present, so each
@@ -2955,7 +2976,7 @@ function generateExample(schema) {
         ? arrayPlaceholder(rule)
       : Array.isArray(rule.choices) && rule.choices.length ? rule.choices[0]
       : scalarPlaceholder(rule, stringGrowth);
-      return [comment, `${key}=${placeholder}`];
+      return [comment, `${key}=${exampleNumber(placeholder, rule.type)}`];
   };
   // The .env file stays flat; each group level documents its complete prefix.
   walkSchema(schema, (key, rule) => lines.push(...entry(key, rule)), (path, prefix) => {
