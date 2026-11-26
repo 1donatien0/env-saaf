@@ -168,16 +168,24 @@ function normalizedChoices(key, rule) {
     : rule.choices;
 }
 
+function isObject(value) {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function validateEnvObject(env) {
+  if (!isObject(env)) throw new EnvSaafError(['env must be an object']);
+}
+
 // Issue #228: a group rule nests a sub-schema under one prefix, so
 // { DB: { prefix: 'DB_', schema: { HOST: {...} } } } reads the env var
 // DB_HOST and returns { DB: { HOST: ... } }. A rule carrying a `schema`
 // property is always treated as a group attempt — malformed ones are
 // rejected up front in validateSchema rather than silently ignored.
 function groupShape(rule) {
-  if (rule === null || typeof rule !== 'object' || Array.isArray(rule)) return false;
+  if (!isObject(rule)) return false;
   if (rule.schema === undefined) return false;
   return rule.type === undefined
-    && rule.schema !== null && typeof rule.schema === 'object' && !Array.isArray(rule.schema);
+    && isObject(rule.schema);
 }
 
 function invalidSchema(errors) {
@@ -302,6 +310,7 @@ function validateSchema(schema) {
 }
 
 function validateSchemaRules(schema, warn, patterns = new Map(), prefix = '', ancestors = new Set(), isRoot = true) {
+  if (!isObject(schema)) throw invalidSchema(['schema must be an object']);
   if (ancestors.has(schema)) throw invalidSchema([`${prefix}: group "schema" contains a circular reference`]);
   ancestors = new Set(ancestors).add(schema);
   const errors = [];
@@ -309,7 +318,10 @@ function validateSchemaRules(schema, warn, patterns = new Map(), prefix = '', an
   const aliasOwners = new Map();
   for (const [name, rule] of Object.entries(schema)) {
     const key = prefix + name;
-    if (rule === null || typeof rule !== 'object' || Array.isArray(rule)) continue;
+    if (!isObject(rule)) {
+      errors.push(`${key}: rule must be an object`);
+      continue;
+    }
     // Issue #228: group rule — validate its shape, then its inner rules under
     // their full (prefixed) names so errors read `DB_HOST: ...`, not `HOST`.
     if (rule.schema !== undefined) {
@@ -325,7 +337,7 @@ function validateSchemaRules(schema, warn, patterns = new Map(), prefix = '', an
         errors.push(`${key}: group rule needs a non-empty string "prefix" (e.g. "DB_")`);
       }
       const inner = rule.schema;
-      if (inner === null || typeof inner !== 'object' || Array.isArray(inner)) {
+      if (!isObject(inner)) {
         errors.push(`${key}: group "schema" must be an object mapping inner names to rules`);
       } else {
         const innerKeys = Object.keys(inner);
@@ -1653,6 +1665,7 @@ function nearMissKey(key, candidates) {
 }
 
 function validateEnv(schema, env = process.env, options = {}) {
+  validateEnvObject(env);
   const { result, errors } = validateEnvCore(schema, env, options);
   if (options.throwOnError === false) return { env: result, errors, details: errorDetails(errors) };
   if (errors.length) {
@@ -1713,11 +1726,12 @@ async function loadEnvAsync(schema, options = {}) {
 function* loadEnvSteps(schema, options) {
   if (schema === null || typeof schema !== 'object'
     || (Object.getPrototypeOf(schema) !== Object.prototype && Object.getPrototypeOf(schema) !== null)) {
-    throw new TypeError(
-      "loadEnv expects a schema object as the first argument — did you mean loadEnv(schema, { path: '.env' })?"
-    );
+    const message =
+      "loadEnv expects a schema object as the first argument — did you mean loadEnv(schema, { path: '.env' })?";
+    throw new EnvSaafError([message], message);
   }
   const { path: pathOpt, paths: pathsOpt, env = process.env, override = false, assign = false, ...rest } = options;
+  validateEnvObject(env);
   // Issue #250: reject a typo'd loadEnv option up front (e.g. `overide`),
   // before reading any file — the typo would otherwise flow through to
   // validateEnv as an unknown option, but the loadEnv names make the fix
