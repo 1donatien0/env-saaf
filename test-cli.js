@@ -99,38 +99,42 @@ try {
     const dir = mkProject({ 'src/app.js': 'console.log(process.env.PORT);\n', '.env.example': 'PORT=\n' });
     const parsed = JSON.parse(run(['check', dir, '--json'], dir).stdout);
     assert.deepStrictEqual(parsed, {
-      ok: true, missing: [], extra: [], unused: [], invalid: [], envExtra: [], envMissing: [],
+      ok: true, missing: [], extra: [], unused: [], invalid: [], secrets: [], envExtra: [], envMissing: [],
     });
     assert.strictEqual(typeof parsed.ok, 'boolean');
-    for (const field of ['missing', 'extra', 'unused', 'invalid', 'envExtra', 'envMissing']) {
+    for (const field of ['missing', 'extra', 'unused', 'invalid', 'secrets', 'envExtra', 'envMissing']) {
       assert.ok(Array.isArray(parsed[field]), `${field} must be an array`);
     }
   }
 
   {
     // One finding of each kind, so no field can be dropped or renamed unnoticed.
+    const syntheticExampleSecret = ['sk', 'proj', 'A1b2C3d4E5f6G7h8I9j0K1l2M3n4'].join('-');
     const dir = mkProject({
-      'src/app.js': 'console.log(process.env.PORT, process.env.DOCUMENTED_USED, process.env.UNDOCUMENTED);\n',
-      '.env.example': 'PORT=\nDOCUMENTED_USED=\nDOCUMENTED_UNUSED=\nMISSING_IN_ENV=\n',
-      '.env': 'DOCUMENTED_USED=1\nPORT=not-a-port\nEXTRA_IN_ENV=2\n',
+      'src/app.js': 'console.log(process.env.PORT, process.env.DOCUMENTED_USED, process.env.LEAKED_KEY, process.env.UNDOCUMENTED);\n',
+      '.env.example': `PORT=\nDOCUMENTED_USED=\nLEAKED_KEY=${syntheticExampleSecret}\nDOCUMENTED_UNUSED=\nMISSING_IN_ENV=\n`,
+      '.env': 'DOCUMENTED_USED=1\nLEAKED_KEY=1\nPORT=not-a-port\nEXTRA_IN_ENV=2\n',
       'env.schema.js': "module.exports = { PORT: { type: 'port' } };\n",
     });
-    const parsed = JSON.parse(run(['check', dir, '--schema', 'env.schema.js', '--json'], dir).stdout);
+    const out = run(['check', dir, '--schema', 'env.schema.js', '--json'], dir).stdout;
+    assert.ok(!out.includes(syntheticExampleSecret), 'example secret value must never appear in --json output');
+    const parsed = JSON.parse(out);
     assert.deepStrictEqual(Object.keys(parsed).sort(), [
       'documentedNotInSchema', 'envExtra', 'envMissing', 'extra', 'invalid', 'missing', 'ok',
-      'schemaNotDocumented', 'unused',
+      'schemaNotDocumented', 'secrets', 'unused',
     ]);
     assert.deepStrictEqual(parsed.schemaNotDocumented, []);
-    assert.deepStrictEqual(parsed.documentedNotInSchema, ['DOCUMENTED_USED', 'DOCUMENTED_UNUSED', 'MISSING_IN_ENV']);
+    assert.deepStrictEqual(parsed.documentedNotInSchema, ['DOCUMENTED_USED', 'LEAKED_KEY', 'DOCUMENTED_UNUSED', 'MISSING_IN_ENV']);
     assert.strictEqual(parsed.ok, false);
     assert.deepStrictEqual(parsed.missing, ['UNDOCUMENTED']);
     assert.deepStrictEqual(parsed.extra, ['DOCUMENTED_UNUSED', 'MISSING_IN_ENV']);
     assert.deepStrictEqual(parsed.unused, ['DOCUMENTED_UNUSED', 'MISSING_IN_ENV']);
+    assert.deepStrictEqual(parsed.secrets, ['LEAKED_KEY']);
     assert.deepStrictEqual(parsed.envExtra, ['EXTRA_IN_ENV']);
     assert.deepStrictEqual(parsed.envMissing, ['DOCUMENTED_UNUSED', 'MISSING_IN_ENV']);
     assert.strictEqual(parsed.invalid.length, 1);
     assert.match(parsed.invalid[0], /PORT/);
-    for (const field of ['missing', 'extra', 'unused', 'invalid', 'envExtra', 'envMissing']) {
+    for (const field of ['missing', 'extra', 'unused', 'invalid', 'secrets', 'envExtra', 'envMissing']) {
       for (const item of parsed[field]) assert.strictEqual(typeof item, 'string', `${field} holds strings`);
     }
   }
@@ -1333,7 +1337,7 @@ try {
     const fileCheckJson = run(['check', 'src/server.js', '--json'], dir);
     assert.strictEqual(fileCheckJson.status, 0);
     assert.deepStrictEqual(JSON.parse(fileCheckJson.stdout), {
-      ok: true, missing: [], extra: [], unused: [], invalid: [], envExtra: [], envMissing: [],
+      ok: true, missing: [], extra: [], unused: [], invalid: [], secrets: [], envExtra: [], envMissing: [],
     });
 
     // Undocumented key in the checked single file still fails check with exit 1.
@@ -2011,6 +2015,624 @@ try {
         }
       })());
     }
+  }
+
+  // --- issue #416: check flags secret-looking values in .env.example ----------
+  {
+    const { spawn } = require('node:child_process');
+    const { generateExample } = require('./index');
+
+    // Seeded generator builds synthetic credential strings dynamically at runtime.
+    const makeRng = (seed) => {
+      let s = seed >>> 0;
+      return () => {
+        s = (s + 0x6D2B79F5) >>> 0;
+        let t = Math.imul(s ^ (s >>> 15), s | 1);
+        t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+        return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+      };
+    };
+    const pickChars = (rand, alphabet, len) => {
+      let out = '';
+      for (let i = 0; i < len; i++) out += alphabet[Math.floor(rand() * alphabet.length)];
+      return out;
+    };
+    const rand = makeRng(416001);
+    const ALNUM = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+    const UPPER_ALNUM = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+    const HEX = '0123456789abcdef';
+    const B64 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+    const B64URL = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_';
+
+    const syntheticSecrets = {
+      OPENAI_KEY: ['sk', 'proj', pickChars(rand, ALNUM, 28)].join('-'),
+      ANTHROPIC_KEY: ['sk', 'ant', 'api03', pickChars(rand, ALNUM, 26)].join('-'),
+      STRIPE_KEY: ['sk', 'live', pickChars(rand, ALNUM, 24)].join('_'),
+      AWS_ACCESS_KEY_ID: 'AKIA' + pickChars(rand, UPPER_ALNUM, 16),
+      DATABASE_URL: ['postgres://user:', 'pass', '@localhost:5432/app'].join(''),
+      REDIS_URL: `redis://:${pickChars(rand, ALNUM, 14)}@cache.internal:6379/0`,
+      HEX_TOKEN_40: pickChars(rand, HEX, 40),
+      HEX_TOKEN_64: pickChars(rand, HEX, 64),
+      GITHUB_TOKEN: ['ghp', pickChars(rand, ALNUM, 36)].join('_'),
+      SLACK_TOKEN: ['xoxb', '1234567890', pickChars(rand, ALNUM, 24)].join('-'),
+      JWT_TOKEN: ['eyJhbGciOiJIUzI1NiJ9', 'eyJzdWIiOiJ1c2VyXzEyMyJ9', pickChars(rand, B64URL, 32)].join('.'),
+      PEM_KEY: ['-----BEGIN RSA', 'PRIVATE KEY-----\\n', pickChars(rand, B64, 48), '\\n-----END RSA', 'PRIVATE KEY-----'].join(' '),
+      HIGH_ENTROPY_B64: pickChars(rand, B64, 30) + '==',
+      HIGH_ENTROPY_MIXED: pickChars(rand, ALNUM, 32),
+      HIGH_ENTROPY_LOWER: Array.from({ length: 16 }, () => (
+        'abcdefghjkmnpqrstuvwxyz'[Math.floor(rand() * 23)] + '23456789'[Math.floor(rand() * 8)]
+      )).join(''),
+      JSON_SECRET: JSON.stringify({ nested: { token: ['sk', pickChars(rand, ALNUM, 22)].join('-') } }),
+      LIST_SECRET: ['placeholder', ['sk', pickChars(rand, ALNUM, 22)].join('-')].join(','),
+      BEARER_SECRET: 'Bearer ' + ['sk', pickChars(rand, ALNUM, 22)].join('-'),
+      URL_QUERY_SECRET: 'https://api.example.com/v1?api_key=' + ['sk', pickChars(rand, ALNUM, 22)].join('-'),
+      URL_PATH_SECRET: 'https://hooks.example.com/services/' + pickChars(rand, ALNUM, 28),
+    };
+
+    const assertNoLeak = (output, map, label) => {
+      for (const [k, raw] of Object.entries(map)) {
+        assert.ok(!output.includes(raw), `${label}: leaked secret value for ${k}`);
+        if (raw.length >= 20 && !raw.includes('://') && !raw.startsWith('{') && !raw.includes(',') && !raw.includes('PRIVATE KEY')) {
+          assert.ok(!output.includes(raw.slice(-8)), `${label}: leaked secret tail for ${k}`);
+        }
+      }
+    };
+
+    // 1. Secret shapes in .env.example fail check (exit 1), name keys, mask values, and surface `secrets` in --json.
+    const secretKeys = Object.keys(syntheticSecrets);
+    const secretCode = secretKeys.map(k => `void process.env.${k};`).join('\n') + '\n';
+    const secretExample = secretKeys.map(k => `${k}=${JSON.stringify(syntheticSecrets[k])}`).join('\n') + '\n';
+    const badDir = mkProject({ 'src/app.js': secretCode, '.env.example': secretExample });
+
+    const textCheck = run(['check', badDir], badDir);
+    assert.strictEqual(textCheck.status, 1, `${textCheck.stdout}${textCheck.stderr}`);
+    assert.strictEqual(textCheck.stderr, '');
+    assertNoLeak(textCheck.stdout + textCheck.stderr, syntheticSecrets, 'text check');
+    for (const k of secretKeys) {
+      assert.match(
+        textCheck.stdout,
+        new RegExp(`^SECRET in \\.env\\.example: ${k} \\(value \\[REDACTED\\] looks like a real secret; use an empty value or placeholder\\)$`, 'm'),
+        `expected SECRET line for ${k}`,
+      );
+    }
+
+    const jsonCheck = run(['check', badDir, '--json'], badDir);
+    assert.strictEqual(jsonCheck.status, 1);
+    assert.strictEqual(jsonCheck.stderr, '');
+    assertNoLeak(jsonCheck.stdout, syntheticSecrets, 'json check');
+    const jsonParsed = JSON.parse(jsonCheck.stdout);
+    assert.strictEqual(jsonParsed.ok, false);
+    assert.deepStrictEqual(jsonParsed.secrets, secretKeys);
+
+    // Intra-file ${VAR} expansion inside .env.example also flags derived keys without leaking values.
+    const interpSecret = ['sk', 'live', pickChars(rand, ALNUM, 24)].join('_');
+    const interpDir = mkProject({
+      'src/app.js': 'void (process.env.RAW_PART && process.env.DERIVED_KEY);\n',
+      '.env.example': `RAW_PART=${interpSecret}\nDERIVED_KEY=\${RAW_PART}\n`,
+    });
+    const interpRes = run(['check', interpDir, '--json'], interpDir);
+    assert.strictEqual(interpRes.status, 1);
+    assertNoLeak(interpRes.stdout + interpRes.stderr, { RAW_PART: interpSecret }, 'intra-file interpolation');
+    assert.deepStrictEqual(JSON.parse(interpRes.stdout).secrets, ['RAW_PART', 'DERIVED_KEY']);
+
+    // 2. Empty values, common placeholders, non-secret formats, ambient process.env, real .env secrets, and generateExample pass.
+    const placeholderEntries = [
+      ['EMPTY_KEY', ''],
+      ['WHITESPACE_KEY', '"   "'],
+      ['YOUR_KEY_HERE', 'your-key-here'],
+      ['YOUR_VALUE_HERE', 'your_value_here'],
+      ['YOUR_UPPER_HERE', 'YOUR_API_KEY_HERE'],
+      ['ANGLE_REDACTED', '<redacted>'],
+      ['BRACKET_REDACTED', '[REDACTED]'],
+      ['XXX_SHORT', 'xxx'],
+      ['XXX_LONG', 'xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx'],
+      ['CHANGEME', 'changeme'],
+      ['PROSE_PLACEHOLDER', 'replace-with-a-secret-at-least-32-characters-long'],
+      ['GENERIC_TOKEN_NAME', 'secret_token'],
+      ['PREFIXED_PLACEHOLDER', 'sk-your-key-here'],
+      ['PREFIXED_UPPER_PLACEHOLDER', 'sk-YOUR_KEY_HERE'],
+      ['PREFIXED_SUFFIX_HERE', 'sk-api-token-here'],
+      ['PREFIXED_PAIR_REPEAT', 'sk-abababababababab'],
+      ['PREFIXED_XXX', 'sk-xxxxxxxxxxxxxxxxxxxx'],
+      ['DB_LOCAL', 'postgres://localhost:5432/app'],
+      ['DB_USER_NO_PASS', 'postgres://user@localhost:5432/app'],
+      ['DB_EMPTY_PASS', 'postgres://user:@localhost:5432/app'],
+      ['DB_REDACTED_PASS', 'postgres://user:<redacted>@localhost:5432/app'],
+      ['DB_CHANGEME_PASS', 'postgres://user:changeme@localhost:5432/app'],
+      ['DB_PLACEHOLDER_PASS', 'postgres://user:your-password-here@localhost:5432/app'],
+      ['DB_XXX_PASS', 'postgres://user:xxx@localhost:5432/app'],
+      ['HTTPS_API_URL', 'https://api.staging.example.com/v1/webhooks/callback'],
+      ['DURATION_MS', '500ms'],
+      ['DURATION_COMPOUND', '1h30m'],
+      ['DATE_ISO', '2026-01-31T12:30:00Z'],
+      ['SEMVER_PRERELEASE', '1.2.3-beta.1'],
+      ['IPV4_ADDR', '192.168.10.25'],
+      ['IPV6_SCOPED', 'fe80::1%eth0'],
+      ['EMAIL_ADDR', 'support@notifications.example.com'],
+      ['HOST_NAME', 'primary-db-01.internal.example.com'],
+      ['REL_FILE_PATH', './config/production.json'],
+      ['ABS_FILE_PATH', '/etc/ssl/certs/ca-bundle.crt'],
+      ['UUID_SAMPLE', '550e8400-e29b-41d4-a716-446655440000'],
+      ['SHORT_HEX', 'deadbeefcafebabe'],
+      ['ZEROS_HEX_40', '0000000000000000000000000000000000000000'],
+      ['GEN_HEX_40', 'deadbeef00000000000000000000000000000000'],
+      ['SEQ_HEX_40', '0123456789abcdef0123456789abcdef01234567'],
+      ['LOW_DIV_HEX_40', '0123012301230123012301230123012301230123'],
+      ['ALPHABET_SEQ', 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789'],
+      ['BEARER_PLACEHOLDER', '"Bearer your-key-here"'],
+      ['B64_SAMPLE', 'aGVsbG8='],
+      ['B64_PADDING', 'A'.repeat(44)],
+      ['SAFE_JSON', '\'{"featureFlags":{"beta":true,"maxRetries":3}}\''],
+      ['SAFE_URL_LIST', 'https://a.example,https://b.example,https://c.example'],
+      ['AMBIENT_REF', '${AMBIENT_ONLY_SECRET}'],
+    ];
+    const cleanCode = placeholderEntries.map(([k]) => `void process.env.${k};`).join('\n') + '\n';
+    const cleanExample = placeholderEntries.map(([k, v]) => `${k}=${v}`).join('\n') + '\n';
+    const localRealEnv = placeholderEntries.map(([k]) => `${k}=${syntheticSecrets.OPENAI_KEY}`).join('\n') + '\n';
+    const cleanDir = mkProject({
+      'src/app.js': cleanCode,
+      '.env.example': cleanExample,
+      '.env': localRealEnv,
+    });
+
+    const cleanSpawn = spawnSync(process.execPath, [CLI, 'check', cleanDir], {
+      cwd: cleanDir,
+      encoding: 'utf8',
+      env: { ...cleanEnv(), AMBIENT_ONLY_SECRET: syntheticSecrets.AWS_ACCESS_KEY_ID },
+    });
+    assert.ifError(cleanSpawn.error);
+    assert.strictEqual(cleanSpawn.status, 0, `${cleanSpawn.stdout}${cleanSpawn.stderr}`);
+    assert.match(cleanSpawn.stdout, /all clean/);
+    assertNoLeak(cleanSpawn.stdout + cleanSpawn.stderr, syntheticSecrets, 'clean check with ambient & .env');
+
+    const cleanJsonSpawn = spawnSync(process.execPath, [CLI, 'check', cleanDir, '--json'], {
+      cwd: cleanDir,
+      encoding: 'utf8',
+      env: { ...cleanEnv(), AMBIENT_ONLY_SECRET: syntheticSecrets.AWS_ACCESS_KEY_ID },
+    });
+    assert.strictEqual(cleanJsonSpawn.status, 0);
+    assert.deepStrictEqual(JSON.parse(cleanJsonSpawn.stdout).secrets, []);
+
+    // All built-in generateExample outputs (including bounded 40-char hex, 44-char base64, and uuid/base64 arrays) pass.
+    const genSchema = {
+      STR: { type: 'string' },
+      STR_BOUNDED: { type: 'string', minLength: 48, maxLength: 64 },
+      PORT: { type: 'port' },
+      URL_PLAIN: { type: 'url' },
+      URL_BOUNDED: { type: 'url', minLength: 48, maxLength: 64 },
+      EMAIL_BOUNDED: { type: 'email', minLength: 32, maxLength: 48 },
+      HOST_BOUNDED: { type: 'host', minLength: 40, maxLength: 56 },
+      SEMVER_BOUNDED: { type: 'semver', minLength: 24, maxLength: 32 },
+      DURATION_DEFAULT: { type: 'duration' },
+      DURATION_SUBSECOND: { type: 'duration', max: '500ms' },
+      DURATION_COMPOUND: { type: 'duration', min: '1h30m', max: '2h' },
+      DURATION_ARR: { type: 'array', of: 'duration' },
+      UUID_ONE: { type: 'uuid' },
+      UUID_ARR: { type: 'array', of: 'uuid', minItems: 4 },
+      HEX_PLAIN: { type: 'hex' },
+      HEX_40: { type: 'hex', length: 40, minLength: 40, maxLength: 40 },
+      B64_PLAIN: { type: 'base64' },
+      B64_44: { type: 'base64', minLength: 44, maxLength: 44 },
+      B64_ARR: { type: 'array', of: 'base64', minItems: 5 },
+      IPV6_ARR: { type: 'array', of: 'ipv6' },
+      JSON_ARR: { type: 'array', of: 'json' },
+      API_KEY: { type: 'string', required: true },
+      SESSION_SECRET: { type: 'string', sensitive: true },
+    };
+    const generatedText = generateExample(genSchema);
+    const genDir = mkProject({
+      'src/app.js': Object.keys(genSchema).map(k => `void process.env.${k};`).join('\n') + '\n',
+      '.env.example': generatedText,
+    });
+    const genRes = run(['check', genDir, '--json'], genDir);
+    assert.strictEqual(genRes.status, 0, `${genRes.stdout}${genRes.stderr}`);
+    assert.deepStrictEqual(JSON.parse(genRes.stdout).secrets, []);
+
+    // 3. Scaffold-ahead exception (no code usage yet), --file / package.json file, single-file check, and --file + --schema redaction.
+    const scaffoldSecretDir = mkProject({
+      'README.md': '# new project\n',
+      '.env.example': `PORT=3000\nSTRIPE_SECRET=${syntheticSecrets.STRIPE_KEY}\n`,
+    });
+    const scaffoldText = run(['check', scaffoldSecretDir], scaffoldSecretDir);
+    assert.strictEqual(scaffoldText.status, 1);
+    assert.match(scaffoldText.stdout, /SECRET in \.env\.example: STRIPE_SECRET/);
+    assert.doesNotMatch(scaffoldText.stdout, /no process\.env usage found/);
+    assertNoLeak(scaffoldText.stdout + scaffoldText.stderr, syntheticSecrets, 'scaffold secret text');
+    const scaffoldJson = JSON.parse(run(['check', scaffoldSecretDir, '--json'], scaffoldSecretDir).stdout);
+    assert.strictEqual(scaffoldJson.ok, false);
+    assert.deepStrictEqual(scaffoldJson.secrets, ['STRIPE_SECRET']);
+    assert.strictEqual(scaffoldJson.note, undefined);
+
+    const sampleDir = mkProject({
+      'package.json': '{"name":"sample-cfg","env-saaf":{"file":".env.sample"}}\n',
+      'src/app.js': 'void (process.env.WEBHOOK_ENDPOINT && process.env.ENDPOINTS && process.env.JSON_CFG && process.env.DB_CONN && process.env.SVC_URL && process.env.LEGACY_SVC_URL && process.env.PORT);\n',
+      '.env.sample': [
+        `WEBHOOK_ENDPOINT=${syntheticSecrets.OPENAI_KEY}`,
+        `ENDPOINTS=https://example.com,${syntheticSecrets.ANTHROPIC_KEY}`,
+        `JSON_CFG=${JSON.stringify(JSON.stringify({ nested: { secret: syntheticSecrets.STRIPE_KEY } }))}`,
+        `DB_CONN=${syntheticSecrets.REDIS_URL}`,
+        'SVC_URL=',
+        `LEGACY_SVC_URL=${syntheticSecrets.GITHUB_TOKEN}`,
+        'PORT=not-a-port',
+        '',
+      ].join('\n'),
+      'env.schema.js': [
+        'module.exports = {',
+        "  WEBHOOK_ENDPOINT: { type: 'url', required: true },",
+        "  ENDPOINTS: { type: 'array', of: 'url', required: true },",
+        "  JSON_CFG: { type: 'json', required: true, validate: (v) => 'bad leaf ' + v.nested.secret },",
+        "  DB_CONN: { type: 'url', required: true, validate: (v) => 'bad pw ' + new URL(v).password },",
+        "  SVC: { prefix: 'SVC_', schema: { URL: { type: 'url', required: true, aliases: ['LEGACY_SVC_URL'] } } },",
+        "  PORT: { type: 'port', required: true, validate: (v, env) => env.ENDPOINTS ? 'saw ' + env.ENDPOINTS : true },",
+        '};',
+        '',
+      ].join('\n'),
+    });
+    const sampleText = run(['check', 'src/app.js', '--schema', 'env.schema.js'], sampleDir);
+    assert.strictEqual(sampleText.status, 1);
+    assert.match(sampleText.stdout, /SECRET in \.env\.sample: WEBHOOK_ENDPOINT/);
+    assert.match(sampleText.stdout, /SECRET in \.env\.sample: ENDPOINTS/);
+    assert.match(sampleText.stdout, /SECRET in \.env\.sample: JSON_CFG/);
+    assert.match(sampleText.stdout, /SECRET in \.env\.sample: DB_CONN/);
+    assert.match(sampleText.stdout, /SECRET in \.env\.sample: LEGACY_SVC_URL/);
+    assert.match(sampleText.stdout, /^INVALID: PORT: expected a port/m);
+    assert.doesNotMatch(sampleText.stdout, /^INVALID: (?:WEBHOOK_ENDPOINT|ENDPOINTS|JSON_CFG|DB_CONN|SVC_URL|LEGACY_SVC_URL)/m);
+    assertNoLeak(sampleText.stdout + sampleText.stderr, syntheticSecrets, 'custom --file + --schema text');
+
+    const sampleJsonOut = run(['check', 'src/app.js', '--schema', 'env.schema.js', '--json'], sampleDir).stdout;
+    assertNoLeak(sampleJsonOut, syntheticSecrets, 'custom --file + --schema json');
+    const sampleJsonParsed = JSON.parse(sampleJsonOut);
+    assert.deepStrictEqual(sampleJsonParsed.secrets, [
+      'WEBHOOK_ENDPOINT', 'ENDPOINTS', 'JSON_CFG', 'DB_CONN', 'LEGACY_SVC_URL',
+    ]);
+    assert.strictEqual(sampleJsonParsed.invalid.length, 1);
+    assert.match(sampleJsonParsed.invalid[0], /^PORT: expected a port/);
+
+    // Explicit --values pointing at the template also applies the reporting boundary.
+    const valuesAliasOut = run(['check', 'src/app.js', '--schema', 'env.schema.js', '--values', './.env.sample', '--json'], sampleDir).stdout;
+    assertNoLeak(valuesAliasOut, syntheticSecrets, '--values template alias json');
+    assert.strictEqual(JSON.parse(valuesAliasOut).invalid.length, 1);
+
+    // Ambient-only `${VAR:?msg}` / `${VAR?msg}` placeholders never fall back to ambient secrets
+    // and never skip literal or default-branch secrets elsewhere in .env.example.
+    const reqPlaceholderClean = mkProject({
+      'src/app.js': 'void (process.env.ENDPOINT && process.env.OPT_ENDPOINT && process.env.API_KEY);\n',
+      '.env.example': [
+        'ENDPOINT=https://${AMBIENT_REQ_HOST:?host required}/v1',
+        'OPT_ENDPOINT=https://${AMBIENT_REQ_PLAIN?plain required}/v2',
+        'API_KEY=${AMBIENT_ONLY_SECRET}',
+        '',
+      ].join('\n'),
+    });
+    const reqCleanRun = spawnSync(process.execPath, [CLI, 'check', reqPlaceholderClean, '--json'], {
+      cwd: reqPlaceholderClean,
+      encoding: 'utf8',
+      env: {
+        ...cleanEnv(),
+        AMBIENT_REQ_HOST: 'api.example.com',
+        AMBIENT_REQ_PLAIN: 'api2.example.com',
+        AMBIENT_ONLY_SECRET: syntheticSecrets.AWS_ACCESS_KEY_ID,
+      },
+    });
+    assert.strictEqual(reqCleanRun.status, 0, `${reqCleanRun.stdout}${reqCleanRun.stderr}`);
+    assert.deepStrictEqual(JSON.parse(reqCleanRun.stdout).secrets, []);
+
+    const reqPlaceholderMixed = mkProject({
+      'src/app.js': 'void (process.env.ENDPOINT && process.env.API_KEY && process.env.LITERAL_HEX && process.env.FALLBACK_SK && process.env.SAME_LINE_DB);\n',
+      '.env.example': [
+        'ENDPOINT=https://${AMBIENT_REQ_HOST:?host required}/v1',
+        'API_KEY=${AMBIENT_ONLY_SECRET}',
+        `LITERAL_HEX=${syntheticSecrets.HEX_TOKEN_40}`,
+        `FALLBACK_SK=\${UNSET_TEMPLATE_VAR:-${syntheticSecrets.OPENAI_KEY}}`,
+        'SAME_LINE_DB=postgres://user:pass@${AMBIENT_REQ_HOST:?host required}:5432/app',
+        '',
+      ].join('\n'),
+    });
+    const reqMixedRun = spawnSync(process.execPath, [CLI, 'check', reqPlaceholderMixed, '--json'], {
+      cwd: reqPlaceholderMixed,
+      encoding: 'utf8',
+      env: {
+        ...cleanEnv(),
+        AMBIENT_REQ_HOST: 'db.example.com',
+        AMBIENT_ONLY_SECRET: syntheticSecrets.AWS_ACCESS_KEY_ID,
+      },
+    });
+    assert.strictEqual(reqMixedRun.status, 1);
+    assertNoLeak(reqMixedRun.stdout + reqMixedRun.stderr, syntheticSecrets, 'required placeholder mixed check');
+    assert.deepStrictEqual(JSON.parse(reqMixedRun.stdout).secrets, [
+      'LITERAL_HEX', 'FALLBACK_SK', 'SAME_LINE_DB',
+    ]);
+
+    // Missing `${VAR:?msg}` in both file and ambient env keeps existing exit-2 error semantics.
+    const reqMissingBoth = run(['check', reqPlaceholderClean, '--json'], reqPlaceholderClean);
+    assert.strictEqual(reqMissingBoth.status, 2);
+    assert.match(JSON.parse(reqMissingBoth.stdout).error, /AMBIENT_REQ_HOST: host required/);
+
+    // Schema warnings print once per check run, not once per validation pass.
+    const warnOnceDir = mkProject({
+      'src/app.js': 'void process.env.A;\n',
+      '.env.example': 'A=1\n',
+      '.env': 'A=1\n',
+      'env.schema.js': "module.exports = { A: { type: 'string', requiredIf: { key: 'NOPE_FLAG', equals: 'x' } } };\n",
+    });
+    const warnOnceRun = run(['check', 'src/app.js', '--schema', 'env.schema.js'], warnOnceDir);
+    assert.strictEqual(warnOnceRun.status, 0, `${warnOnceRun.stdout}${warnOnceRun.stderr}`);
+    assert.strictEqual(warnOnceRun.stderr.split('undeclared key "NOPE_FLAG"').length - 1, 1);
+
+    // Protection follows the example findings, not filename equality: a separate values file
+    // (default .env, --values, or an alias) holding the flagged value never echoes it through schema errors.
+    const SECRET_BLOCK_EXAMPLE = [
+      `WEBHOOK_ENDPOINT=${syntheticSecrets.OPENAI_KEY}`,
+      `ENDPOINTS=https://example.com,${syntheticSecrets.ANTHROPIC_KEY}`,
+      `DB_CONN=${syntheticSecrets.REDIS_URL}`,
+      `API_URL=${syntheticSecrets.GITHUB_TOKEN}`,
+      `LEGACY_SVC_URL=${syntheticSecrets.SLACK_TOKEN}`,
+      'COPY_URL=',
+      'PORT=3000',
+      '',
+    ].join('\n');
+    const SECRET_BLOCK_VALUES = [
+      `WEBHOOK_ENDPOINT=${syntheticSecrets.OPENAI_KEY}`,
+      `ENDPOINTS=https://example.com,${syntheticSecrets.ANTHROPIC_KEY}`,
+      `DB_CONN=${syntheticSecrets.REDIS_URL}`,
+      `OLD_API_URL=${syntheticSecrets.GITHUB_TOKEN}`,
+      `LEGACY_SVC_URL=${syntheticSecrets.SLACK_TOKEN}`,
+      `COPY_URL=${syntheticSecrets.OPENAI_KEY}`,
+      'PORT=not-a-port',
+      '',
+    ].join('\n');
+    const secretBlockDir = mkProject({
+      'src/app.js': 'void (process.env.WEBHOOK_ENDPOINT && process.env.ENDPOINTS && process.env.DB_CONN && process.env.API_URL && process.env.LEGACY_SVC_URL && process.env.COPY_URL && process.env.PORT);\n',
+      '.env.example': SECRET_BLOCK_EXAMPLE,
+      '.env': SECRET_BLOCK_VALUES,
+      '.env.production': SECRET_BLOCK_VALUES,
+      'env.schema.js': [
+        'module.exports = {',
+        "  WEBHOOK_ENDPOINT: { type: 'url', required: true },",
+        "  ENDPOINTS: { type: 'array', of: 'url', required: true },",
+        "  DB_CONN: { type: 'url', required: true, validate: (v) => 'bad pw ' + new URL(v).password },",
+        "  API_URL: { type: 'url', required: true, aliases: ['OLD_API_URL'] },",
+        "  SVC: { prefix: 'SVC_', schema: { URL: { type: 'url', required: true, aliases: ['LEGACY_SVC_URL'] } } },",
+        "  COPY_URL: { type: 'url', required: true },",
+        "  PORT: { type: 'port', required: true },",
+        '};',
+        '',
+      ].join('\n'),
+    });
+    const secretBlockKeys = ['WEBHOOK_ENDPOINT', 'ENDPOINTS', 'DB_CONN', 'API_URL', 'LEGACY_SVC_URL'];
+    for (const extraArgs of [[], ['--values', '.env.production']]) {
+      const label = extraArgs.length ? '--values separate file' : 'default .env';
+      const textRun = run(['check', 'src/app.js', '--schema', 'env.schema.js', ...extraArgs], secretBlockDir);
+      assert.strictEqual(textRun.status, 1, label);
+      assertNoLeak(textRun.stdout + textRun.stderr, syntheticSecrets, `${label} text`);
+      for (const k of secretBlockKeys) assert.match(textRun.stdout, new RegExp(`SECRET in \\.env\\.example: ${k}\\b`), `${label} ${k}`);
+      assert.match(textRun.stdout, /^INVALID(?: in \.env\.production)?: PORT: expected a port \(0-65535, e\.g\. 3000\), got "not-a-port"$/m, `${label} keeps safe diagnostics`);
+      assert.match(textRun.stdout, /^INVALID(?: in \.env\.production)?: COPY_URL: .*withheld/m, `${label} generic diagnostic`);
+      assert.doesNotMatch(textRun.stdout, /^INVALID(?: in \.env\.production)?: (?:WEBHOOK_ENDPOINT|ENDPOINTS|DB_CONN|API_URL|SVC_URL|LEGACY_SVC_URL)\b/m, label);
+
+      const jsonRun = run(['check', 'src/app.js', '--schema', 'env.schema.js', '--json', ...extraArgs], secretBlockDir);
+      assert.strictEqual(jsonRun.status, 1, label);
+      assertNoLeak(jsonRun.stdout + jsonRun.stderr, syntheticSecrets, `${label} json`);
+      const jsonBlock = JSON.parse(jsonRun.stdout);
+      assert.deepStrictEqual(jsonBlock.secrets, secretBlockKeys);
+      assert.strictEqual(jsonBlock.invalid.length, 2, `${label} ${JSON.stringify(jsonBlock.invalid)}`);
+      assert.ok(jsonBlock.invalid.some(m => /^PORT: expected a port/.test(m)));
+      assert.ok(jsonBlock.invalid.some(m => /^COPY_URL: .*withheld/.test(m)));
+    }
+
+    // A schema message may quote only a slice of a flagged example value (list element, JSON leaf, URL password,
+    // query value, path segment, bearer token, short password) arriving under an unflagged key: it is withheld,
+    // while a message quoting an unrelated value keeps its useful text.
+    const sliceMap = {
+      ECHO_PW: syntheticSecrets.REDIS_URL.split(':')[2].split('@')[0],
+      ECHO_LEAF: JSON.parse(syntheticSecrets.JSON_SECRET).nested.token,
+      ECHO_ELEM: syntheticSecrets.LIST_SECRET.split(',')[1],
+      ECHO_BEARER: syntheticSecrets.BEARER_SECRET.split(' ')[1],
+      ECHO_QUERY: new URL(syntheticSecrets.URL_QUERY_SECRET).searchParams.get('api_key'),
+      ECHO_SEG: syntheticSecrets.URL_PATH_SECRET.split('/').pop(),
+      ECHO_SHORT: 'pass',
+    };
+    const sliceFlagged = {
+      FLAG_REDIS: syntheticSecrets.REDIS_URL,
+      FLAG_JSON: syntheticSecrets.JSON_SECRET,
+      FLAG_LIST: syntheticSecrets.LIST_SECRET,
+      FLAG_BEARER: syntheticSecrets.BEARER_SECRET,
+      FLAG_QUERY: syntheticSecrets.URL_QUERY_SECRET,
+      FLAG_PATH: syntheticSecrets.URL_PATH_SECRET,
+      FLAG_DB: syntheticSecrets.DATABASE_URL,
+    };
+    const sliceKeys = [...Object.keys(sliceFlagged), ...Object.keys(sliceMap), 'ECHO_SAFE'];
+    const sliceDir = mkProject({
+      'src/app.js': `void (${sliceKeys.map(k => `process.env.${k}`).join(' && ')});\n`,
+      '.env.example': [
+        ...Object.entries(sliceFlagged).map(([k, v]) => `${k}=${JSON.stringify(v)}`),
+        ...Object.keys(sliceMap).map(k => `${k}=`),
+        'ECHO_SAFE=',
+        '',
+      ].join('\n'),
+      '.env': [...Object.entries(sliceMap).map(([k, v]) => `${k}=${v}`), 'ECHO_SAFE=plain-safe-123', ''].join('\n'),
+      'env.schema.js': `module.exports = {\n${[...Object.keys(sliceMap), 'ECHO_SAFE'].map(k => `  ${k}: { type: 'string', validate: (v) => 'bad ' + v },`).join('\n')}\n};\n`,
+    });
+    const sliceText = run(['check', 'src/app.js', '--schema', 'env.schema.js'], sliceDir);
+    assert.strictEqual(sliceText.status, 1);
+    assertNoLeak(sliceText.stdout + sliceText.stderr, { ...syntheticSecrets, ...sliceMap }, 'slice echo text');
+    for (const k of Object.keys(sliceMap)) {
+      assert.match(sliceText.stdout, new RegExp(`^INVALID: ${k}: value rejected by schema \\(details withheld`, 'm'), k);
+    }
+    assert.match(sliceText.stdout, /^INVALID: ECHO_SAFE: bad plain-safe-123$/m);
+    const sliceJson = JSON.parse(run(['check', 'src/app.js', '--schema', 'env.schema.js', '--json'], sliceDir).stdout);
+    assert.deepStrictEqual(sliceJson.secrets, Object.keys(sliceFlagged));
+    assert.strictEqual(sliceJson.invalid.length, Object.keys(sliceMap).length + 1);
+    assertNoLeak(JSON.stringify(sliceJson), { ...syntheticSecrets, ...sliceMap }, 'slice echo json');
+
+    // A flagged URL whose password is only one to three characters (raw or percent-encoded) is still withheld when that
+    // password is copied under another key with a URL schema, while a message quoting a longer lookalike keeps its text.
+    const shortPwDir = mkProject({
+      'src/app.js': 'void (process.env.FLAG_SHORT && process.env.FLAG_ENCODED && process.env.FLAG_LIST && process.env.FLAG_NULLJSON && process.env.ECHO_XYZ && process.env.ECHO_DECODED && process.env.ECHO_ENC && process.env.ECHO_MID && process.env.ECHO_LONGER);\n',
+      '.env.example': [
+        'FLAG_SHORT=postgres://user:xyz@db.example.com:5432/app',
+        'FLAG_ENCODED=postgres://user:a%2Fb@db.example.com:5432/app',
+        `FLAG_LIST=https://example.com,${syntheticSecrets.OPENAI_KEY}`,
+        `FLAG_NULLJSON=${JSON.stringify(JSON.stringify({ a: null, n: 1, t: syntheticSecrets.STRIPE_KEY }))}`,
+        'ECHO_XYZ=',
+        'ECHO_DECODED=',
+        'ECHO_ENC=',
+        'ECHO_MID=',
+        'ECHO_LONGER=',
+        '',
+      ].join('\n'),
+      '.env': 'ECHO_XYZ=xyz\nECHO_DECODED=a/b\nECHO_ENC=a%2Fb\nECHO_MID=xyz\nECHO_LONGER=xyzzy\n',
+      'env.schema.js': "module.exports = { ECHO_XYZ: { type: 'url' }, ECHO_DECODED: { type: 'url' }, ECHO_ENC: { type: 'url' }, ECHO_MID: { type: 'string', validate: (v) => 'bad ' + v + ' for endpoint' }, ECHO_LONGER: { type: 'url' } };\n",
+    });
+    const shortPwText = run(['check', 'src/app.js', '--schema', 'env.schema.js'], shortPwDir);
+    assert.strictEqual(shortPwText.status, 1);
+    assertNoLeak(shortPwText.stdout + shortPwText.stderr, syntheticSecrets, 'short password text');
+    assert.doesNotMatch(shortPwText.stdout + shortPwText.stderr, /"xyz"|"a\/b"|a%2Fb"/);
+    assert.match(shortPwText.stdout, /^INVALID: ECHO_ENC: value rejected by schema \(details withheld/m);
+    assert.match(shortPwText.stdout, /^INVALID: ECHO_MID: value rejected by schema \(details withheld/m);
+    assert.doesNotMatch(shortPwText.stdout, /bad xyz for endpoint/);
+    assert.match(shortPwText.stdout, /^INVALID: ECHO_XYZ: value rejected by schema \(details withheld/m);
+    assert.match(shortPwText.stdout, /^INVALID: ECHO_DECODED: value rejected by schema \(details withheld/m);
+    assert.match(shortPwText.stdout, /^INVALID: ECHO_LONGER: expected a valid URL \(e\.g\. https:\/\/example\.com\), got "xyzzy"$/m);
+    const shortPwJson = JSON.parse(run(['check', 'src/app.js', '--schema', 'env.schema.js', '--json'], shortPwDir).stdout);
+    assert.deepStrictEqual(shortPwJson.secrets, ['FLAG_SHORT', 'FLAG_ENCODED', 'FLAG_LIST', 'FLAG_NULLJSON']);
+    assert.strictEqual(shortPwJson.invalid.length, 5);
+    assert.ok(shortPwJson.invalid.every(m => !m.includes('"xyz"') && !m.includes('a/b')), JSON.stringify(shortPwJson.invalid));
+
+    // A prefixed group key flagged by its full name protects its aliases and drops its own schema error.
+    const nestedFlagDir = mkProject({
+      'src/app.js': 'void (process.env.DBG_PASS && process.env.PORT);\n',
+      '.env.example': `DBG_PASS=${syntheticSecrets.GITHUB_TOKEN}\nPORT=3000\n`,
+      '.env': `OLD_DBG_PASS=${syntheticSecrets.GITHUB_TOKEN}\nPORT=not-a-port\n`,
+      'env.schema.js': "module.exports = { DBG: { prefix: 'DBG_', schema: { PASS: { type: 'port', required: true, aliases: ['OLD_DBG_PASS'] } } }, PORT: { type: 'port', required: true } };\n",
+    });
+    const nestedFlagText = run(['check', 'src/app.js', '--schema', 'env.schema.js'], nestedFlagDir);
+    assert.strictEqual(nestedFlagText.status, 1);
+    assertNoLeak(nestedFlagText.stdout + nestedFlagText.stderr, syntheticSecrets, 'nested flagged key text');
+    assert.match(nestedFlagText.stdout, /SECRET in \.env\.example: DBG_PASS/);
+    assert.match(nestedFlagText.stdout, /^INVALID: PORT: expected a port/m);
+    assert.doesNotMatch(nestedFlagText.stdout, /^INVALID: DBG_PASS/m);
+
+    // Ordinary output is unchanged when the example has no findings: the values file error still echoes its value.
+    const noFindingDir = mkProject({
+      'src/app.js': 'void (process.env.HOME_URL && process.env.PORT);\n',
+      '.env.example': 'HOME_URL=\nPORT=3000\n',
+      '.env': 'HOME_URL=not a url\nPORT=not-a-port\n',
+      'env.schema.js': "module.exports = { HOME_URL: { type: 'url', required: true }, PORT: { type: 'port', required: true } };\n",
+    });
+    const noFindingRun = run(['check', 'src/app.js', '--schema', 'env.schema.js'], noFindingDir);
+    assert.strictEqual(noFindingRun.status, 1);
+    assert.match(noFindingRun.stdout, /^INVALID: HOME_URL: expected a valid URL \(e\.g\. https:\/\/example\.com\), got "not a url"$/m);
+    assert.match(noFindingRun.stdout, /^INVALID: PORT: expected a port \(0-65535, e\.g\. 3000\), got "not-a-port"$/m);
+    assert.doesNotMatch(noFindingRun.stdout, /withheld/);
+
+    // 4. Watch mode (text and --json): detects a secret added to .env.example and recovers when replaced with a placeholder.
+    const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+    const stopChild = (child) => new Promise((resolve, reject) => {
+      child.once('exit', (code, signal) => {
+        try {
+          if (process.platform === 'win32') assert.strictEqual(signal, 'SIGINT');
+          else assert.strictEqual(code, 0);
+          resolve();
+        } catch (e) {
+          reject(e);
+        }
+      });
+      child.kill('SIGINT');
+    });
+
+    // Run these four watch scenarios one after another so they never add to the many concurrent watcher
+    // processes already started above (the existing 8s waits are sensitive to load).
+    let watchChain = Promise.resolve();
+    for (const [useJson, separateValues] of [[false, false], [true, false], [false, true], [true, true]]) {
+      watchChain = watchChain.then(async () => {
+        const wDir = mkProject({
+          'src/app.js': 'void (process.env.API_KEY && process.env.ENDPOINTS && process.env.PORT);\n',
+          '.env.example': 'API_KEY=\nENDPOINTS=https://example.com\nPORT=3000\n',
+          'env.schema.js': "module.exports = { API_KEY: { type: 'string' }, ENDPOINTS: { type: 'array', of: 'url', required: true }, PORT: { type: 'port', required: true } };\n",
+        });
+        // separateValues: default check validates .env (not the template), so the flagged value arrives from another file.
+        const baseArgs = separateValues
+          ? ['check', wDir, '--schema', 'env.schema.js', '--watch']
+          : ['check', wDir, '--file', '.env.example', '--schema', 'env.schema.js', '--watch'];
+        if (separateValues) fs.writeFileSync(path.join(wDir, '.env'), 'API_KEY=\nENDPOINTS=https://example.com\nPORT=3000\n');
+        const args = useJson ? [CLI, ...baseArgs, '--json'] : [CLI, ...baseArgs];
+        const child = spawn(process.execPath, args, {
+          cwd: wDir,
+          env: cleanEnv(),
+          stdio: ['ignore', 'pipe', 'pipe'],
+        });
+        let stdout = '';
+        let stderr = '';
+        let exited = null;
+        child.stdout.setEncoding('utf8');
+        child.stderr.setEncoding('utf8');
+        child.stdout.on('data', (d) => { stdout += d; });
+        child.stderr.on('data', (d) => { stderr += d; });
+        child.on('exit', (code, signal) => { exited = { code, signal }; });
+        const waitFor = async (pred, what, timeoutMs = 8000) => {
+          const start = Date.now();
+          while (!pred()) {
+            if (Date.now() - start > timeoutMs) {
+              throw new Error(`timed out waiting for ${what}; stdout:\n${stdout}\nstderr:\n${stderr}`);
+            }
+            await sleep(50);
+          }
+        };
+        const runCount = () => (stderr.match(/check finished, exit/g) || []).length;
+
+        try {
+          await waitFor(() => /check finished, exit 0/.test(stderr) && runCount() >= 1, 'initial clean watch');
+          fs.writeFileSync(
+            path.join(wDir, '.env.example'),
+            `API_KEY=${syntheticSecrets.HEX_TOKEN_40}\nENDPOINTS=https://example.com,${syntheticSecrets.ANTHROPIC_KEY}\nPORT=${separateValues ? '3000' : 'not-a-port'}\n`,
+          );
+          if (separateValues) {
+            fs.writeFileSync(
+              path.join(wDir, '.env'),
+              `API_KEY=${syntheticSecrets.HEX_TOKEN_40}\nENDPOINTS=https://example.com,${syntheticSecrets.ANTHROPIC_KEY}\nPORT=not-a-port\n`,
+            );
+          }
+          await waitFor(
+            () => /check finished, exit 1/.test(stderr) && runCount() >= 2,
+            'secret added in watch mode',
+          );
+          assert.strictEqual(exited, null, 'watcher must stay alive after secret finding');
+          assertNoLeak(stdout + stderr, syntheticSecrets, `watch ${useJson ? 'json' : 'text'}${separateValues ? ' separate values' : ''}`);
+          if (useJson) {
+            const lines = stdout.trim().split(/\r?\n/).map(line => JSON.parse(line));
+            const failing = lines[lines.length - 1];
+            assert.strictEqual(failing.ok, false);
+            assert.deepStrictEqual(failing.secrets, ['API_KEY', 'ENDPOINTS']);
+            assert.strictEqual(failing.invalid.length, 1);
+            assert.match(failing.invalid[0], /^PORT: expected a port/);
+          } else {
+            assert.match(stdout, /SECRET in \.env\.example: API_KEY/);
+            assert.match(stdout, /SECRET in \.env\.example: ENDPOINTS/);
+            assert.match(stdout, /^INVALID: PORT: expected a port/m);
+            assert.doesNotMatch(stdout, /^INVALID: ENDPOINTS/m);
+          }
+
+          const beforeRecover = runCount();
+          fs.writeFileSync(path.join(wDir, '.env.example'), 'API_KEY=your-key-here\nENDPOINTS=https://example.com\nPORT=3000\n');
+          if (separateValues) fs.writeFileSync(path.join(wDir, '.env'), 'API_KEY=\nENDPOINTS=https://example.com\nPORT=3000\n');
+          await waitFor(
+            () => runCount() > beforeRecover && /check finished, exit 0\s*$/.test(stderr),
+            'watch recovery after placeholder fix',
+          );
+          if (useJson) {
+            const lines = stdout.trim().split(/\r?\n/).map(line => JSON.parse(line));
+            const recovered = lines[lines.length - 1];
+            assert.strictEqual(recovered.ok, true);
+            assert.deepStrictEqual(recovered.secrets, []);
+            assert.deepStrictEqual(recovered.invalid, []);
+          }
+        } finally {
+          if (exited === null) await stopChild(child);
+        }
+      });
+    }
+    asyncChecks.push(watchChain);
   }
 } catch (err) {
   cleanup();

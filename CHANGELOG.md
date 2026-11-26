@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Added: `check` flags values in `.env.example` (or `--file`) that look like real secrets, including known credential shapes (`sk-...`, `AKIA...`, URLs with non-empty passwords, hex tokens) and long high-entropy strings. It exits `1`, names the key, redacts the value from output, and adds the key to `secrets` in `--json` while keeping empty values, common placeholders and `generateExample` outputs valid (fixes #416).
+
 - Docs: list the shared conflictsWith and description options in the four translated READMEs.
 
 - Added: `scan` and `check` accept a single readable code file argument (`env-saaf scan src/server.js`, `env-saaf check src/server.js`), applying the same code-extension filter and comment/literal masking without scanning sibling files, and preserving the given file path in `scan --json` `locations` (fixes #418).
