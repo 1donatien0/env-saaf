@@ -817,6 +817,36 @@ assert.deepStrictEqual(scanCode("const p = process; p.env['BRACKET']; p.env[`TIC
 assert.deepStrictEqual(scanCode('const p = getProc(); p.env.NOT_AN_ALIAS;'), []);
 assert.deepStrictEqual(scanCode('p.env.TOO_EARLY; const p = process;'), []);
 
+// Issue #455: `process` must be the global, not part of a longer identifier or
+// a property of another object, a private field included.
+for (const text of [
+  'const x = subprocess.env.BAZ;', 'const x = myprocess.env.FOO;',
+  'const x = foo.process.env.BAR;', 'const x = this.process.env.QUX;',
+  '$process.env.A; _process.env.B;', 'notglobal.process.env.C;',
+  'foo.global.process.env.D;', 'foo.globalThis.process.env.E;',
+  'window.process.env.F;', 'globalThis?.process.env.G;',
+  'this.#process.env.PRIV; this.#process.env?.PRIV2; this.#process.env["PRIV3"];',
+  'notimport.meta.env.H; x.import.meta.env.I; this.#import.meta.env.J;',
+]) {
+  assert.deepStrictEqual(scanCode(text), [], text);
+}
+// `global.` and `globalThis.` name the global: dot, brackets, backticks and `?.` reads...
+assert.deepStrictEqual(
+  scanCode("global.process.env.A; globalThis.process.env['B']; global.process.env[`C`]; globalThis.process.env?.D;"),
+  ['A', 'B', 'C', 'D']);
+// ...and destructuring, statement or parameter default, which was not seen before.
+assert.deepStrictEqual(scanCode('const { E } = global.process.env;'), ['E']);
+assert.deepStrictEqual(scanCode('function f({ F } = globalThis.process.env) { return F; }'), ['F']);
+// The prefix only goes with process.env: global.import.meta.env is not import.meta.env.
+assert.deepStrictEqual(scanCode('const { G } = global.import.meta.env;'), []);
+// Real reads are unchanged, the #481 alias included, and a prefixed read in a
+// comment or a string is still not a read.
+assert.deepStrictEqual(scanCode('fn(process.env.H); !process.env.I; import.meta.env.J;'), ['H', 'I', 'J']);
+assert.deepStrictEqual(scanCode('const p = process; p.env.K;'), ['K']);
+assert.deepStrictEqual(scanCode('const p = subprocess; p.env.L;'), []);
+assert.deepStrictEqual(scanCode('// global.process.env.M\nconst s = "globalThis.process.env.N";'), []);
+assert.deepStrictEqual(scanCodeLocations('x;\n  global.process.env.LOC;\n').locations.LOC, [{ file: '-', line: 2 }]);
+
 // Issue #456: destructuring from a process.env alias reports source keys.
 assert.deepStrictEqual(scanCode('const env = process.env; const { A } = env;'), ['A']);
 assert.deepStrictEqual(
