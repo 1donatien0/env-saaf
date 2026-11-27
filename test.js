@@ -877,6 +877,12 @@ assert.deepStrictEqual(scanCode("import { env } from './config'; env.FOO;"), [])
 assert.deepStrictEqual(scanCode("const { env } = require('./config'); env.FOO;"), []);
 assert.deepStrictEqual(scanCode("import env from 'node:process'; env.FOO;"), []);
 assert.deepStrictEqual(diffEnv(['A', 'B'], ['A', 'C']), { usedNotDocumented: ['B'], documentedNotUsed: ['C'] });
+// Issue #457: both key lists must be arrays, and the message names the argument.
+for (const value of [null, undefined, 'A', new Set(['A']), { A: 1 }]) {
+  assert.throws(() => diffEnv(value, ['A']), { name: 'TypeError', message: 'env-saaf: diffEnv expects "usedKeys" to be an array' });
+  assert.throws(() => diffEnv(['A'], value), { name: 'TypeError', message: 'env-saaf: diffEnv expects "documentedKeys" to be an array' });
+}
+assert.deepStrictEqual(diffEnv([], []), { usedNotDocumented: [], documentedNotUsed: [] });
 
 // Issue #221: assignment-shaped lines with invalid keys must not disappear.
 {

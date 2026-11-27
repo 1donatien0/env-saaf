@@ -2827,6 +2827,10 @@ function scanDirLocations(dir, options = {}) {
 
 /** Compare code usage vs a documented set (e.g. keys of .env.example). */
 function diffEnv(usedKeys, documentedKeys) {
+  // Issue #457: both lists must be arrays; a Set or a string used to crash
+  // with a raw "filter is not a function".
+  if (!Array.isArray(usedKeys)) throw new TypeError('env-saaf: diffEnv expects "usedKeys" to be an array');
+  if (!Array.isArray(documentedKeys)) throw new TypeError('env-saaf: diffEnv expects "documentedKeys" to be an array');
   const doc = new Set(documentedKeys);
   const used = new Set(usedKeys);
   return {
