@@ -3235,6 +3235,10 @@ function deprecationNotice(option) {
 
 /** Generate .env.example text from a schema. Values are placeholders/defaults only — never real secrets. */
 function generateExample(schema) {
+  // Issue #457: the same up-front check as validateSchema and toJsonSchema, so
+  // null is a named schema error and 42 or [] no longer give an empty file.
+  // Only the shape is checked: generateExample still does not validate rules.
+  if (!isObject(schema)) throw invalidSchema(['schema must be an object']);
   // A key that looks like a secret gets an empty placeholder — there is
   // nothing safe to suggest for it. Whole underscore-separated words only:
   // API_KEY and DB_PASSWORD match, but MONKEY does not (it merely contains

@@ -3128,6 +3128,24 @@ assert.deepStrictEqual(
   assert.throws(() => parseEnvFile('.env'), (err) => err.constructor === Error && /not a file path/.test(err.message));
 }
 
+// Issue #457: generateExample rejects a non-object schema with the schema
+// error the other schema helpers already use, and still does not validate
+// rules. Those helpers, loadEnv and the permissive maskSecrets keep their
+// current behaviour.
+{
+  const notAnObject = (err) => err instanceof EnvSaafError && err.message === 'Invalid schema:\n  - schema must be an object';
+  for (const value of [null, undefined, 42, 'A', []]) {
+    assert.throws(() => generateExample(value), notAnObject);
+    assert.throws(() => toJsonSchema(value), notAnObject);
+    assert.throws(() => validateSchema(value), notAnObject);
+    assert.throws(() => validateEnv(value, {}), notAnObject);
+  }
+  assert.ok(generateExample({ A: { type: 'string', choices: 42 } }).includes('A=your_value_here'));
+  assert.throws(() => loadEnv(null), (err) => err instanceof EnvSaafError && /^loadEnv expects a schema object as the first argument/.test(err.message));
+  assert.strictEqual(maskSecrets(null), null);
+  assert.strictEqual(maskSecrets('x'), '****');
+}
+
 // Issue #145: bare lines report their position, even after multiline values.
 {
   assert.throws(() => parseEnvFile('FOO\n'), /line 1: expected KEY=VALUE/);
