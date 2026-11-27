@@ -5835,6 +5835,43 @@ assert.deepStrictEqual(
   assert.doesNotThrow(() => validateSchema({ COUNT: { type: 'int', choices: [2, Infinity, 0, NaN] } }));
 }
 
+// Issue #451: JSON choices must match primitive values, with type-aware errors.
+{
+  for (const rule of [
+    { type: 'json', choices: [{ a: 1 }] },
+    { type: 'json', choices: [[]] },
+    { type: 'array', of: 'json', choices: [true, {}] },
+  ]) {
+    assert.throws(
+      () => validateSchema({ A: rule }),
+      /A: "choices" for type 'json' must contain only strings, numbers, booleans or null/,
+    );
+  }
+
+  const rule = { type: 'json', choices: ['42', 42, false, null] };
+  for (const value of rule.choices) {
+    assert.deepStrictEqual(validateEnv({ A: rule }, { A: JSON.stringify(value) }), { A: value });
+  }
+  assert.deepStrictEqual(
+    validateEnv({ A: rule }, { A: '["42",42,false,null]' }),
+    { A: ['42', 42, false, null] },
+  );
+
+  const stringsOnly = { type: 'json', choices: ['42'] };
+  assert.throws(
+    () => validateEnv({ A: stringsOnly }, { A: '42' }),
+    /A: expected one of \["42"\], got 42/,
+  );
+  assert.throws(
+    () => validateEnv({ A: stringsOnly }, { A: '["42",42]' }),
+    /A: expected one of \["42"\], got 42 \(item 1\)/,
+  );
+  assert.throws(
+    () => validateEnv({ A: { ...stringsOnly, sensitive: true } }, { A: '17' }),
+    /A: expected one of \["42"\], got "\*\*\*\*"/,
+  );
+}
+
 // Issue #426: duration choices use the same millisecond values as runtime input.
 {
   const choices = Object.freeze(['15m', '30m']);

@@ -172,6 +172,15 @@ function normalizedChoices(key, rule) {
     : rule.choices;
 }
 
+function isJsonChoice(value) {
+  return value === null || ['string', 'number', 'boolean'].includes(typeof value);
+}
+
+function formatJsonChoice(value) {
+  // Preserve non-finite numbers instead of serializing them as null.
+  return typeof value === 'string' ? JSON.stringify(value) : String(value);
+}
+
 function isObject(value) {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
@@ -530,6 +539,8 @@ function validateSchemaRules(schema, warn, patterns = new Map(), prefix = '', an
       const choiceType = effectiveType === 'array' ? (rule.of || 'string') : effectiveType;
       if (choiceType === 'date') {
         errors.push(`${key}: "choices" cannot be used with type 'date' (a parsed date is a new Date object, so no choice can ever match)`);
+      } else if (choiceType === 'json' && rule.choices.some(choice => !isJsonChoice(choice))) {
+        errors.push(`${key}: "choices" for type 'json' must contain only strings, numbers, booleans or null`);
       } else if (['number', 'int', 'port', 'bigint', 'boolean', 'duration'].includes(choiceType)) {
         for (const choice of rule.choices) {
           if (typeof choice === 'number' && !Number.isFinite(choice)) continue;
@@ -1530,19 +1541,24 @@ function validateEnvCore(schema, env, options, valueSources) {
       }
       if (rule.choices) {
         const choices = normalizedChoices(key, rule);
-        if (Array.isArray(val)) {
-          // Issue #320: `choices` on an array rule constrains each coerced
-          // item, not the array itself. Name the key, the bad item and its
-          // index so the failure is actionable (as `unique: true` does).
-          const badIndex = val.findIndex(item => !choices.includes(item));
-          if (badIndex !== -1) {
-            const item = val[badIndex];
-            const shownItem = sensitive ? maskValue(safeString(item)) : safeString(item);
-            pushErr(`${key}: expected one of [${rule.choices.join(', ')}], got "${shownItem}" (item ${badIndex})`, valueSource());
-            continue;
+        // Array values are checked item by item, including parsed JSON arrays.
+        const isArray = Array.isArray(val);
+        const badIndex = isArray ? val.findIndex(item => !choices.includes(item)) : -1;
+        if (isArray ? badIndex !== -1 : !choices.includes(val)) {
+          const jsonChoices = type === 'json' || (type === 'array' && rule.of === 'json');
+          const expected = (jsonChoices ? rule.choices.map(formatJsonChoice) : rule.choices).join(', ');
+          const actual = isArray ? val[badIndex] : val;
+          let received;
+          if (jsonChoices && !sensitive && isJsonChoice(actual)) {
+            received = formatJsonChoice(actual);
+          } else if (isArray) {
+            const item = safeString(actual);
+            received = `"${sensitive ? maskValue(item) : item}"`;
+          } else {
+            received = `"${shown}"`;
           }
-        } else if (!choices.includes(val)) {
-          pushErr(`${key}: expected one of [${rule.choices.join(', ')}], got "${shown}"`, valueSource());
+          const itemLocation = isArray ? ` (item ${badIndex})` : '';
+          pushErr(`${key}: expected one of [${expected}], got ${received}${itemLocation}`, valueSource());
           continue;
         }
       }
