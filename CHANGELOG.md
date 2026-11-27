@@ -2,8 +2,6 @@
 
 ## Unreleased
 
-- Fixed: `url` rejects a web URL (`http`, `https`, `ws`, `wss`, `ftp`) whose hostname contains a character a DNS name cannot hold, such as the comma in `https://example.com,https://app.example.com`; other URLs, including multi-host `mongodb://h1,h2/db` strings, are accepted as before (fixes #507).
-
 - Fixed: `scanCode` now reports keys destructured from `process.env` in function parameter defaults, including renames and defaults (fixes #459).
 
 - Fixed: `generateExample` now uses usable allowed URL schemes for scalar `url` rules and `array` URL items, preferring HTTPS when allowed and otherwise using the first usable scheme; invalid or empty allowlists fall back to HTTPS (fixes #454).
@@ -14,6 +12,8 @@
 - Fixed: the `validateEnv` range error for a `date` rule no longer cuts a `Date` bound to its UTC day. A bound that is not a UTC midnight (`new Date('2026-06-01T12:30:00Z')`, or a local midnight east of Greenwich) is shown as its full instant, so the message no longer names a day the rejected value is on or the day before the bound, and an expanded year stays whole (`+010000-01-01`). It is written the same way as the `$comment` of `toJsonSchema`; string bounds and UTC-midnight `Date` bounds show as before (fixes #497).
 - Fixed: `toJsonSchema` no longer drops the `min` / `max` of a `date` rule: they travel as a `$comment` next to the date formats (`env-saaf bounds (inclusive, enforced by validateEnv only): min …, max …`), as the rule wrote them and only when present. It is an annotation, not validation: JSON Schema has no keyword for comparing dates, and Ajv's default strict mode accepts `$comment` where a custom `x-` keyword would fail to compile. A date-time bound without an offset is left out. Rules without bounds and other types are unchanged (fixes #482).
 - Docs: refreshed the sitemap `lastmod` dates on both landing pages (GitHub Pages and Vercel) to the v1.7.0 release date.
+
+- Fixed: `url` rejects a web URL (`http`, `https`, `ws`, `wss`, `ftp`) whose hostname contains a character a DNS name cannot hold, such as the comma in `https://example.com,https://app.example.com`; other URLs, including multi-host `mongodb://h1,h2/db` strings, are accepted as before (fixes #507).
 
 ## 1.7.0 — 2026-11-27
 
