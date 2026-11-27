@@ -388,13 +388,13 @@ function inferTypeFromSample(sample) {
     return n >= 1024 && n <= 65535 ? 'port' : 'int';
   }
   if (/^(true|false)$/i.test(v)) return 'boolean';
-  if (/^https?:\/\//i.test(v)) {
-    // Match the 'url' validator: new URL() must parse the value and the scheme
-    // must be http(s) — 'http://host:abc' has an invalid port, check rejects it,
-    // so it must not infer as 'url' (falls through to 'string').
+  if (/^[a-z][a-z0-9+.-]*:\/\//i.test(v)) {
+    // Issue #470: infer 'url' for any absolute URL with an explicit scheme://
+    // authority, not just http(s). The real validator (new URL) confirms the
+    // sample and rejects invalid ports such as 'postgres://host:abc/db'.
     try {
       const parsed = new URL(v);
-      if (parsed.protocol === 'http:' || parsed.protocol === 'https:') return 'url';
+      if (parsed.host && accepts('url')) return 'url';
     } catch { /* not a parseable URL — fall through */ }
   }
   if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v)) {
