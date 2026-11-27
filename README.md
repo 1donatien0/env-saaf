@@ -82,7 +82,7 @@ Environment inputs are strings. Output below is before an optional `transform`.
 | `url` | Absolute URL accepted by `new URL()`, without normalization | `string` | `trim`, `minLength`, `maxLength`, `pattern`, `protocols` |
 | `file` | Path to an existing, readable regular file. Relative paths use the process working directory. | `string` | `trim`, `minLength`, `maxLength`, `pattern` |
 | `port` | Plain integer literal from 0 to 65535. Decimal and scientific spellings (`8080.0`, `1e3`) are rejected, as are radix prefixes | `number` | `min`, `max` |
-| `email` | One `@`, non-empty local part, domain with an interior dot, no leading or trailing domain dot, no whitespace | `string` | `trim`, `minLength`, `maxLength`, `pattern` |
+| `email` | One `@`, local part 1–64 chars with no leading/trailing/consecutive dots, domain labels 1–63 chars (letters, digits, hyphens, never leading/trailing hyphen), total ≤ 254 chars, no whitespace | `string` | `trim`, `minLength`, `maxLength`, `pattern` |
 | `json` | Valid JSON text (object, array or primitive). Accepts already-parsed defaults. | Parsed JSON value | `trim`. For numeric results, `min` and `max`. |
 | `uuid` | Canonical 8-4-4-4-12 hexadecimal groups, either case | `string` | `trim`, `minLength`, `maxLength`, `pattern` |
 | `jwt` | JSON Web Token shape: three base64url segments (`header.payload.signature`), with the header and payload decoding to JSON objects. Shape only — the signature is never verified | `string` | `trim`, `minLength`, `maxLength`, `pattern` |
@@ -398,7 +398,7 @@ const env = validateEnv({
 });
 ```
 
-The `email` check is pragmatic: one `@`, a non-empty local part and domain, and a dot in the domain. It does not implement full RFC 5322. `pattern` accepts a `RegExp` or a regular expression source string on string-valued types (`string`, `email`, `url`, `file`, `uuid`, `jwt`, `hex`, `ipv4`, `ipv6`, `semver`, `base64`, `host`). A source string has no `/.../` delimiters and is compiled without flags. Use a `RegExp` for flags such as `i`. Invalid sources and uses on non-string types produce a schema error naming the key. Matching runs after coercion and the `choices` check, and a mismatch names the pattern.
+The `email` check is pragmatic: one `@`, a 1–64 char local part with no leading, trailing or consecutive dots, domain labels of 1–63 chars (letters, digits and hyphens, never starting or ending with a hyphen), a total length of at most 254 chars, and no whitespace. Plus-addressing, subdomains, uppercase and IP-literal domains (`a@[127.0.0.1]`) still pass. It does not implement full RFC 5322. `pattern` accepts a `RegExp` or a regular expression source string on string-valued types (`string`, `email`, `url`, `file`, `uuid`, `jwt`, `hex`, `ipv4`, `ipv6`, `semver`, `base64`, `host`). A source string has no `/.../` delimiters and is compiled without flags. Use a `RegExp` for flags such as `i`. Invalid sources and uses on non-string types produce a schema error naming the key. Matching runs after coercion and the `choices` check, and a mismatch names the pattern.
 
 ### `int` type and `min`/`max` — whole numbers and ranges
 
