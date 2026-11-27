@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Fixed: `validateSchema` now rejects a non-array `choices` (`'abc'`, `42`, `{}`, `null`) with the same `"choices" must be a non-empty array` schema error as an empty list, so a string can no longer degrade to substring matching and a number can no longer crash with a raw TypeError; `generateExample` also no longer crashes on a non-array `choices` (fixes #450).
+- Fixed: the hex-only `length` option is now rejected up front on every other type (`"length" only applies to type 'hex'`), like `protocols` off `url` — it was silently ignored there, so dead configuration could look like it did something. `hex` rules with `length` behave exactly as before (fixes #453).
+- Fixed: the empty-project `scan --json` test now expects the `locations` field (#335) the CLI already emits, so `npm test` passes on `main` again.
+
 - Fixed: with several files, `loadEnv` and `loadEnvAsync` now resolve `${VAR}` references against the whole layered stack instead of each file alone, so `URL=https://${HOST}/api` in `.env.local` sees `HOST` from `.env` (the later file's value wins, then `process.env`). A `${VAR:?message}` reference that another file satisfies no longer throws, and each value keeps the quote style, line and file of the file that wins it. `parseEnvFile` and single-file loading are unchanged (fixes #449).
 - Fixed: `scanCode` now reports source keys when destructuring from a `process.env` alias, including renames and defaults (fixes #456).
 

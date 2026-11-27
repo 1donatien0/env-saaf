@@ -393,6 +393,12 @@ function validateSchemaRules(schema, warn, patterns = new Map(), prefix = '', an
       if (effectiveType !== 'url' && effectiveType !== 'array' && rule.protocols !== undefined) {
         errors.push(`${key}: "protocols" only applies to type 'url' (cannot be used with type '${effectiveType}')`);
       }
+      // Issue #453: `length` is only read for `hex` rules (the exact
+      // character count for fixed-size tokens and hashes); anywhere else
+      // it is dead config in the same way `protocols` is off `url`.
+      if (effectiveType !== 'hex' && rule.length !== undefined) {
+        errors.push(`${key}: "length" only applies to type 'hex' (cannot be used with type '${effectiveType}')`);
+      }
     }
     const pattern = rule.pattern;
     if (pattern !== undefined) compilePattern(pattern, key, errors, patterns);
@@ -497,8 +503,11 @@ function validateSchemaRules(schema, warn, patterns = new Map(), prefix = '', an
       errors.push(`${key}: "length" must be a non-negative integer`);
     }
     // Issue #220: an empty `choices` list can never match any value — it is
-    // a schema bug, not a value that fails validation.
-    if (rule.choices !== undefined && Array.isArray(rule.choices) && rule.choices.length === 0) {
+    // a schema bug, not a value that fails validation. Issue #450: a
+    // non-array `choices` is the same class of bug — a string would degrade
+    // to substring matching and a number would crash with a raw TypeError
+    // at runtime, so reject it here with the same message.
+    if (rule.choices !== undefined && (!Array.isArray(rule.choices) || rule.choices.length === 0)) {
       errors.push(`${key}: "choices" must be a non-empty array`);
     }
     // Issue #305: a choice is compared against the *coerced* value
@@ -3042,7 +3051,10 @@ function generateExample(schema) {
     if (rule === null || typeof rule !== 'object' || Array.isArray(rule)) rule = {};
     // Issue #206: note aliases and requiredIf in the comment, so the
     // generated file documents the fallbacks and conditions a reader needs.
-    let comment = `# type: ${rule.type || 'string'}${rule.required ? ', required' : ''}${rule.choices ? ', one of: ' + rule.choices.join('|') : ''}`;
+    // Issue #450: `generateExample` does not validate the schema first, so
+    // a non-array `choices` must not crash the comment builder — only an
+    // actual array is listed.
+    let comment = `# type: ${rule.type || 'string'}${rule.required ? ', required' : ''}${Array.isArray(rule.choices) && rule.choices.length ? ', one of: ' + rule.choices.join('|') : ''}`;
     // Issue #343: the rule's own text leads the comment a reader sees.
     if (typeof rule.description === 'string' && rule.description.trim() !== '') {
       comment = `# ${rule.description.trim()}; ${comment.slice(2)}`;
