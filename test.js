@@ -9815,6 +9815,42 @@ const crossFieldRulesTest = (async () => {
   }
 })();
 
+// Issue #507: a comma (or any character a DNS hostname cannot contain) in the
+// hostname of a web URL is rejected — almost always two URLs joined by mistake.
+{
+  const schema = { U: { type: 'url' } };
+  for (const bad of [
+    'https://example.com,https://app.example.com',
+    'http://a.example,b.example/path',
+    'wss://ex!ample.com/socket',
+    'https://ex%2Cample.com',
+  ]) {
+    assert.throws(
+      () => validateEnv(schema, { U: bad }),
+      err => err instanceof EnvSaafError && err.errors.length === 1
+        && err.errors[0].startsWith('U: expected a valid URL'),
+      `${bad} should be rejected`,
+    );
+  }
+  for (const good of [
+    'https://example.com',
+    'https://example.com:8080/path?q=1',
+    'https://user:pass@example.com',
+    'postgres://user:pass@host:5432/db',
+    'https://my_service:8080/health',
+    'https://[::1]:8080/',
+    'https://bücher.example/',
+    'mongodb://h1,h2,h3/db?replicaSet=rs', // multi-host connection string: not a web URL
+  ]) {
+    assert.strictEqual(validateEnv(schema, { U: good }).U, good, `${good} should pass`);
+  }
+  // Each item of an array of URLs gets the same check.
+  assert.throws(
+    () => validateEnv({ L: { type: 'array', of: 'url', separator: ';' } }, { L: 'https://a.example;https://b.example,https://c.example' }),
+    err => err instanceof EnvSaafError && /L\[1\]: expected a valid URL/.test(err.errors[0]),
+  );
+}
+
 Promise.all([watchModeTest, watchModeErrorPathTest, watchModeEsmSchemaTest, loadEnvAsyncTest, layeredInterpolationTest, formatErrorThrowingHookTest, loadEnvSourceErrorsTest, conflictsWithTest, interpolationOperatorsTest, crossFieldRulesTest])
   .then(() => console.log('env-saaf v1.5.0: all tests passed'))
   .catch((err) => { console.error(err); process.exit(1); });

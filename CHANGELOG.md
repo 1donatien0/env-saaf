@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Fixed: `url` rejects a web URL (`http`, `https`, `ws`, `wss`, `ftp`) whose hostname contains a character a DNS name cannot hold, such as the comma in `https://example.com,https://app.example.com`; other URLs, including multi-host `mongodb://h1,h2/db` strings, are accepted as before (fixes #507).
+
 - Fixed: `scanCode` now reports keys destructured from `process.env` in function parameter defaults, including renames and defaults (fixes #459).
 
 - Fixed: `generateExample` now uses usable allowed URL schemes for scalar `url` rules and `array` URL items, preferring HTTPS when allowed and otherwise using the first usable scheme; invalid or empty allowlists fall back to HTTPS (fixes #454).
