@@ -2777,6 +2777,29 @@ assert.deepStrictEqual(
     /on or after 2026-01-01T12:00:00Z/);
   // A Date object as a bound works; a default outside the bounds fails like a value.
   assert.strictEqual(validateEnv({ D: { type: 'date', min: new Date('2026-01-01T00:00:00Z') } }, { D: '2026-06-01' }).D.toISOString().slice(0, 10), '2026-06-01');
+  // Issue #497: the range error writes a Date bound like toJsonSchema's $comment.
+  // At UTC midnight it is its day, as before; otherwise the full instant, so the
+  // message never names a day the rejected value is on.
+  assert.throws(() => validateEnv({ D: { type: 'date', max: new Date('2026-12-31T00:00:00Z') } }, { D: '2027-01-01' }),
+    /D: expected a date on or before 2026-12-31, got "2027-01-01"/);
+  assert.throws(() => validateEnv({ D: { type: 'date', max: new Date('2026-06-01T12:30:00Z') } }, { D: '2026-06-01T15:00:00Z' }),
+    /D: expected a date on or before 2026-06-01T12:30:00\.000Z, got "2026-06-01T15:00:00Z"/);
+  assert.throws(() => validateEnv({ D: { type: 'date', min: new Date('2026-01-01T00:00:00Z'), max: new Date('2026-06-01T12:30:00Z') } }, { D: '2026-06-01T13:00:00Z' }),
+    /D: expected a date between 2026-01-01 and 2026-06-01T12:30:00\.000Z/);
+  // An expanded year is not cut mid-date.
+  assert.throws(() => validateEnv({ D: { type: 'date', min: new Date('+010000-01-01T00:00:00Z') } }, { D: '2026-01-01' }),
+    /D: expected a date on or after \+010000-01-01, got "2026-01-01"/);
+  {
+    // A local midnight east of Greenwich is 23:00 UTC the day before: it is
+    // written as that instant, not as the day before the bound. Run in a child
+    // process with TZ set, so the test does not depend on the machine's zone.
+    const { spawnSync } = require('node:child_process');
+    const script = `const { validateEnv } = require(${JSON.stringify(require.resolve('./index.js'))});
+      try { validateEnv({ D: { type: 'date', min: new Date(2026, 0, 1) } }, { D: '2025-12-31T22:00:00Z' }); }
+      catch (e) { process.stdout.write(e.message); }`;
+    const out = spawnSync('node', ['-e', script], { encoding: 'utf8', env: { ...process.env, TZ: 'Europe/Paris' } }).stdout;
+    assert.match(out, /D: expected a date on or after 2025-12-31T23:00:00\.000Z, got "2025-12-31T22:00:00Z"/);
+  }
   assert.throws(() => validateEnv({ D: { type: 'date', min: '2026-01-01', default: '2025-01-01' } }, {}), /on or after 2026-01-01/);
   // Schema errors: a numeric bound, a nonsense bound, and min above max.
   assert.throws(() => validateSchema({ D: { type: 'date', min: 20260101 } }), /D: "min" must be an ISO date string for type 'date'/);
