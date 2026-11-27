@@ -57,7 +57,6 @@ Environment inputs strings होते हैं। नीचे दिया o
 | `email` | एक `@`, non-empty local part, domain जिसमें अंदर एक dot हो, domain के शुरू या आख़िर में dot न हो, कोई whitespace न हो | `string` | `trim`, `minLength`, `maxLength`, `pattern` |
 | `json` | Valid JSON text (object, array या primitive)। पहले से parse किए गए defaults भी स्वीकार होते हैं। | पार्स किया गया JSON मान | `trim`। संख्यात्मक परिणामों के लिए `min` और `max`। |
 | `uuid` | Canonical 8-4-4-4-12 hexadecimal groups, किसी भी case में | `string` | `trim`, `minLength`, `maxLength`, `pattern` |
-| `jwt` | JSON Web Token का आकार: तीन base64url segments (`header.payload.signature`), जिनका header और payload JSON objects में decode होते हैं। सिर्फ़ आकार — signature कभी verify नहीं होता | `string` | `trim`, `minLength`, `maxLength`, `pattern` |
 | `hex` | एक या अधिक hexadecimal characters, बिना `0x` prefix के | `string` | `trim`, `length`, `minLength`, `maxLength`, `pattern` |
 | `ipv4` | चार decimal octets, हर एक 0 से 255; कोई leading zeroes नहीं | `string` | `trim`, `minLength`, `maxLength`, `pattern` |
 | `ipv6` | कोई भी पता जिसे `net.isIP` IPv6 बताता है, जिसमें संक्षिप्त, IPv4-mapped और `%zone` रूप शामिल हैं | `string` | `trim`, `minLength`, `maxLength`, `pattern` |
@@ -68,7 +67,7 @@ Environment inputs strings होते हैं। नीचे दिया o
 | `host` | Hostname (`db.internal`, `localhost`, `example.com.`) या IPv4/IPv6 पता; अंत का एक DNS root dot सुरक्षित रहता है; कोई scheme, path या port नहीं | `string` | `trim`, `minLength`, `maxLength`, `pattern` |
 | `array` | `separator` (default `,`) से बँटी हुई delimited list, जिसका हर item `of` (default `string`) के रूप में coerce होता है। खाली items reject होते हैं। Array defaults स्वीकार होते हैं। | टाइप्ड array (`T[]`) | `of`, `separator`, `trim`, `protocols` (जब `of: 'url'` हो), `minItems`, `maxItems`, `unique`, `skipEmpty` |
 
-सभी types `required`, `requiredIf`, `conflictsWith`, `default`, `description`, `validate`, `transform`, `sensitive` और `aliases` को support करते हैं। `sensitive: true` set करने से उस key की value validation errors और CLI output में हमेशा mask रहती है, उसका नाम चाहे कुछ भी हो (जैसे `SESSION_ID`, `LICENSE_KEY`), और `generateExample` में उसका placeholder खाली रहता है। `aliases: ['OLD_NAME']` set करने से पुराने variable names fallback के रूप में स्वीकार होते हैं और एक warning निकलती है (नीचे देखें)। Custom `validate(value, env)` functions coercion और built-in checks के बाद चलते हैं (`default` values पर भी), `transform` से पहले। Transforms दी गई values पर validation के बाद चलते हैं। Missing optional keys हटा दी जाती हैं और defaults validate होते हैं। `choices` option coerced strings, numbers या booleans से match करता है। कोई parse किया गया JSON value किसी choice से match कर सकता है, अगर उसका type उन तीनों में से एक हो। String input default रूप से trim होता है। `trim: false` set करने से string-like types के लिए whitespace वैसा ही रहता है। `number` और `int` के लिए, numeric value के आसपास का whitespace दोनों ही तरह से स्वीकार होता है, लेकिन सिर्फ़ whitespace वाला text default रूप से reject होता है और `trim: false` के साथ `0` में बदल जाता है। Boolean matching आसपास के whitespace को हमेशा ignore करता है। `length` option सिर्फ़ `hex` पर लागू होता है। `pattern`, `minLength` और `maxLength` options सिर्फ़ string-valued types (`string`, `email`, `url`, `file`, `uuid`, `jwt`, `hex`, `ipv4`, `ipv6`, `semver`, `base64`, `host`) पर लागू होते हैं और किसी और type पर पहले से ही reject हो जाते हैं। उदाहरणों के लिए नीचे के sections देखें।
+सभी types `required`, `requiredIf`, `conflictsWith`, `default`, `description`, `validate`, `transform`, `sensitive` और `aliases` को support करते हैं। `sensitive: true` set करने से उस key की value validation errors और CLI output में हमेशा mask रहती है, उसका नाम चाहे कुछ भी हो (जैसे `SESSION_ID`, `LICENSE_KEY`), और `generateExample` में उसका placeholder खाली रहता है। `aliases: ['OLD_NAME']` set करने से पुराने variable names fallback के रूप में स्वीकार होते हैं और एक warning निकलती है (नीचे देखें)। Custom `validate(value, env)` functions coercion और built-in checks के बाद चलते हैं (`default` values पर भी), `transform` से पहले। Transforms दी गई values पर validation के बाद चलते हैं। Missing optional keys हटा दी जाती हैं और defaults validate होते हैं। `choices` option coerced strings, numbers या booleans से match करता है। कोई parse किया गया JSON value किसी choice से match कर सकता है, अगर उसका type उन तीनों में से एक हो। String input default रूप से trim होता है। `trim: false` set करने से string-like types के लिए whitespace वैसा ही रहता है। `number` और `int` के लिए, numeric value के आसपास का whitespace दोनों ही तरह से स्वीकार होता है, लेकिन सिर्फ़ whitespace वाला text default रूप से reject होता है और `trim: false` के साथ `0` में बदल जाता है। Boolean matching आसपास के whitespace को हमेशा ignore करता है। `length` option सिर्फ़ `hex` पर लागू होता है। `pattern`, `minLength` और `maxLength` options सिर्फ़ string-valued types (`string`, `email`, `url`, `file`, `uuid`, `hex`, `ipv4`, `ipv6`, `semver`, `base64`, `host`) पर लागू होते हैं और किसी और type पर पहले से ही reject हो जाते हैं। उदाहरणों के लिए नीचे के sections देखें।
 
 ### Conditional requirements (`requiredIf`)
 
@@ -255,7 +254,7 @@ const env = validateEnv({
 });
 ```
 
-`email` check व्यावहारिक है (एक `@`, एक non-empty local part और domain, और domain में एक dot), पूरा RFC 5322 नहीं। `pattern` एक `RegExp` लेता है जिससे किसी string value को match करना होता है (`string`, `email`, `url`, `file`, `uuid`, `jwt`, `hex`, `ipv4`, `ipv6`, `semver`, `base64`, `host`); यह coercion और `choices` check के बाद चलता है, mismatch error उस pattern का नाम लेता है जो fail हुआ, और non-string type पर `pattern` इस्तेमाल करना पहले से ही reject हो जाता है।
+`email` check व्यावहारिक है (एक `@`, एक non-empty local part और domain, और domain में एक dot), पूरा RFC 5322 नहीं। `pattern` एक `RegExp` लेता है जिससे किसी string value को match करना होता है (`string`, `email`, `url`, `file`, `uuid`, `hex`, `ipv4`, `ipv6`, `semver`, `base64`, `host`); यह coercion और `choices` check के बाद चलता है, mismatch error उस pattern का नाम लेता है जो fail हुआ, और non-string type पर `pattern` इस्तेमाल करना पहले से ही reject हो जाता है।
 
 ### `int` type और `min`/`max` — whole numbers और ranges
 
@@ -277,19 +276,18 @@ const env = validateEnv({
 });
 ```
 
-`json` value को `JSON.parse` से parse करता है (objects, arrays और primitives सभी parsed होकर वापस आते हैं); invalid JSON, key का नाम लेते हुए error के साथ reject होता है। `default` पहले से parse किए गए object के रूप में दिया जा सकता है। `minLength` और `maxLength` string-valued types (`string`, `email`, `url`, `file`, `uuid`, `jwt`, `hex`, `ipv4`, `ipv6`, `semver`, `base64`, `host`) पर काम करते हैं और किसी और type पर पहले से ही reject हो जाते हैं; दोनों में से किसी एक को अकेले भी इस्तेमाल किया जा सकता है, और बहुत छोटी या बहुत लंबी value, allowed length का नाम लेते हुए error के साथ reject होती है। ये `pattern` के साथ मिलते हैं (पहले length check होती है, फिर pattern)।
+`json` value को `JSON.parse` से parse करता है (objects, arrays और primitives सभी parsed होकर वापस आते हैं); invalid JSON, key का नाम लेते हुए error के साथ reject होता है। `default` पहले से parse किए गए object के रूप में दिया जा सकता है। `minLength` और `maxLength` string-valued types (`string`, `email`, `url`, `file`, `uuid`, `hex`, `ipv4`, `ipv6`, `semver`, `base64`, `host`) पर काम करते हैं और किसी और type पर पहले से ही reject हो जाते हैं; दोनों में से किसी एक को अकेले भी इस्तेमाल किया जा सकता है, और बहुत छोटी या बहुत लंबी value, allowed length का नाम लेते हुए error के साथ reject होती है। ये `pattern` के साथ मिलते हैं (पहले length check होती है, फिर pattern)।
 
-### `uuid`, `jwt` और `hex` types — IDs, tokens और hex strings
+### `uuid` और `hex` types — IDs और hex strings
 
 ```js
 const env = validateEnv({
   TENANT_ID: { type: 'uuid', required: true },
-  AUTH_TOKEN: { type: 'jwt', required: true },
   API_HASH:  { type: 'hex', length: 64 },
 });
 ```
 
-`uuid` एक canonical UUID (`8-4-4-4-12` hex groups, upper- और lowercase) स्वीकार करता है और उसे बिना बदले लौटाता है; ग़लत बनी value, key का नाम लेते हुए error के साथ reject होती है। `jwt` JSON Web Token का आकार स्वीकार करता है — ठीक तीन base64url segments (`header.payload.signature`) जिनका header और payload JSON objects में decode होते हैं — और उसे बिना बदले लौटाता है। यह सिर्फ़ आकार की जाँच है: signature कभी verify नहीं होता, इसलिए किसी भी issuer का सही बना token pass होता है और कटा हुआ या बिगड़ा token बाद में API के confusing `401` की बजाय boot पर ही fail होता है। `hex` सिर्फ़ hexadecimal strings स्वीकार करता है (`deadBEEF42` pass होता है, `0x1234` नहीं); optional `length` option characters में exact size तय करता है, fixed-size tokens और hashes के लिए।
+`uuid` एक canonical UUID (`8-4-4-4-12` hex groups, upper- और lowercase) स्वीकार करता है और उसे बिना बदले लौटाता है; ग़लत बनी value, key का नाम लेते हुए error के साथ reject होती है। `hex` सिर्फ़ hexadecimal strings स्वीकार करता है (`deadBEEF42` pass होता है, `0x1234` नहीं); optional `length` option characters में exact size तय करता है, fixed-size tokens और hashes के लिए।
 
 ### `ipv4`, `semver` और `base64` types — network addresses, versions और encoded values
 
@@ -856,6 +854,7 @@ const env = loadEnv({
 - **v1.2.0** — `email` type और `pattern` option, CLI `--json` output, per-key `transform`, `${VAR}` interpolation, multi-file `loadEnv`, multiline quoted values, CLI `--no-color`, `min`/`max` के साथ `int` type, README recipes।
 - **v1.5.0** — `duration` और `host` types, `date` और `file` types, non-throwing mode, `${VAR:-default}` interpolation, CLI `--schema` validation, `.env` files में duplicate-key और bare-line errors, `scan`/`check`/`example` directory validation, Express example, README types reference table।
 - **v1.6.0** — `bigint` और `ipv6` types, grouped (nested) schemas, per-item coercion के साथ `array` type, `requiredIf`/`aliases`/`conflictsWith`/`deprecated` rule options, `loadEnvAsync`, `toJsonSchema` export, CLI `init` और `print` commands, `check --fix`, `check` में असली-secret पहचान, single-file `scan`/`check`, property-based fuzz tests — अब तक की सबसे बड़ी release, कई बाहरी योगदानों के साथ।
+- **v1.7.0** — JSON Web Token आकार जाँच के लिए `jwt` type, सख्त schemas (non-array `choices` और `hex` से बाहर `length` पहले से ही reject), कई files में layered `loadEnv` interpolation, `scanCode` alias destructuring, masked non-string secrets, `int`/`number` में unsafe-integer rejection, `print` में secret masking, और खाली project के `scan --json` test का fix।
 - **v1.4.0** — `ipv4`, `semver` और `base64` types, CLI `check` असली `.env` keys की तुलना करता है, CLI `--version`, `example --write`, `scan` UNUSED warnings, `check` हर finding पर 1 से exit होता है, `scanCode` comments/strings को ignore करता है, defaults दी गई values की तरह validate होते हैं, subcommand के बाद `--help`, `parseEnvFile` में escaped quotes, `port` 0 स्वीकार करता है, GitHub Actions workflow docs।
 - **v1.3.0** — `json`, `uuid` और `hex` types, `minLength`/`maxLength` और `hex` `length` options, `trim: false`, `loadEnv` return-type inference, secret keys के लिए सुरक्षित `.env.example` generation, `assign: true` JSON fix।
 

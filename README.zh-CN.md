@@ -57,7 +57,6 @@ const env = validateEnv({
 | `email` | 一个 `@`、非空的本地部分、域名中含有一个内部点、域名不能以点开头或结尾、无空白字符 | `string` | `trim`、`minLength`、`maxLength`、`pattern` |
 | `json` | 有效的 JSON 文本（对象、数组或原始值）。接受已经解析好的默认值。 | 解析后的 JSON 值 | `trim`。对于数值结果，可用 `min` 和 `max`。 |
 | `uuid` | 规范的 8-4-4-4-12 十六进制分组，大小写均可 | `string` | `trim`、`minLength`、`maxLength`、`pattern` |
-| `jwt` | JSON Web Token 结构：三个 base64url 段（`header.payload.signature`），头部和载荷可解码为 JSON 对象。仅校验结构——从不验证签名 | `string` | `trim`、`minLength`、`maxLength`、`pattern` |
 | `hex` | 一个或多个十六进制字符，不带 `0x` 前缀 | `string` | `trim`、`length`、`minLength`、`maxLength`、`pattern` |
 | `ipv4` | 四个十进制八位组，每组 0 到 255；不允许前导零 | `string` | `trim`、`minLength`、`maxLength`、`pattern` |
 | `ipv6` | 任何被 `net.isIP` 识别为 IPv6 的地址，包括压缩形式、IPv4 映射形式和 `%zone` 形式 | `string` | `trim`、`minLength`、`maxLength`、`pattern` |
@@ -68,7 +67,7 @@ const env = validateEnv({
 | `host` | 主机名（`db.internal`、`localhost`、`example.com.`）或 IPv4/IPv6 地址；会保留末尾单个 DNS 根点；不带协议、路径或端口 | `string` | `trim`、`minLength`、`maxLength`、`pattern` |
 | `array` | 按 `separator`（默认 `,`）拆分的分隔列表，每个元素按 `of`（默认 `string`）进行转换。空元素会被拒绝。接受数组默认值。 | 带类型的数组（`T[]`） | `of`、`separator`、`trim`、`protocols`（当 `of: 'url'` 时）、`minItems`、`maxItems`、`unique`、`skipEmpty` |
 
-所有类型都支持 `required`、`requiredIf`、`conflictsWith`、`default`、`description`、`validate`、`transform`、`sensitive` 和 `aliases`。设置 `sensitive: true` 后，无论键名是什么（例如 `SESSION_ID`、`LICENSE_KEY`），该键的值在校验错误和 CLI 输出中始终会被掩码处理，并且在 `generateExample` 中其占位符会留空。设置 `aliases: ['OLD_NAME']` 可以接受已弃用的变量名作为后备，并发出警告（见下文）。自定义 `validate(value, env)` 函数在类型转换和内置检查之后（包括对默认值）运行，在 `transform` 之前。`transform` 在校验之后作用于所提供的值。缺失的可选键会被省略，默认值也会被校验。`choices` 选项匹配转换后的字符串、数字或布尔值。解析后的 JSON 值如果属于这三种类型之一，也可以匹配某个选项。字符串输入默认会被修剪。设置 `trim: false` 可以让类字符串类型保留空白。对于 `number` 和 `int`，数值周围的空白在两种设置下都会被接受，但纯空白文本默认会被拒绝，使用 `trim: false` 时则会转换为 `0`。布尔匹配始终忽略周围的空白。`length` 选项只适用于 `hex`。`pattern`、`minLength` 和 `maxLength` 选项只适用于字符串值的类型（`string`、`email`、`url`、`file`、`uuid`、`jwt`、`hex`、`ipv4`、`ipv6`、`semver`、`base64`、`host`），在任何其他类型上使用都会被预先拒绝。具体示例见下文各节。
+所有类型都支持 `required`、`requiredIf`、`conflictsWith`、`default`、`description`、`validate`、`transform`、`sensitive` 和 `aliases`。设置 `sensitive: true` 后，无论键名是什么（例如 `SESSION_ID`、`LICENSE_KEY`），该键的值在校验错误和 CLI 输出中始终会被掩码处理，并且在 `generateExample` 中其占位符会留空。设置 `aliases: ['OLD_NAME']` 可以接受已弃用的变量名作为后备，并发出警告（见下文）。自定义 `validate(value, env)` 函数在类型转换和内置检查之后（包括对默认值）运行，在 `transform` 之前。`transform` 在校验之后作用于所提供的值。缺失的可选键会被省略，默认值也会被校验。`choices` 选项匹配转换后的字符串、数字或布尔值。解析后的 JSON 值如果属于这三种类型之一，也可以匹配某个选项。字符串输入默认会被修剪。设置 `trim: false` 可以让类字符串类型保留空白。对于 `number` 和 `int`，数值周围的空白在两种设置下都会被接受，但纯空白文本默认会被拒绝，使用 `trim: false` 时则会转换为 `0`。布尔匹配始终忽略周围的空白。`length` 选项只适用于 `hex`。`pattern`、`minLength` 和 `maxLength` 选项只适用于字符串值的类型（`string`、`email`、`url`、`file`、`uuid`、`hex`、`ipv4`、`ipv6`、`semver`、`base64`、`host`），在任何其他类型上使用都会被预先拒绝。具体示例见下文各节。
 
 ### 条件必填（`requiredIf`）
 
@@ -254,7 +253,7 @@ const env = validateEnv({
 });
 ```
 
-`email` 的检查是务实的（包含一个 `@`、非空的本地部分和域名，以及域名中的一个点），而不是完整的 RFC 5322。`pattern` 接受一个 `RegExp`，字符串值必须与之匹配（适用于 `string`、`email`、`url`、`file`、`uuid`、`jwt`、`hex`、`ipv4`、`ipv6`、`semver`、`base64`、`host`）；它在类型转换和 `choices` 检查之后运行，不匹配的错误会指出失败的 pattern，而在非字符串类型上使用 `pattern` 会被预先拒绝。
+`email` 的检查是务实的（包含一个 `@`、非空的本地部分和域名，以及域名中的一个点），而不是完整的 RFC 5322。`pattern` 接受一个 `RegExp`，字符串值必须与之匹配（适用于 `string`、`email`、`url`、`file`、`uuid`、`hex`、`ipv4`、`ipv6`、`semver`、`base64`、`host`）；它在类型转换和 `choices` 检查之后运行，不匹配的错误会指出失败的 pattern，而在非字符串类型上使用 `pattern` 会被预先拒绝。
 
 ### `int` 类型与 `min`/`max`——整数与范围
 
@@ -276,19 +275,18 @@ const env = validateEnv({
 });
 ```
 
-`json` 用 `JSON.parse` 解析该值（对象、数组和原始值都会以解析后的形式返回）；无效的 JSON 会被拒绝，并给出指出键名的错误。`default` 可以直接给一个已经解析好的对象。`minLength` 和 `maxLength` 适用于字符串值的类型（`string`、`email`、`url`、`file`、`uuid`、`jwt`、`hex`、`ipv4`、`ipv6`、`semver`、`base64`、`host`），在任何其他类型上使用都会被预先拒绝；两者可以单独使用，过短或过长的值会被拒绝，并给出指出允许长度的错误。它们可以与 `pattern` 组合使用（先检查长度，再检查 pattern）。
+`json` 用 `JSON.parse` 解析该值（对象、数组和原始值都会以解析后的形式返回）；无效的 JSON 会被拒绝，并给出指出键名的错误。`default` 可以直接给一个已经解析好的对象。`minLength` 和 `maxLength` 适用于字符串值的类型（`string`、`email`、`url`、`file`、`uuid`、`hex`、`ipv4`、`ipv6`、`semver`、`base64`、`host`），在任何其他类型上使用都会被预先拒绝；两者可以单独使用，过短或过长的值会被拒绝，并给出指出允许长度的错误。它们可以与 `pattern` 组合使用（先检查长度，再检查 pattern）。
 
-### `uuid`、`jwt` 和 `hex` 类型——ID、令牌与十六进制字符串
+### `uuid` 和 `hex` 类型——ID 与十六进制字符串
 
 ```js
 const env = validateEnv({
   TENANT_ID: { type: 'uuid', required: true },
-  AUTH_TOKEN: { type: 'jwt', required: true },
   API_HASH:  { type: 'hex', length: 64 },
 });
 ```
 
-`uuid` 接受规范的 UUID（`8-4-4-4-12` 十六进制分组，大小写均可）并原样返回；格式错误的值会被拒绝，并给出指出键名的错误。`jwt` 接受 JSON Web Token 的结构——恰好三个 base64url 段（`header.payload.signature`），其头部和载荷可解码为 JSON 对象——并原样返回。这只是结构检查：从不验证签名，因此任何发行方的格式正确的令牌都能通过，而被截断或损坏的令牌会在启动时失败，而不是之后以 API 返回的令人困惑的 `401` 形式失败。`hex` 只接受十六进制字符串（`deadBEEF42` 通过，`0x1234` 不通过）；可选的 `length` 选项可以把大小精确固定为若干个字符，适用于定长令牌和哈希。
+`uuid` 接受规范的 UUID（`8-4-4-4-12` 十六进制分组，大小写均可）并原样返回；格式错误的值会被拒绝，并给出指出键名的错误。`hex` 只接受十六进制字符串（`deadBEEF42` 通过，`0x1234` 不通过）；可选的 `length` 选项可以把大小精确固定为若干个字符，适用于定长令牌和哈希。
 
 ### `ipv4`、`semver` 和 `base64` 类型——网络地址、版本与编码值
 
@@ -855,6 +853,7 @@ const env = loadEnv({
 - **v1.2.0** — `email` 类型和 `pattern` 选项、CLI `--json` 输出、每个键的 `transform`、`${VAR}` 插值、多文件 `loadEnv`、多行带引号的值、CLI `--no-color`、带 `min`/`max` 的 `int` 类型、README 实用示例。
 - **v1.5.0** — `duration` 和 `host` 类型、`date` 和 `file` 类型、非抛出模式、`${VAR:-default}` 插值、CLI `--schema` 校验、`.env` 文件中的重复键和裸行错误、`scan`/`check`/`example` 的目录校验、Express 示例、README 类型参考表。
 - **v1.6.0** — `bigint` 与 `ipv6` 类型、分组（嵌套）模式、带逐项强制转换的 `array` 类型、`requiredIf`/`aliases`/`conflictsWith`/`deprecated` 规则选项、`loadEnvAsync`、`toJsonSchema` 导出、CLI `init` 与 `print` 命令、`check --fix`、`check` 中的真实密钥检测、单文件 `scan`/`check`、基于属性的模糊测试——迄今最大的版本，包含许多外部贡献。
+- **v1.7.0** — 用于校验 JSON Web Token 结构的 `jwt` 类型、更严格的模式（非数组 `choices` 与 `hex` 之外的 `length` 会被预先拒绝）、跨文件的分层 `loadEnv` 插值、`scanCode` 别名解构、非字符串密钥掩码、`int`/`number` 的不安全整数拒绝、`print` 中的密钥掩码，以及空项目 `scan --json` 测试的修复。
 - **v1.4.0** — `ipv4`、`semver` 和 `base64` 类型、CLI `check` 比较真正的 `.env` 键、CLI `--version`、`example --write`、`scan` 的 UNUSED 警告、`check` 对任何结果都以 1 退出、`scanCode` 忽略注释/字符串、默认值像所提供的值一样被校验、子命令之后的 `--help`、`parseEnvFile` 中的转义引号、`port` 接受 0、GitHub Actions 工作流文档。
 - **v1.3.0** — `json`、`uuid` 和 `hex` 类型、`minLength`/`maxLength` 和 `hex` 的 `length` 选项、`trim: false`、`loadEnv` 返回类型推断、为密钥键更安全地生成 `.env.example`、`assign: true` 的 JSON 修复。
 

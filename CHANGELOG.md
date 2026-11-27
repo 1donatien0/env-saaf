@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 1.7.0 — 2026-11-27
+
 - Added: `jwt` type for JSON Web Tokens — validates the token shape (exactly three base64url segments, `header.payload.signature`, with the header and payload decoding to JSON objects) and returns the value unchanged. This is a shape check only: the signature is never verified, so a well-formed token from any issuer passes and a truncated or mangled token fails at boot instead of later as a confusing `401` from the API. It joins the string types, so `minLength` / `maxLength` / `pattern` / `sensitive` work as for `uuid`; `generateExample` emits a valid example token, `toJsonSchema` renders `{ type: 'string', pattern: ... }` for the three-segment shape, the TypeScript union gains `'jwt'`, and the README (English and all four translations) gains a type-table row and a section (fixes #471).
 
 - Fixed: `validateSchema` now rejects a non-array `choices` (`'abc'`, `42`, `{}`, `null`) with the same `"choices" must be a non-empty array` schema error as an empty list, so a string can no longer degrade to substring matching and a number can no longer crash with a raw TypeError; `generateExample` also no longer crashes on a non-array `choices` (fixes #450).

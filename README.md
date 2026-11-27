@@ -1376,6 +1376,7 @@ const env = loadEnv({
 - **v1.4.0** — `ipv4`, `semver` and `base64` types, CLI `check` compares real `.env` keys, CLI `--version`, `example --write`, `scan` UNUSED warnings, `check` exits 1 on every finding, `scanCode` ignores comments/strings, defaults validated like provided values, `--help` after a subcommand, escaped quotes in `parseEnvFile`, `port` accepts 0, GitHub Actions workflow docs.
 - **v1.3.0** — `json`, `uuid` and `hex` types, `minLength`/`maxLength` and `hex` `length` options, `trim: false`, `loadEnv` return-type inference, safer `.env.example` generation for secret keys, `assign: true` JSON fix.
 - **v1.6.0** — `bigint` and `ipv6` types, grouped (nested) schemas, `array` type with per-item coercion, `requiredIf`/`aliases`/`conflictsWith`/`deprecated` rule options, `loadEnvAsync`, `toJsonSchema` export, CLI `init` and `print` commands, `check --fix`, real-secret detection in `check`, single-file `scan`/`check`, property-based fuzz tests — the biggest release yet, with many outside contributions.
+- **v1.7.0** — `jwt` type for JSON Web Token shape validation, stricter schemas (non-array `choices` and `length` off `hex` rejected up front), layered `loadEnv` interpolation across files, `scanCode` alias destructuring, masked non-string secrets, safe-integer rejection for `int`/`number`, secret masking in `print`, and the empty-project `scan --json` test fix.
 
 ## Contributing
 
