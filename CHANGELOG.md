@@ -4,6 +4,8 @@
 
 - Added: `toJsonSchema` preserves `conflictsWith` as `allOf`/`not` constraints, deduplicates reciprocal pairs, resolves grouped keys to nested JSON paths, and composes with existing `requiredIf` clauses (fixes #465).
 
+- Fixed: `scanCode` / `scanDir` (and so `scan` and `check`) no longer report `subprocess.env.X`, `foo.process.env.X`, `this.process.env.X` or `this.#process.env.X` as env reads: `process` must be the global, not part of a longer identifier or a property of another object. `global.process.env` and `globalThis.process.env` are still read, and `const { A } = global.process.env` now is too. `import.meta.env` gets the same boundary (fixes #455).
+
 - Fixed: `check --schema` counts schema keys as used and keeps the first-check note for fresh `init --from-example` projects (fixes #506).
 
 - Fixed: JSON validation rejects non-primitive choices at schema time and distinguishes strings from other values in choice errors (fixes #451).
