@@ -569,7 +569,7 @@ const env = loadEnv(schema, { paths: ['.env', '.env.local'] });
 // or: { path: ['.env', '.env.local'] }
 ```
 
-Values may reference other values with `${VAR}` — handy for building URLs from parts. References resolve from the same file first, then `process.env`; single-quoted values and `\${VAR}` escapes stay literal:
+Values may reference other values with `${VAR}` — handy for building URLs from parts. References resolve from the same file first, then `process.env`; with several files, `loadEnv` and `loadEnvAsync` resolve them against the whole stack (the later file's value wins), then `process.env`. Single-quoted values and `\${VAR}` escapes stay literal:
 
 ```env
 HOST=example.com

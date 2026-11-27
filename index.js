@@ -1768,6 +1768,9 @@ function* loadEnvSteps(schema, options) {
   // Issue #350: remember the winning file path for each key under layering
   // (later files overwrite earlier ones). Ambient precedence is applied below.
   const fileSources = Object.create(null);
+  const stackRaw = {};
+  const stackQuoteOf = {};
+  const stackLineOf = Object.create(null);
   let foundAny = false;
   for (const filePath of fileList) {
     let fileText;
@@ -1787,12 +1790,21 @@ function* loadEnvSteps(schema, options) {
       continue;
     }
     foundAny = true;
-    const parsed = parseEnvFileWithSource(fileText, filePath);
-    for (const key of Object.keys(parsed)) {
-      fileEnv[key] = parsed[key];
+    // Issue #449: collect each file's raw values; a later file wins a key's
+    // value together with its quote style and line, so references are
+    // expanded once below, against the whole stack.
+    const { raw, quoteOf, seen } = collectEnvFile(fileText);
+    for (const key of Object.keys(raw)) {
+      stackRaw[key] = raw[key];
+      stackQuoteOf[key] = quoteOf[key];
+      stackLineOf[key] = seen.get(key);
       fileSources[key] = filePath;
     }
   }
+  // A reference reads the winning value across the files, then process.env,
+  // before the ambient merge below, so a single file expands as it always has.
+  const expanded = expandEnvValues(stackRaw, stackQuoteOf, (key) => stackLineOf[key], (key) => fileSources[key]);
+  for (const key of Object.keys(expanded)) fileEnv[key] = expanded[key];
   if (!foundAny) {
     // Issue #228: count required rules across groups too, under their full
     // env names, so a required DB_HOST is not missed when no file was found.
@@ -1887,6 +1899,16 @@ function parseEnvFile(text) {
 }
 
 function parseEnvFileWithSource(text, sourceFile) {
+  const { raw, quoteOf, seen } = collectEnvFile(text);
+  return expandEnvValues(raw, quoteOf, (key) => seen.get(key), () => sourceFile);
+}
+
+// Read one .env text into raw values, without expanding `${...}` references:
+// quotes are removed, comments stripped, multiline values joined and the
+// double-quoted escapes applied. `quoteOf` keeps each key's quote style (a
+// single-quoted value is never expanded) and `seen` its line number. loadEnv
+// collects every file this way and expands once on the merged stack (#449).
+function collectEnvFile(text) {
   // A file path passed by mistake (e.g. parseEnvFile('.env')) used to silently
   // return {} because no line matched KEY=VALUE. Detect that confusion: a
   // single-line string with no '=' that looks like a path is almost certainly
@@ -1956,6 +1978,13 @@ function parseEnvFileWithSource(text, sourceFile) {
     raw[key] = val;
     quoteOf[key] = quote;
   }
+  return { raw, quoteOf, seen };
+}
+
+// Expand `${...}` references in collected values. A reference reads `raw`
+// first, then process.env. `lineOf(key)` and `sourceOf(key)` give the line and
+// file of the key whose value holds the reference, for `${X:?message}` errors.
+function expandEnvValues(raw, quoteOf, lineOf, sourceOf) {
   // Interpolation uses file values before process.env. Keep escaped references
   // protected until all expansion rounds are complete.
   const ESC = String.fromCharCode(92) + '${';
@@ -2004,9 +2033,10 @@ function parseEnvFileWithSource(text, sourceFile) {
           if (missing) {
             const detail = expandValue(operand, remaining, self).split(PH).join('${')
               || (colon ? 'is unset or empty' : 'is unset');
+            const sourceFile = sourceOf(self);
             const err = new Error(sourceFile !== undefined
-              ? `env-saaf: ${self} (from ${sourceFile}) at line ${seen.get(self)}: ${name}: ${detail}`
-              : `env-saaf: ${self} at line ${seen.get(self)}: ${name}: ${detail}`);
+              ? `env-saaf: ${self} (from ${sourceFile}) at line ${lineOf(self)}: ${name}: ${detail}`
+              : `env-saaf: ${self} at line ${lineOf(self)}: ${name}: ${detail}`);
             if (sourceFile !== undefined) err.source = sourceFile;
             throw err;
           }
