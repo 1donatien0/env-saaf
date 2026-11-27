@@ -2280,6 +2280,19 @@ function collectEnvReads(text) {
     if (end !== -1) aliases.set(m[1], end);
   }
 
+  // Issue #481: `const p = process` creates a file-local alias for the process
+  // object. Reads through `p.env.X` must be reported just like `process.env.X`.
+  // The bare source check excludes `process.env` and longer identifiers, and
+  // only declarations count, so a parameter or import named `process` is safe.
+  const processObjectAliases = new Map();
+  const bareProcess = /process(?![\w$.])/y;
+  for (const m of src.matchAll(declaration)) {
+    const afterEquals = m.index + m[0].length;
+    if (!isCode(m.index, afterEquals) || aliases.has(m[1])) continue;
+    const end = matchAliasSourceEnd(afterEquals, bareProcess);
+    if (end !== -1 && !processObjectAliases.has(m[1])) processObjectAliases.set(m[1], end);
+  }
+
   // Issue #425: `const { env } = process` and `const { env: myEnv } = process`
   // create file-local aliases for `process.env` under the same boundary rules.
   const destructureAlias = /(?<![$\p{ID_Continue}.])(?:const|let|var)\s*\{/gu;
@@ -2325,6 +2338,38 @@ function collectEnvReads(text) {
       while (previous >= 0 && /\s/.test(codeView[previous])) previous--;
       if (codeView[previous] === '.' && codeView.slice(previous - 2, previous + 1) !== '...') continue;
       add(m[2] ?? m[4], m.index);
+    }
+  }
+  if (processObjectAliases.size) {
+    for (const [name, declaredAt] of processObjectAliases) {
+      const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const prefix = `(?<![$\\p{ID_Continue}.])${escaped}\\.env`;
+      const accessPatterns = [
+        new RegExp(`${prefix}\\.([A-Za-z_][A-Za-z0-9_]*)`, 'gu'),
+        new RegExp(`${prefix}\\[['"]([A-Za-z_][A-Za-z0-9_.-]*)['"]\\]`, 'gu'),
+        new RegExp(`${prefix}\\[\`([A-Za-z_][A-Za-z0-9_.-]*)\`\\]`, 'gu'),
+        new RegExp(`${prefix}\\?\\.([A-Za-z_][A-Za-z0-9_]*)`, 'gu'),
+        new RegExp(`${prefix}\\?\\.\\[['"]([A-Za-z_][A-Za-z0-9_.-]*)['"]\\]`, 'gu'),
+        new RegExp(`${prefix}\\?\\.\\[\`([A-Za-z_][A-Za-z0-9_.-]*)\`\\]`, 'gu'),
+      ];
+      for (const re of accessPatterns) {
+        for (const m of src.matchAll(re)) {
+          if (declaredAt > m.index || !isCode(m.index, m.index + name.length)) continue;
+          add(m[1], m.index);
+        }
+      }
+      const aliasDestructure = new RegExp(
+        `(?:const|let|var)\\s*\\{([^}]+)\\}\\s*=\\s*${escaped}\\.env`, 'g');
+      for (const m of codeView.matchAll(aliasDestructure)) {
+        if (declaredAt > m.index) continue;
+        const start = m.index + m[0].indexOf('{') + 1;
+        let offset = 0;
+        for (const part of m[1].split(',')) {
+          const key = part.split(':')[0].split('=')[0].trim();
+          if (/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) add(key, start + offset + part.indexOf(key));
+          offset += part.length + 1;
+        }
+      }
     }
   }
   return hits;

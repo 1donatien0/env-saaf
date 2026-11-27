@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Fixed: `scanCode` now follows `process.env` reads through locals assigned from bare `process`, including member, bracket, optional-chain and destructured reads (fixes #481).
+
 - Fixed: `int` values and plain integer text for `number` now reject magnitudes above `Number.MAX_SAFE_INTEGER` with guidance to use `bigint`, preventing silent rounding. Safe boundaries remain inclusive, and decimal/exponent spellings for `number` keep their floating-point behaviour. Generated examples use exponent notation for large numeric `number` defaults, choices and bounds so they still validate (fixes #460).
 
 - Fixed: `print` now masks secret-named keys (e.g. `PASSWORD`, `API_TOKEN`) in text and `--json` output, not just `sensitive: true` rules — including grouped keys, judged by their full flat name; added `--reveal` to `print` as the explicit opt-in to unmasked output for local debugging (never in CI logs) (fixes #447, #474).
