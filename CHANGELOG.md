@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Docs: refreshed the sitemap `lastmod` dates on both landing pages (GitHub Pages and Vercel) to the v1.7.0 release date.
+
 ## 1.7.0 — 2026-11-27
 
 - Added: `jwt` type for JSON Web Tokens — validates the token shape (exactly three base64url segments, `header.payload.signature`, with the header and payload decoding to JSON objects) and returns the value unchanged. This is a shape check only: the signature is never verified, so a well-formed token from any issuer passes and a truncated or mangled token fails at boot instead of later as a confusing `401` from the API. It joins the string types, so `minLength` / `maxLength` / `pattern` / `sensitive` work as for `uuid`; `generateExample` emits a valid example token, `toJsonSchema` renders `{ type: 'string', pattern: ... }` for the three-segment shape, the TypeScript union gains `'jwt'`, and the README (English and all four translations) gains a type-table row and a section (fixes #471).
