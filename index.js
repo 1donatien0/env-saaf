@@ -2310,38 +2310,48 @@ function collectEnvReads(text) {
   const hits = [];
   const add = (key, index) => { hits.push({ key, index }); };
   // Each pattern is paired with the head whose span must be real code.
+  // Issue #455: `process` and `import` must start the expression. The lookbehind
+  // rejects a longer identifier (`subprocess.env`), a property of another object
+  // (`foo.process.env`, `this.process.env`) and a private field (`#process`);
+  // only `global.` and `globalThis.` may come before `process`, as they name the
+  // global itself.
   const patterns = [
-    [/process\.env\.([A-Za-z_][A-Za-z0-9_]*)/g, 'process.env'],
-    [/process\.env\[['"]([A-Za-z_][A-Za-z0-9_.-]*)['"]\]/g, 'process.env'],
+    [/(?<![$\p{ID_Continue}.#])(?:globalThis\.|global\.)?process\.env\.([A-Za-z_][A-Za-z0-9_]*)/gu, 'process.env'],
+    [/(?<![$\p{ID_Continue}.#])(?:globalThis\.|global\.)?process\.env\[['"]([A-Za-z_][A-Za-z0-9_.-]*)['"]\]/gu, 'process.env'],
     // Backtick bracket access with a static key — `process.env[`KEY`]`:
     // a template with ${} interpolation cannot be known statically and
     // stays unmatched (the identifier charset excludes $ and {).
-    [/process\.env\[`([A-Za-z_][A-Za-z0-9_.-]*)`\]/g, 'process.env'],
+    [/(?<![$\p{ID_Continue}.#])(?:globalThis\.|global\.)?process\.env\[`([A-Za-z_][A-Za-z0-9_.-]*)`\]/gu, 'process.env'],
     // Vite exposes env through import.meta.env (issue #225) — same shapes.
-    [/import\.meta\.env\.([A-Za-z_][A-Za-z0-9_]*)/g, 'import.meta.env'],
-    [/import\.meta\.env\[['"]([A-Za-z_][A-Za-z0-9_.-]*)['"]\]/g, 'import.meta.env'],
-    [/import\.meta\.env\[`([A-Za-z_][A-Za-z0-9_.-]*)`\]/g, 'import.meta.env'],
+    [/(?<![$\p{ID_Continue}.#])import\.meta\.env\.([A-Za-z_][A-Za-z0-9_]*)/gu, 'import.meta.env'],
+    [/(?<![$\p{ID_Continue}.#])import\.meta\.env\[['"]([A-Za-z_][A-Za-z0-9_.-]*)['"]\]/gu, 'import.meta.env'],
+    [/(?<![$\p{ID_Continue}.#])import\.meta\.env\[`([A-Za-z_][A-Za-z0-9_.-]*)`\]/gu, 'import.meta.env'],
     // Optional chaining (issue #222): `process.env?.KEY`, `process.env?.['KEY']`,
     // `process.env?.[`KEY`]` — valid and increasingly common reads, same shapes
     // as the plain forms above.
-    [/process\.env\?\.([A-Za-z_][A-Za-z0-9_]*)/g, 'process.env'],
-    [/process\.env\?\.\[['"]([A-Za-z_][A-Za-z0-9_.-]*)['"]\]/g, 'process.env'],
-    [/process\.env\?\.\[`([A-Za-z_][A-Za-z0-9_.-]*)`\]/g, 'process.env'],
+    [/(?<![$\p{ID_Continue}.#])(?:globalThis\.|global\.)?process\.env\?\.([A-Za-z_][A-Za-z0-9_]*)/gu, 'process.env'],
+    [/(?<![$\p{ID_Continue}.#])(?:globalThis\.|global\.)?process\.env\?\.\[['"]([A-Za-z_][A-Za-z0-9_.-]*)['"]\]/gu, 'process.env'],
+    [/(?<![$\p{ID_Continue}.#])(?:globalThis\.|global\.)?process\.env\?\.\[`([A-Za-z_][A-Za-z0-9_.-]*)`\]/gu, 'process.env'],
     // Optional chaining on import.meta.env (issue #222) as well.
-    [/import\.meta\.env\?\.([A-Za-z_][A-Za-z0-9_]*)/g, 'import.meta.env'],
-    [/import\.meta\.env\?\.\[['"]([A-Za-z_][A-Za-z0-9_.-]*)['"]\]/g, 'import.meta.env'],
-    [/import\.meta\.env\?\.\[`([A-Za-z_][A-Za-z0-9_.-]*)`\]/g, 'import.meta.env'],
+    [/(?<![$\p{ID_Continue}.#])import\.meta\.env\?\.([A-Za-z_][A-Za-z0-9_]*)/gu, 'import.meta.env'],
+    [/(?<![$\p{ID_Continue}.#])import\.meta\.env\?\.\[['"]([A-Za-z_][A-Za-z0-9_.-]*)['"]\]/gu, 'import.meta.env'],
+    [/(?<![$\p{ID_Continue}.#])import\.meta\.env\?\.\[`([A-Za-z_][A-Za-z0-9_.-]*)`\]/gu, 'import.meta.env'],
   ];
   // The read itself must be code: a `process.env.X` in a comment or a string is
   // not a read. Bracket and destructured reads keep their key in a literal, so
-  // only the env object they hang off has to be code.
+  // only the env object they hang off has to be code. A `global.` or
+  // `globalThis.` prefix is part of the match, so the check and the recorded
+  // index are taken at `process` itself.
   for (const [re, head] of patterns) {
     for (const m of src.matchAll(re)) {
-      if (isCode(m.index, m.index + head.length)) add(m[1], m.index);
+      const at = m.index + m[0].indexOf(head);
+      if (isCode(at, at + head.length)) add(m[1], at);
     }
   }
   const codeView = code.split(MASKED).join(' ');
-  const destructure = /(?:const|let|var)\s*\{([^}]+)\}\s*=\s*(?:process\.env|import\.meta\.env)/g;
+  // `=\s*` already bounds `process` on the left here; only the `global.` /
+  // `globalThis.` prefix is new (issue #455), and only in front of `process.env`.
+  const destructure = /(?:const|let|var)\s*\{([^}]+)\}\s*=\s*(?:(?:globalThis\.|global\.)?process\.env|import\.meta\.env)/g;
   for (const m of codeView.matchAll(destructure)) {
     const start = m.index + m[0].indexOf('{') + 1;
     let offset = 0;
@@ -2362,7 +2372,7 @@ function collectEnvReads(text) {
   // Issue #459: `function f({ A } = process.env)` and arrow-parameter defaults
   // read env keys too. The `(`,` before the pattern keeps statement
   // destructuring above from being counted twice.
-  const parameterDestructure = /(?<=[(,])\s*\{([^}]+)\}\s*=\s*(?:process\.env|import\.meta\.env)/g;
+  const parameterDestructure = /(?<=[(,])\s*\{([^}]+)\}\s*=\s*(?:(?:globalThis\.|global\.)?process\.env|import\.meta\.env)/g;
   for (const m of codeView.matchAll(parameterDestructure)) {
     const start = m.index + m[0].indexOf('{') + 1;
     let offset = 0;
