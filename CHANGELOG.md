@@ -4,6 +4,7 @@
 
 - Fixed: `scanCode` now reports source keys when destructuring from a `process.env` alias, including renames and defaults (fixes #456).
 
+- Fixed: `maskValue` and `maskSecrets` mask number, boolean and bigint values instead of returning them in clear, so a secret coerced to a number (a numeric PIN or password) no longer reaches logs unmasked. Numbers and bigints use the string rule (`123456` → `'12***56'`), booleans always become `'****'`, and `null`, `undefined`, symbols, functions and non-plain objects still pass through unchanged. `maskValue` and `Masked<T>` now type those leaves as `string`. This reverses the #281 choice to leave non-string values unmasked (fixes #448).
 - Fixed: `scanCode` now follows `process.env` reads through locals assigned from bare `process`, including member, bracket, optional-chain and destructured reads (fixes #481).
 
 - Fixed: `int` values and plain integer text for `number` now reject magnitudes above `Number.MAX_SAFE_INTEGER` with guidance to use `bigint`, preventing silent rounding. Safe boundaries remain inclusive, and decimal/exponent spellings for `number` keep their floating-point behaviour. Generated examples use exponent notation for large numeric `number` defaults, choices and bounds so they still validate (fixes #460).

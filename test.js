@@ -6517,7 +6517,8 @@ assert.deepStrictEqual(
   assert.strictEqual(authoredOverBudget.GENERATED.length, 20);
 }
 
-// Issue #281: only strings are masked; other values keep their type/identity.
+// Issue #281: null, undefined, symbols, functions and objects keep their type/identity.
+// Issue #448: numbers, booleans and bigints are masked like strings.
 {
   const when = new Date(0);
   const pattern = /secret/;
@@ -6527,19 +6528,42 @@ assert.deepStrictEqual(
   const symbol = Symbol('secret');
   const plain = { token: 'abcdef' };
   const array = ['abcdef'];
-  for (const value of [undefined, null, 42, 0, false, true, 123n, symbol, when, pattern, instance, fn, plain, array]) {
+  for (const value of [undefined, null, symbol, when, pattern, instance, fn, plain, array]) {
     assert.strictEqual(maskValue(value), value);
+  }
+  for (const value of [42, 0, false, true, 123n]) {
+    assert.strictEqual(maskValue(value), '****');
   }
   const input = { TEXT: 'abcdef', EMPTY: '', N: 42, B: false, U: undefined, Z: null,
     BIG: 123n, SYMBOL: symbol, AT: when, AGAIN: when, RX: pattern, C: instance, FN: fn,
     NESTED: { VALUES: ['abcdef', 42, false, undefined, null, 123n, when] } };
   const output = maskSecrets(input);
-  assert.deepStrictEqual(output, { ...input, TEXT: 'ab***ef',
-    NESTED: { VALUES: ['ab***ef', 42, false, undefined, null, 123n, when] } });
+  assert.deepStrictEqual(output, { ...input, TEXT: 'ab***ef', N: '****', B: '****', BIG: '****',
+    NESTED: { VALUES: ['ab***ef', '****', '****', undefined, null, '****', when] } });
   for (const key of ['AT', 'AGAIN', 'RX', 'C', 'FN']) assert.strictEqual(output[key], input[key]);
   assert.notStrictEqual(output, input);
   assert.notStrictEqual(output.NESTED, input.NESTED);
   assert.strictEqual(input.TEXT, 'abcdef');
+}
+
+// Issue #448: a typed secret (a number, boolean or bigint after validation) is masked, not logged in clear.
+{
+  // The issue's examples.
+  assert.deepStrictEqual(maskSecrets({ PASSWORD: 123456 }), { PASSWORD: '12***56' });
+  assert.deepStrictEqual(maskSecrets({ TOKEN: true }), { TOKEN: '****' });
+  assert.deepStrictEqual(maskSecrets({ db: { pin: 9876 } }), { db: { pin: '****' } });
+  assert.deepStrictEqual(maskSecrets({ API_KEYS: [1111, 2222] }), { API_KEYS: ['****', '****'] });
+  assert.strictEqual(maskValue(123456), '12***56');
+  // A number or bigint is masked exactly like its text.
+  assert.strictEqual(maskValue(123456), maskValue('123456'));
+  assert.strictEqual(maskValue(12345678901234567890n), maskValue('12345678901234567890'));
+  // true and false give the same mask, so the value cannot be read back.
+  assert.strictEqual(maskValue(false), maskValue(true));
+  // No key-name filter: a number is masked whatever its key, like a string already is.
+  assert.deepStrictEqual(maskSecrets({ PORT: 8080, PORT_TEXT: '8080', TIMEOUT_MS: 30000 }),
+    { PORT: '****', PORT_TEXT: '****', TIMEOUT_MS: '30***00' });
+  // null and undefined still pass through (#281).
+  assert.deepStrictEqual(maskSecrets({ PIN: null, OTP: undefined }), { PIN: null, OTP: undefined });
 }
 
 // Issue #234: maskSecrets recurses into plain objects/arrays; cycles get a placeholder
@@ -6557,7 +6581,7 @@ assert.deepStrictEqual(
   // Deep nesting and arrays of objects keep their shape.
   assert.deepStrictEqual(
     maskSecrets({ a: { b: { c: { d: 'secret-value' } } }, list: [{ X: 'abcdef' }, 'xy', 42] }),
-    { a: { b: { c: { d: 'se***ue' } } }, list: [{ X: 'ab***ef' }, '****', 42] }
+    { a: { b: { c: { d: 'se***ue' } } }, list: [{ X: 'ab***ef' }, '****', '****'] }
   );
   // Non-plain values (Date, class instances) stay unchanged.
   const when = new Date('2026-01-01T00:00:00.000Z');
