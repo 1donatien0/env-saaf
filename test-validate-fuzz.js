@@ -23,12 +23,12 @@ const {
 
 const SEEDS = Array.from({ length: 320 }, (_, i) => i + 1);
 const SCALAR_TYPES = [
-  'string', 'number', 'int', 'boolean', 'url', 'port', 'email', 'json', 'uuid',
+  'string', 'number', 'int', 'boolean', 'url', 'port', 'email', 'json', 'uuid', 'jwt',
   'hex', 'ipv4', 'ipv6', 'semver', 'base64', 'date', 'file', 'duration', 'host',
 ];
 const ALL_TYPES = [...SCALAR_TYPES, 'array'];
 const STRING_TYPES = new Set([
-  'string', 'email', 'url', 'file', 'uuid', 'hex', 'ipv4', 'ipv6', 'semver', 'base64', 'host',
+  'string', 'email', 'url', 'file', 'uuid', 'jwt', 'hex', 'ipv4', 'ipv6', 'semver', 'base64', 'host',
 ]);
 const SEPARATORS = [',', ';', '|'];
 const FILE_FIXTURES = ['package.json', 'index.js', 'cli.js', 'LICENSE'].map((name) => (
@@ -126,6 +126,12 @@ function validScalarRaw(random, type, rule, forArrayItem = false) {
       return pick(random, [`{"ok":true,"n":${intBetween(random, 1, 99)}}`, `["${alphaNum(random, 4)}",1]`, `"str_${alphaNum(random, 5)}"`, 'null', 'false']);
     case 'uuid':
       return [8, 4, 4, 4, 12].map((n) => hexString(random, n)).join('-');
+    case 'jwt': {
+      // A well-formed token: header and payload are JSON objects, the
+      // signature is any non-empty base64url string (never verified).
+      const b64u = (o) => Buffer.from(JSON.stringify(o)).toString('base64url');
+      return `${b64u({ alg: 'HS256', typ: 'JWT' })}.${b64u({ sub: String(intBetween(random, 1, 99999)), iat: 1700000000 })}.${alphaNum(random, 43)}`;
+    }
     case 'hex': {
       const lo = rule.length ?? Math.max(2, rule.minLength ?? 2);
       const hi = rule.length ?? Math.max(lo, Math.min(32, rule.maxLength ?? 24));
@@ -182,7 +188,7 @@ function scalarBadRaw(random, type, rule, tag) {
   const malformed = {
     number: `nan_${tag}`, int: `12.5_${tag}`, port: `port_${tag}`, duration: `15bad_${tag}`,
     boolean: `maybe_${tag}`, url: `not_a_url_${tag}`, email: `invalid_email_${tag}`,
-    json: `{broken_${tag}`, uuid: `not-uuid-${tag}`, hex: `0x_${tag}`, ipv4: `999.1.1.${tag}`,
+    json: `{broken_${tag}`, uuid: `not-uuid-${tag}`, jwt: `not-a-jwt-${tag}`, hex: `0x_${tag}`, ipv4: `999.1.1.${tag}`,
     ipv6: `gggg::${tag}`, semver: `V01.2.${tag}`, base64: `bad!b64!${tag}=`,
     date: `2026-02-30-${tag}`, file: `./__missing_${tag}.json`, host: `https://${tag}.example.com:8080/p`,
   };
@@ -287,7 +293,7 @@ function generateCase(random, type, seed, index) {
   } else if (STRING_TYPES.has(type)) {
     if (type === 'url' && random() < 0.5) rule.protocols = pick(random, [['https'], ['https', 'http'], ['ws', 'wss']]);
     if (type === 'hex' && random() < 0.45) rule.length = pick(random, [4, 8, 16, 32]);
-    if (!['uuid', 'ipv4', 'ipv6', 'file'].includes(type) && random() < 0.45) {
+    if (!['uuid', 'jwt', 'ipv4', 'ipv6', 'file'].includes(type) && random() < 0.45) {
       if (type === 'hex' && rule.length !== undefined) {
         rule.minLength = Math.max(1, rule.length - 2);
         rule.maxLength = rule.length + 4;

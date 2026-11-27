@@ -85,6 +85,7 @@ Environment inputs are strings. Output below is before an optional `transform`.
 | `email` | One `@`, non-empty local part, domain with an interior dot, no leading or trailing domain dot, no whitespace | `string` | `trim`, `minLength`, `maxLength`, `pattern` |
 | `json` | Valid JSON text (object, array or primitive). Accepts already-parsed defaults. | Parsed JSON value | `trim`. For numeric results, `min` and `max`. |
 | `uuid` | Canonical 8-4-4-4-12 hexadecimal groups, either case | `string` | `trim`, `minLength`, `maxLength`, `pattern` |
+| `jwt` | JSON Web Token shape: three base64url segments (`header.payload.signature`), with the header and payload decoding to JSON objects. Shape only — the signature is never verified | `string` | `trim`, `minLength`, `maxLength`, `pattern` |
 | `hex` | One or more hexadecimal characters, no `0x` prefix | `string` | `trim`, `length`, `minLength`, `maxLength`, `pattern` |
 | `ipv4` | Four decimal octets, each 0 to 255; no leading zeroes | `string` | `trim`, `minLength`, `maxLength`, `pattern` |
 | `ipv6` | Any address `net.isIP` reports as IPv6, including compressed, IPv4-mapped and `%zone` forms | `string` | `trim`, `minLength`, `maxLength`, `pattern` |
@@ -95,7 +96,7 @@ Environment inputs are strings. Output below is before an optional `transform`.
 | `host` | Hostname (`db.internal`, `localhost`, `example.com.`) or IPv4/IPv6 address; one trailing DNS root dot is preserved; no scheme, path or port | `string` | `trim`, `minLength`, `maxLength`, `pattern` |
 | `array` | Delimited list split by `separator` (default `,`) with each item coerced as `of` (default `string`). Empty items are rejected. Accepts array defaults. | Typed array (`T[]`) | `of`, `separator`, `trim`, `protocols` (when `of: 'url'`), `minItems`, `maxItems`, `unique`, `skipEmpty` |
 
-All types support `required`, `requiredIf`, `conflictsWith`, `default`, `description`, `validate`, `transform`, `sensitive` and `aliases`. A `description` string documents the variable: it leads the comment `generateExample` writes for the key and becomes the property's `description` in `toJsonSchema`, without changing validation. Setting `sensitive: true` always masks the key's value in validation errors and CLI output, whatever its name (e.g. `SESSION_ID`, `LICENSE_KEY`), and leaves its placeholder empty in `generateExample`. Setting `aliases: ['OLD_NAME']` accepts deprecated variable names as fallbacks and emits a warning (see below). Custom `validate(value, env)` functions run after coercion and built-in checks (including on defaults), before `transform`. Transforms run on provided values after validation. Missing optional keys are omitted and defaults are validated. A key with a `default` can never be missing, so `required: true` together with a `default` is rejected as a schema error. The `choices` option matches coerced strings, numbers, booleans or bigints. A parsed JSON value can match a choice when it has one of the string, number or boolean types. String input is trimmed by default. Setting `trim: false` leaves whitespace in place for string-like types. For `number`, `int` and `bigint`, whitespace surrounding a valid numeric value is accepted either way. Whitespace-only text is treated as unset by default; with `trim: false`, it converts to `0` for `number`, while `int` and `bigint` reject it. Boolean matching always ignores surrounding whitespace. The `length` option applies only to `hex`. The `pattern`, `minLength` and `maxLength` options apply only to string-valued types (`string`, `email`, `url`, `file`, `uuid`, `hex`, `ipv4`, `ipv6`, `semver`, `base64`, `host`) and are rejected up front on any other type. See the sections below for examples.
+All types support `required`, `requiredIf`, `conflictsWith`, `default`, `description`, `validate`, `transform`, `sensitive` and `aliases`. A `description` string documents the variable: it leads the comment `generateExample` writes for the key and becomes the property's `description` in `toJsonSchema`, without changing validation. Setting `sensitive: true` always masks the key's value in validation errors and CLI output, whatever its name (e.g. `SESSION_ID`, `LICENSE_KEY`), and leaves its placeholder empty in `generateExample`. Setting `aliases: ['OLD_NAME']` accepts deprecated variable names as fallbacks and emits a warning (see below). Custom `validate(value, env)` functions run after coercion and built-in checks (including on defaults), before `transform`. Transforms run on provided values after validation. Missing optional keys are omitted and defaults are validated. A key with a `default` can never be missing, so `required: true` together with a `default` is rejected as a schema error. The `choices` option matches coerced strings, numbers, booleans or bigints. A parsed JSON value can match a choice when it has one of the string, number or boolean types. String input is trimmed by default. Setting `trim: false` leaves whitespace in place for string-like types. For `number`, `int` and `bigint`, whitespace surrounding a valid numeric value is accepted either way. Whitespace-only text is treated as unset by default; with `trim: false`, it converts to `0` for `number`, while `int` and `bigint` reject it. Boolean matching always ignores surrounding whitespace. The `length` option applies only to `hex`. The `pattern`, `minLength` and `maxLength` options apply only to string-valued types (`string`, `email`, `url`, `file`, `uuid`, `jwt`, `hex`, `ipv4`, `ipv6`, `semver`, `base64`, `host`) and are rejected up front on any other type. See the sections below for examples.
 
 
 ### Conditional requirements (`requiredIf`)
@@ -397,7 +398,7 @@ const env = validateEnv({
 });
 ```
 
-The `email` check is pragmatic: one `@`, a non-empty local part and domain, and a dot in the domain. It does not implement full RFC 5322. `pattern` accepts a `RegExp` or a regular expression source string on string-valued types (`string`, `email`, `url`, `file`, `uuid`, `hex`, `ipv4`, `ipv6`, `semver`, `base64`, `host`). A source string has no `/.../` delimiters and is compiled without flags. Use a `RegExp` for flags such as `i`. Invalid sources and uses on non-string types produce a schema error naming the key. Matching runs after coercion and the `choices` check, and a mismatch names the pattern.
+The `email` check is pragmatic: one `@`, a non-empty local part and domain, and a dot in the domain. It does not implement full RFC 5322. `pattern` accepts a `RegExp` or a regular expression source string on string-valued types (`string`, `email`, `url`, `file`, `uuid`, `jwt`, `hex`, `ipv4`, `ipv6`, `semver`, `base64`, `host`). A source string has no `/.../` delimiters and is compiled without flags. Use a `RegExp` for flags such as `i`. Invalid sources and uses on non-string types produce a schema error naming the key. Matching runs after coercion and the `choices` check, and a mismatch names the pattern.
 
 ### `int` type and `min`/`max` — whole numbers and ranges
 
@@ -442,18 +443,19 @@ const env = validateEnv({
 });
 ```
 
-`json` parses the value with `JSON.parse` — objects, arrays and primitives all come back parsed; invalid JSON is rejected with an error naming the key. A `default` may be given as an already-parsed object. `minLength` and `maxLength` work on string-valued types (`string`, `email`, `url`, `file`, `uuid`, `hex`, `ipv4`, `ipv6`, `semver`, `base64`, `host`) and are rejected up front on any other type; either one can be used alone, and a too-short or too-long value is rejected with an error naming the allowed length. They combine with `pattern` — length is checked first, then the pattern.
+`json` parses the value with `JSON.parse` — objects, arrays and primitives all come back parsed; invalid JSON is rejected with an error naming the key. A `default` may be given as an already-parsed object. `minLength` and `maxLength` work on string-valued types (`string`, `email`, `url`, `file`, `uuid`, `jwt`, `hex`, `ipv4`, `ipv6`, `semver`, `base64`, `host`) and are rejected up front on any other type; either one can be used alone, and a too-short or too-long value is rejected with an error naming the allowed length. They combine with `pattern` — length is checked first, then the pattern.
 
-### `uuid` and `hex` types — IDs and hex strings
+### `uuid`, `jwt` and `hex` types — IDs, tokens and hex strings
 
 ```js
 const env = validateEnv({
   TENANT_ID: { type: 'uuid', required: true },
+  AUTH_TOKEN: { type: 'jwt', required: true },
   API_HASH:  { type: 'hex', length: 64 },
 });
 ```
 
-`uuid` accepts a canonical UUID (`8-4-4-4-12` hex groups, upper- and lowercase) and returns it unchanged; a malformed value is rejected with an error naming the key. `hex` accepts hexadecimal strings only (`deadBEEF42` passes, `0x1234` does not); the optional `length` option pins the exact size in characters, for fixed-size tokens and hashes.
+`uuid` accepts a canonical UUID (`8-4-4-4-12` hex groups, upper- and lowercase) and returns it unchanged; a malformed value is rejected with an error naming the key. `jwt` accepts a JSON Web Token shape — exactly three base64url segments (`header.payload.signature`) whose header and payload decode to JSON objects — and returns it unchanged. It is a shape check only: the signature is never verified, so a well-formed token from any issuer passes and a truncated or mangled token fails at boot instead of later as a confusing `401` from the API. `hex` accepts hexadecimal strings only (`deadBEEF42` passes, `0x1234` does not); the optional `length` option pins the exact size in characters, for fixed-size tokens and hashes.
 
 ### `ipv4`, `semver` and `base64` types — network addresses, versions and encoded values
 
@@ -1168,7 +1170,7 @@ Invalid schema:
   - PORT: unknown type "prot"
 ```
 
-The `type` is not one the library knows. Kinds are listed in the [types reference](#types-reference) (`string`, `number`, `int`, `boolean`, `url`, `port`, `duration`, `date`, `json`, `array`, `email`, `uuid`, `hex`, `ipv4`, `ipv6`, `semver`, `base64`, `host`, `file`). `number` and `int` differ: `int` rejects `3.5`.
+The `type` is not one the library knows. Kinds are listed in the [types reference](#types-reference) (`string`, `number`, `int`, `boolean`, `url`, `port`, `duration`, `date`, `json`, `array`, `email`, `uuid`, `jwt`, `hex`, `ipv4`, `ipv6`, `semver`, `base64`, `host`, `file`). `number` and `int` differ: `int` rejects `3.5`.
 
 ### `default: unknown option "PORT"`
 

@@ -57,6 +57,7 @@ As entradas de ambiente são strings. A saída abaixo é anterior a um `transfor
 | `email` | Um `@`, parte local não vazia, domínio com um ponto no meio, sem ponto no início ou no fim do domínio, sem espaços em branco | `string` | `trim`, `minLength`, `maxLength`, `pattern` |
 | `json` | Texto JSON válido (objeto, array ou primitivo). Aceita valores padrão já analisados. | Valor JSON analisado | `trim`. Para resultados numéricos, `min` e `max`. |
 | `uuid` | Grupos hexadecimais canônicos 8-4-4-4-12, em qualquer caixa | `string` | `trim`, `minLength`, `maxLength`, `pattern` |
+| `jwt` | Formato de JSON Web Token: três segmentos base64url (`header.payload.signature`), com o cabeçalho e o payload decodificando para objetos JSON. Apenas o formato — a assinatura nunca é verificada | `string` | `trim`, `minLength`, `maxLength`, `pattern` |
 | `hex` | Um ou mais caracteres hexadecimais, sem prefixo `0x` | `string` | `trim`, `length`, `minLength`, `maxLength`, `pattern` |
 | `ipv4` | Quatro octetos decimais, cada um de 0 a 255; sem zeros à esquerda | `string` | `trim`, `minLength`, `maxLength`, `pattern` |
 | `ipv6` | Qualquer endereço que `net.isIP` reconheça como IPv6, incluindo formas comprimidas, mapeadas para IPv4 e com `%zone` | `string` | `trim`, `minLength`, `maxLength`, `pattern` |
@@ -67,7 +68,7 @@ As entradas de ambiente são strings. A saída abaixo é anterior a um `transfor
 | `host` | Nome de host (`db.internal`, `localhost`, `example.com.`) ou endereço IPv4/IPv6; um ponto raiz DNS final é preservado; sem esquema, caminho ou porta | `string` | `trim`, `minLength`, `maxLength`, `pattern` |
 | `array` | Lista delimitada dividida por `separator` (padrão `,`) com cada item convertido como `of` (padrão `string`). Itens vazios são rejeitados. Aceita valores padrão em array. | Array tipado (`T[]`) | `of`, `separator`, `trim`, `protocols` (quando `of: 'url'`), `minItems`, `maxItems`, `unique`, `skipEmpty` |
 
-Todos os tipos oferecem suporte a `required`, `requiredIf`, `conflictsWith`, `default`, `description`, `validate`, `transform`, `sensitive` e `aliases`. Definir `sensitive: true` sempre mascara o valor da chave nos erros de validação e na saída da CLI, seja qual for o nome dela (p. ex. `SESSION_ID`, `LICENSE_KEY`), e deixa seu espaço reservado vazio no `generateExample`. Definir `aliases: ['OLD_NAME']` aceita nomes de variáveis obsoletos como alternativas e emite um aviso (veja abaixo). Funções `validate(value, env)` personalizadas são executadas após a conversão e as verificações internas (inclusive sobre valores padrão), antes do `transform`. Os transforms são executados sobre os valores fornecidos, após a validação. Chaves opcionais ausentes são omitidas e os valores padrão são validados. A opção `choices` corresponde a strings, números ou booleanos já convertidos. Um valor JSON analisado pode corresponder a uma choice quando tem um desses três tipos. A entrada em string é aparada por padrão. Definir `trim: false` mantém os espaços em branco nos tipos semelhantes a string. Para `number` e `int`, espaços em torno de um valor numérico são aceitos de qualquer forma, mas um texto só com espaços é rejeitado por padrão e convertido para `0` com `trim: false`. A correspondência de booleanos sempre ignora os espaços ao redor. A opção `length` se aplica somente ao `hex`. As opções `pattern`, `minLength` e `maxLength` se aplicam somente a tipos com valor em string (`string`, `email`, `url`, `file`, `uuid`, `hex`, `ipv4`, `ipv6`, `semver`, `base64`, `host`) e são rejeitadas de antemão em qualquer outro tipo. Veja exemplos nas seções abaixo.
+Todos os tipos oferecem suporte a `required`, `requiredIf`, `conflictsWith`, `default`, `description`, `validate`, `transform`, `sensitive` e `aliases`. Definir `sensitive: true` sempre mascara o valor da chave nos erros de validação e na saída da CLI, seja qual for o nome dela (p. ex. `SESSION_ID`, `LICENSE_KEY`), e deixa seu espaço reservado vazio no `generateExample`. Definir `aliases: ['OLD_NAME']` aceita nomes de variáveis obsoletos como alternativas e emite um aviso (veja abaixo). Funções `validate(value, env)` personalizadas são executadas após a conversão e as verificações internas (inclusive sobre valores padrão), antes do `transform`. Os transforms são executados sobre os valores fornecidos, após a validação. Chaves opcionais ausentes são omitidas e os valores padrão são validados. A opção `choices` corresponde a strings, números ou booleanos já convertidos. Um valor JSON analisado pode corresponder a uma choice quando tem um desses três tipos. A entrada em string é aparada por padrão. Definir `trim: false` mantém os espaços em branco nos tipos semelhantes a string. Para `number` e `int`, espaços em torno de um valor numérico são aceitos de qualquer forma, mas um texto só com espaços é rejeitado por padrão e convertido para `0` com `trim: false`. A correspondência de booleanos sempre ignora os espaços ao redor. A opção `length` se aplica somente ao `hex`. As opções `pattern`, `minLength` e `maxLength` se aplicam somente a tipos com valor em string (`string`, `email`, `url`, `file`, `uuid`, `jwt`, `hex`, `ipv4`, `ipv6`, `semver`, `base64`, `host`) e são rejeitadas de antemão em qualquer outro tipo. Veja exemplos nas seções abaixo.
 
 ### Requisitos condicionais (`requiredIf`)
 
@@ -252,7 +253,7 @@ const env = validateEnv({
 });
 ```
 
-A verificação de `email` é pragmática (um `@`, uma parte local e um domínio não vazios, e um ponto no domínio), e não a RFC 5322 completa. O `pattern` recebe um `RegExp` ao qual um valor em string precisa corresponder (`string`, `email`, `url`, `file`, `uuid`, `hex`, `ipv4`, `ipv6`, `semver`, `base64`, `host`); ele é executado após a conversão e a verificação de `choices`, um erro de incompatibilidade nomeia o pattern que falhou, e usar `pattern` em um tipo que não é de string é rejeitado de antemão.
+A verificação de `email` é pragmática (um `@`, uma parte local e um domínio não vazios, e um ponto no domínio), e não a RFC 5322 completa. O `pattern` recebe um `RegExp` ao qual um valor em string precisa corresponder (`string`, `email`, `url`, `file`, `uuid`, `jwt`, `hex`, `ipv4`, `ipv6`, `semver`, `base64`, `host`); ele é executado após a conversão e a verificação de `choices`, um erro de incompatibilidade nomeia o pattern que falhou, e usar `pattern` em um tipo que não é de string é rejeitado de antemão.
 
 ### Tipo `int` e `min`/`max` — números inteiros e intervalos
 
@@ -274,18 +275,19 @@ const env = validateEnv({
 });
 ```
 
-O `json` analisa o valor com `JSON.parse` (objetos, arrays e primitivos voltam todos analisados); um JSON inválido é rejeitado com um erro nomeando a chave. Um `default` pode ser fornecido como um objeto já analisado. `minLength` e `maxLength` funcionam em tipos com valor em string (`string`, `email`, `url`, `file`, `uuid`, `hex`, `ipv4`, `ipv6`, `semver`, `base64`, `host`) e são rejeitados de antemão em qualquer outro tipo; qualquer um deles pode ser usado sozinho, e um valor curto ou longo demais é rejeitado com um erro nomeando o comprimento permitido. Eles se combinam com `pattern` (o comprimento é verificado primeiro, depois o pattern).
+O `json` analisa o valor com `JSON.parse` (objetos, arrays e primitivos voltam todos analisados); um JSON inválido é rejeitado com um erro nomeando a chave. Um `default` pode ser fornecido como um objeto já analisado. `minLength` e `maxLength` funcionam em tipos com valor em string (`string`, `email`, `url`, `file`, `uuid`, `jwt`, `hex`, `ipv4`, `ipv6`, `semver`, `base64`, `host`) e são rejeitados de antemão em qualquer outro tipo; qualquer um deles pode ser usado sozinho, e um valor curto ou longo demais é rejeitado com um erro nomeando o comprimento permitido. Eles se combinam com `pattern` (o comprimento é verificado primeiro, depois o pattern).
 
-### Tipos `uuid` e `hex` — IDs e strings hexadecimais
+### Tipos `uuid`, `jwt` e `hex` — IDs, tokens e strings hexadecimais
 
 ```js
 const env = validateEnv({
   TENANT_ID: { type: 'uuid', required: true },
+  AUTH_TOKEN: { type: 'jwt', required: true },
   API_HASH:  { type: 'hex', length: 64 },
 });
 ```
 
-O `uuid` aceita um UUID canônico (grupos hexadecimais `8-4-4-4-12`, em maiúsculas e minúsculas) e o retorna sem alterações; um valor malformado é rejeitado com um erro nomeando a chave. O `hex` aceita apenas strings hexadecimais (`deadBEEF42` passa, `0x1234` não); a opção opcional `length` fixa o tamanho exato em caracteres, para tokens e hashes de tamanho fixo.
+O `uuid` aceita um UUID canônico (grupos hexadecimais `8-4-4-4-12`, em maiúsculas e minúsculas) e o retorna sem alterações; um valor malformado é rejeitado com um erro nomeando a chave. O `jwt` aceita o formato de um JSON Web Token — exatamente três segmentos base64url (`header.payload.signature`) cujo cabeçalho e payload decodificam para objetos JSON — e o retorna sem alterações. É apenas uma verificação de formato: a assinatura nunca é verificada, então um token bem formado de qualquer emissor passa e um token truncado ou adulterado falha na inicialização em vez de falhar depois como um confuso `401` da API. O `hex` aceita apenas strings hexadecimais (`deadBEEF42` passa, `0x1234` não); a opção opcional `length` fixa o tamanho exato em caracteres, para tokens e hashes de tamanho fixo.
 
 ### Tipos `ipv4`, `semver` e `base64` — endereços de rede, versões e valores codificados
 

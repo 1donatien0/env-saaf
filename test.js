@@ -460,6 +460,7 @@ function assertDraft202012Schema(schema, path = '#', root = true) {
     email: { type: 'string', format: 'email' },
     json: {},
     uuid: { type: 'string', format: 'uuid' },
+    jwt: { type: 'string', pattern: '^[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+$' },
     hex: { type: 'string', pattern: '^[0-9a-fA-F]+$' },
     ipv4: { type: 'string', format: 'ipv4' },
     semver: {
@@ -2624,6 +2625,61 @@ assert.deepStrictEqual(
   assert.throws(() => validateEnv({ H: { type: 'hex', maxLength: 2 } }, { H: 'a1b2' }), /at most 2 characters/);
 }
 
+// Issue #471: 'jwt' type — JSON Web Token shape (three base64url segments,
+// header and payload decoding to JSON objects). Shape only: the signature
+// is never verified, and the value is returned unchanged.
+{
+  const TOKEN = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiaWF0IjoxNTE2MjM5MDIyfQ.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c';
+  const OTHER = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIyIiwibmFtZSI6IkFkYSIsImlhdCI6MTcwMDAwMDAwMH0.AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA';
+  const [head, payload, sig] = TOKEN.split('.');
+  // A well-formed token passes, returned unchanged; a different payload does too.
+  assert.strictEqual(validateEnv({ T: { type: 'jwt' } }, { T: TOKEN }).T, TOKEN);
+  assert.strictEqual(validateEnv({ T: { type: 'jwt' } }, { T: OTHER }).T, OTHER);
+  assert.throws(() => validateEnv({ T: { type: 'jwt', required: true } }, {}), EnvSaafError);
+  // Malformed tokens are rejected with an error naming the key and the format.
+  for (const bad of [
+    'not-a-jwt', // one segment
+    `${head}.${payload}`, // two segments
+    `${TOKEN}.extra`, // four segments
+    `${head}.${payload}.`, // empty signature
+    `.${payload}.${sig}`, // empty header
+    `${head}..${sig}`, // empty payload
+    `+${head.slice(1)}.${payload}.${sig}`, // '+' is not a base64url character
+    `bm90IGpzb24.${payload}.${sig}`, // header is not JSON ('not json')
+    `${head}.WzEsMl0.${sig}`, // payload is a JSON array, not an object ('[1,2]')
+    `${head}.Ingi.${sig}`, // payload is a JSON string, not an object ('"x"')
+    `${head}.MTIz.${sig}`, // payload is a JSON number, not an object ('123')
+  ]) {
+    assert.throws(() => validateEnv({ T: { type: 'jwt' } }, { T: bad }), /expected a valid JSON Web Token/);
+  }
+  // A non-string is coerced to text first, then fails the shape check —
+  // exactly like `uuid` (a number is never silently accepted as a token).
+  assert.throws(() => validateEnv({ T: { type: 'jwt' } }, { T: 42 }), /expected a valid JSON Web Token/);
+  // String-type workflows behave as for `uuid`: pattern, length bounds, sensitive.
+  assert.strictEqual(validateEnv({ T: { type: 'jwt', pattern: /^eyJ/ } }, { T: TOKEN }).T, TOKEN);
+  assert.throws(() => validateEnv({ T: { type: 'jwt', pattern: /^xxx/ } }, { T: TOKEN }), /expected to match/);
+  assert.strictEqual(validateEnv({ T: { type: 'jwt', minLength: 100 } }, { T: TOKEN }).T, TOKEN);
+  assert.throws(() => validateEnv({ T: { type: 'jwt', maxLength: 10 } }, { T: TOKEN }), /at most 10 characters/);
+  assert.throws(
+    () => validateEnv({ T: { type: 'jwt', sensitive: true } }, { T: 'not-a-jwt' }),
+    err => err instanceof EnvSaafError && !err.message.includes('not-a-jwt'),
+  );
+  // `generateExample` emits a token that validates against its own rule,
+  // and `toJsonSchema` renders the three-segment shape as a pattern.
+  const ex = generateExample({ T: { type: 'jwt' } });
+  assert.ok(ex.includes(`T=${TOKEN}`), ex);
+  assert.strictEqual(validateEnv({ T: { type: 'jwt' } }, parseEnvFile(ex)).T, TOKEN);
+  assert.deepStrictEqual(toJsonSchema({ T: { type: 'jwt' } }).properties.T,
+    { type: 'string', pattern: '^[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+$' });
+  // Arrays of tokens coerce each item.
+  assert.deepStrictEqual(
+    validateEnv({ T: { type: 'array', of: 'jwt' } }, { T: `${TOKEN},${OTHER}` }).T,
+    [TOKEN, OTHER],
+  );
+  const exArr = generateExample({ T: { type: 'array', of: 'jwt' } });
+  assert.strictEqual(validateEnv({ T: { type: 'array', of: 'jwt' } }, parseEnvFile(exArr)).T.length, 3);
+}
+
 // Issues #38 + #39 + #43: 'ipv4', 'semver' and 'base64' types. All three
 // return the value unchanged; a bad value is rejected naming the key.
 {
@@ -3682,6 +3738,7 @@ assert.deepStrictEqual(
     ['boolean', 'maybe', 'e.g. true/false, yes/no, on/off, 1/0, y/n'],
     ['url', 'not-a-url', 'e.g. https://example.com'],
     ['uuid', 'not-a-uuid', 'e.g. 550e8400-e29b-41d4-a716-446655440000'],
+    ['jwt', 'not-a-jwt', 'e.g. eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiaWF0IjoxNTE2MjM5MDIyfQ.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c'],
     ['hex', 'not-hex!', 'e.g. deadbeef'],
     ['ipv4', '999.1.1.1', 'e.g. 192.168.0.1'],
     ['semver', '1.2', 'e.g. 1.2.3'],
@@ -6221,7 +6278,7 @@ assert.deepStrictEqual(
   // valid against the rule — the init -> check loop stays clean. ('file' is
   // excluded: that type checks the path exists on disk, which a placeholder
   // in a fresh repo cannot guarantee.)
-  const scalarTypes = ['string', 'email', 'number', 'int', 'boolean', 'url', 'uuid', 'hex', 'ipv4', 'semver', 'base64', 'port', 'date', 'duration', 'host', 'json'];
+  const scalarTypes = ['string', 'email', 'number', 'int', 'boolean', 'url', 'uuid', 'jwt', 'hex', 'ipv4', 'semver', 'base64', 'port', 'date', 'duration', 'host', 'json'];
   for (const of of scalarTypes) {
     const ex = generateExample({ K: { type: 'array', of } });
     const line = ex.split('\n').find((l) => l.startsWith('K='));
@@ -6250,11 +6307,12 @@ assert.deepStrictEqual(
   const schema = {
     E: { type: 'email' }, U: { type: 'uuid' }, N: { type: 'number' },
     I: { type: 'int' }, B: { type: 'boolean' }, J: { type: 'json' },
-    B64: { type: 'base64' }, HX: { type: 'hex' },
+    B64: { type: 'base64' }, HX: { type: 'hex' }, T: { type: 'jwt' },
   };
   const ex = generateExample(schema);
   assert.ok(ex.includes('E=user@example.com'), ex);
   assert.ok(ex.includes('U=550e8400-e29b-41d4-a716-446655440000'), ex);
+  assert.ok(ex.includes('T=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiaWF0IjoxNTE2MjM5MDIyfQ.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c'), ex);
   assert.ok(ex.includes('N=3.14'), ex);
   assert.ok(ex.includes('I=42'), ex);
   assert.ok(ex.includes('B=true'), ex);
@@ -6271,6 +6329,7 @@ assert.deepStrictEqual(
   assert.deepStrictEqual(parsed.J, { key: 'value' });
   assert.strictEqual(parsed.B64, 'aGVsbG8=');
   assert.strictEqual(parsed.HX, 'deadbeef');
+  assert.strictEqual(parsed.T, 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiaWF0IjoxNTE2MjM5MDIyfQ.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c');
   // Placeholders for the already-correct types are unchanged.
   assert.ok(generateExample({ P: { type: 'port' } }).includes('P=3000'));
   assert.ok(generateExample({ A: { type: 'url' } }).includes('A=https://example.com'));

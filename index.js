@@ -75,6 +75,7 @@ const TYPE_EXAMPLES = {
   boolean: 'true/false, yes/no, on/off, 1/0, y/n',
   url: 'https://example.com',
   uuid: '550e8400-e29b-41d4-a716-446655440000',
+  jwt: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiaWF0IjoxNTE2MjM5MDIyfQ.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c',
   hex: 'deadbeef',
   ipv4: '192.168.0.1',
   ipv6: '::1',
@@ -94,7 +95,7 @@ const KNOWN_TYPES = new Set(Object.keys(TYPE_EXAMPLES));
 // (`pattern`, `minLength`, `maxLength`) are rejected up front on any other
 // type so they cannot sit silently ignored as dead config (issue #211).
 const STRING_TYPES = new Set([
-  'string', 'email', 'url', 'file', 'uuid', 'hex', 'ipv4', 'ipv6', 'semver', 'base64', 'host',
+  'string', 'email', 'url', 'file', 'uuid', 'jwt', 'hex', 'ipv4', 'ipv6', 'semver', 'base64', 'host',
 ]);
 const KNOWN_RULE_OPTIONS = new Set([
   'type',
@@ -890,6 +891,27 @@ function coerce(key, raw, type, trim = true, protocols, sensitive = false, of = 
       }
       return s;
     }
+    case 'jwt': {
+      // Issue #471: JSON Web Token shape only — exactly three base64url
+      // segments, and the header and payload must decode to JSON objects.
+      // The signature is never verified: a token that merely looks right
+      // still passes, so a truncated or mangled token fails here at boot
+      // instead of later as a confusing 401 from the API. The value is
+      // returned exactly as provided.
+      const s = String(v);
+      const parts = s.split('.');
+      const segmentsOk = parts.length === 3 && parts.every(p => /^[A-Za-z0-9_-]+$/.test(p));
+      const payloadsOk = segmentsOk && parts.slice(0, 2).every(p => {
+        try {
+          const decoded = JSON.parse(Buffer.from(p, 'base64url').toString('utf8'));
+          return decoded !== null && typeof decoded === 'object' && !Array.isArray(decoded);
+        } catch { return false; }
+      });
+      if (!segmentsOk || !payloadsOk) {
+        throw new Error(`${key}: expected a valid JSON Web Token (e.g. ${TYPE_EXAMPLES.jwt}), got "${shown}"`);
+      }
+      return s;
+    }
     case 'hex': {
       // Hex strings only: API tokens, colour codes, hashes. An empty
       // value never reaches here (it counts as missing), so '+' is right.
@@ -1165,8 +1187,8 @@ function verifyTransformedType(key, val, type, protocols, sensitive, of) {
       return val;
     }
     default:
-      // Remaining built-in types ('email', 'url', 'file', 'uuid', 'hex',
-      // 'ipv4', 'semver', 'base64', 'host') are string-valued: reject
+      // Remaining built-in types ('email', 'url', 'file', 'uuid', 'jwt',
+      // 'hex', 'ipv4', 'semver', 'base64', 'host') are string-valued: reject
       // non-strings before delegating to `coerce()` so e.g. `42` is never
       // silently stringified to `'42'`.
       if (typeof val !== 'string') {
@@ -1440,7 +1462,7 @@ function validateEnvCore(schema, env, options, valueSources) {
         }
       }
       // minLength/maxLength: allowed length for string values (string,
-      // email, url, file, uuid, hex, ipv4, semver, base64, host). Checked
+      // email, url, file, uuid, jwt, hex, ipv4, semver, base64, host). Checked
       // after coercion, before choices/pattern; the error names the allowed
       // length. Non-string types are rejected up front in validateSchema.
       if (typeof val === 'string' && (rule.minLength !== undefined || rule.maxLength !== undefined)) {
@@ -2704,6 +2726,7 @@ const ARRAY_ITEM_EXAMPLES = {
   boolean: ['true', 'false', 'true'],
   url: ['https://a.example', 'https://b.example', 'https://c.example'],
   uuid: ['550e8400-e29b-41d4-a716-446655440000', '6ba7b810-9dad-11d1-80b4-00c04fd430c8', '7c9e6679-7425-40de-944b-e07fc1f90ae7'],
+  jwt: ['eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiaWF0IjoxNTE2MjM5MDIyfQ.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c', 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIyIiwibmFtZSI6IkFkYSIsImlhdCI6MTcwMDAwMDAwMH0.AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA', 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIzIiwicm9sZSI6ImFkbWluIiwiaWF0IjoxNzAwMDAwMDAxfQ.AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA'],
   hex: ['deadbeef', 'cafebabe', '0123abcd'],
   ipv4: ['192.168.0.1', '10.0.0.1', '172.16.0.1'],
   ipv6: ['::1', '2001:db8::1', 'fe80::1%eth0'],
@@ -2960,6 +2983,7 @@ function scalarPlaceholder(rule, stringGrowth) {
     : type === 'date' ? '2026-01-31' : type === 'duration' ? '15m' : type === 'host' ? 'localhost'
     : type === 'file' ? './config.json'
     : type === 'email' ? 'user@example.com' : type === 'uuid' ? '550e8400-e29b-41d4-a716-446655440000'
+    : type === 'jwt' ? TYPE_EXAMPLES.jwt
     : type === 'number' ? '3.14' : type === 'int' ? '42' : type === 'bigint' ? '9007199254740993' : type === 'boolean' ? 'true'
     : type === 'json' ? '{"key":"value"}' : type === 'base64' ? 'aGVsbG8=' : type === 'hex' ? 'deadbeef'
     : 'your_value_here';
@@ -3112,6 +3136,7 @@ function jsonSchemaForScalar(type, protocols) {
     case 'date': return { type: 'string', anyOf: [{ format: 'date' }, { format: 'date-time' }] };
     case 'host': return { type: 'string', anyOf: [{ format: 'hostname' }, { format: 'ipv4' }, { format: 'ipv6' }] };
     case 'email': case 'uuid': case 'ipv4': case 'ipv6': return { type: 'string', format: type };
+    case 'jwt': return { type: 'string', pattern: '^[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+$' };
     case 'hex': return { type: 'string', pattern: '^[0-9a-fA-F]+$' };
     case 'semver': return { type: 'string', pattern: SEMVER_RE.source };
     case 'base64': return { type: 'string', pattern: BASE64_RE.source };
