@@ -822,6 +822,14 @@ assert.deepStrictEqual(
   scanCode('const env = process.env; const { A: renamed = 1, B } = env;'),
   ['A', 'B']);
 assert.deepStrictEqual(scanCode('const env = getEnv(); const { NOT_AN_ALIAS } = env;'), []);
+
+// Issue #459: destructuring process.env in a parameter default is a read.
+assert.deepStrictEqual(scanCode('function f({ A } = process.env) { return A; }'), ['A']);
+assert.deepStrictEqual(scanCode('const g = ({ B } = process.env) => B;'), ['B']);
+assert.deepStrictEqual(
+  scanCode('function f(x, { A: renamed = 1 } = process.env) { return renamed; }'),
+  ['A']);
+assert.deepStrictEqual(scanCode('function f({ C } = getConfig()) { return C; }'), []);
 assert.deepStrictEqual(diffEnv(['A', 'B'], ['A', 'C']), { usedNotDocumented: ['B'], documentedNotUsed: ['C'] });
 
 // Issue #221: assignment-shaped lines with invalid keys must not disappear.
