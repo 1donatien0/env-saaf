@@ -2248,6 +2248,26 @@ function collectEnvReads(text) {
       offset += part.length + 1;
     }
   }
+  // Issue #459: `function f({ A } = process.env)` and arrow-parameter defaults
+  // read env keys too. The `(`,` before the pattern keeps statement
+  // destructuring above from being counted twice.
+  const parameterDestructure = /(?<=[(,])\s*\{([^}]+)\}\s*=\s*(?:process\.env|import\.meta\.env)/g;
+  for (const m of codeView.matchAll(parameterDestructure)) {
+    const start = m.index + m[0].indexOf('{') + 1;
+    let offset = 0;
+    for (const part of m[1].split(',')) {
+      const name = part.split(':')[0].split('=')[0].trim();
+      if (/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) {
+        add(name, start + offset + part.indexOf(name));
+      }
+      if (part.trim().startsWith(':')) {
+        const original = src.slice(start + offset, start + offset + part.length);
+        const quoted = /^\s*(['"])([A-Za-z_][A-Za-z0-9_.-]*)\1\s*:/.exec(original);
+        if (quoted) add(quoted[2], start + offset + original.indexOf(quoted[2]));
+      }
+      offset += part.length + 1;
+    }
+  }
   const aliases = new Map();
   const trivia = /(?:\s|\/\*(?:[^*]|\*(?!\/))*\*\/|\/\/[^\r\n\u2028\u2029]*)*/y;
   const continuation = /(?!\+\+|--)(?:[.([+*\/%&|^?=<>-]|\x60|!=|(?:in|instanceof)\b)/y;
