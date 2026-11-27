@@ -1768,6 +1768,9 @@ function* loadEnvSteps(schema, options) {
   // Issue #350: remember the winning file path for each key under layering
   // (later files overwrite earlier ones). Ambient precedence is applied below.
   const fileSources = Object.create(null);
+  const stackRaw = {};
+  const stackQuoteOf = {};
+  const stackLineOf = Object.create(null);
   let foundAny = false;
   for (const filePath of fileList) {
     let fileText;
@@ -1787,12 +1790,21 @@ function* loadEnvSteps(schema, options) {
       continue;
     }
     foundAny = true;
-    const parsed = parseEnvFileWithSource(fileText, filePath);
-    for (const key of Object.keys(parsed)) {
-      fileEnv[key] = parsed[key];
+    // Issue #449: collect each file's raw values; a later file wins a key's
+    // value together with its quote style and line, so references are
+    // expanded once below, against the whole stack.
+    const { raw, quoteOf, seen } = collectEnvFile(fileText);
+    for (const key of Object.keys(raw)) {
+      stackRaw[key] = raw[key];
+      stackQuoteOf[key] = quoteOf[key];
+      stackLineOf[key] = seen.get(key);
       fileSources[key] = filePath;
     }
   }
+  // A reference reads the winning value across the files, then process.env,
+  // before the ambient merge below, so a single file expands as it always has.
+  const expanded = expandEnvValues(stackRaw, stackQuoteOf, (key) => stackLineOf[key], (key) => fileSources[key]);
+  for (const key of Object.keys(expanded)) fileEnv[key] = expanded[key];
   if (!foundAny) {
     // Issue #228: count required rules across groups too, under their full
     // env names, so a required DB_HOST is not missed when no file was found.
