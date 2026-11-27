@@ -769,13 +769,31 @@ function coerce(key, raw, type, trim = true, protocols, sensitive = false, of = 
   switch (type) {
     case 'string': return String(v);
     case 'email': {
-      // Pragmatic check, not full RFC 5322: one '@', a non-empty local
-      // part and domain, a dot in the domain, and no whitespace.
+      // Pragmatic check, not full RFC 5322 (issue #452): one '@', a
+      // 1-64 char local part with no leading/trailing/consecutive dots,
+      // a domain of 1-63 char labels (alphanumeric + hyphens, never
+      // starting or ending with a hyphen), total address at most 254
+      // chars, and no whitespace. IP-literal domains (a@[127.0.0.1])
+      // still pass, as do plus-addressing, subdomains and uppercase.
       const s = String(v);
       const at = s.indexOf('@');
-      if (at <= 0 || at !== s.lastIndexOf('@') || at === s.length - 1
-        || !s.slice(at + 1).includes('.') || s.slice(at + 1).startsWith('.')
-        || s.slice(at + 1).endsWith('.') || /\s/.test(s)) {
+      const local = s.slice(0, at);
+      const domain = s.slice(at + 1);
+      const badLocal = local.length < 1 || local.length > 64
+        || local.startsWith('.') || local.endsWith('.') || local.includes('..');
+      const badDomain = (() => {
+        if (domain.startsWith('[') && domain.endsWith(']')) {
+          const inner = domain.slice(1, -1);
+          const quad = inner.split('.');
+          if (quad.length === 4 && quad.every((n) => /^\d{1,3}$/.test(n) && Number(n) <= 255)) return false;
+          return !/^IPv6:[0-9A-Fa-f:]+$/.test(inner);
+        }
+        if (!domain.includes('.') || domain.startsWith('.') || domain.endsWith('.')) return true;
+        return domain.split('.').some((label) => label.length < 1 || label.length > 63
+          || !/^[A-Za-z0-9-]+$/.test(label) || label.startsWith('-') || label.endsWith('-'));
+      })();
+      if (s.length > 254 || at <= 0 || at !== s.lastIndexOf('@') || at === s.length - 1
+        || /\s/.test(s) || badLocal || badDomain) {
         throw new Error(`${key}: expected a valid email address (e.g. ${TYPE_EXAMPLES.email}), got "${shown}"`);
       }
       return s;

@@ -2195,6 +2195,22 @@ const layeredInterpolationTest = (async () => {
   for (const bad of ['not-an-email', 'a@b', '@b.co', 'a@.co', 'a@b.', 'a@@b.co', 'a b@c.co', 'a@c']) {
     assert.throws(() => validateEnv({ E: { type: 'email' } }, { E: bad }), /expected a valid email address/);
   }
+  // Issue #452: malformed addresses no mail system would route are rejected.
+  for (const bad of [
+    '.a@example.com', 'a.@example.com', 'a..b@example.com', 'a@example..com',
+    'a@-example.com', 'a@example-.com', 'a@exam_ple.com',
+    `${'a'.repeat(65)}@example.com`, `a@${'x'.repeat(64)}.com`, `a@${'x'.repeat(250)}.com`,
+    `${'a'.repeat(250)}@example.com`,
+  ]) {
+    assert.throws(() => validateEnv({ E: { type: 'email' } }, { E: bad }), /expected a valid email address/);
+  }
+  // ...while ordinary valid addresses keep passing, at the length limits.
+  for (const good of [
+    'a@[127.0.0.1]', 'A@EXAMPLE.COM', 'a+b@sub.example.co.uk',
+    `${'a'.repeat(64)}@example.com`, `a@${'x'.repeat(63)}.com`,
+  ]) {
+    assert.strictEqual(validateEnv({ E: { type: 'email' } }, { E: good }).E, good);
+  }
   // pattern: a slug and a prefixed key; the mismatch error names the pattern
   const p = validateEnv({
     SLUG: { type: 'string', pattern: /^[a-z0-9-]+$/ },

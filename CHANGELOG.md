@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Fixed: the `email` type now rejects malformed addresses no mail system would route — a local part starting, ending or doubling a dot, an empty or hyphen-edged domain label, and parts over their length limits (local 64, label 63, total 254 chars). Plus-addressing, subdomains, uppercase and IP-literal domains (`a@[127.0.0.1]`) still pass (fixes #452).
+
 - Fixed: `scanCode` now reports keys destructured from `process.env` in function parameter defaults, including renames and defaults (fixes #459).
 
 - Fixed: `generateExample` now uses usable allowed URL schemes for scalar `url` rules and `array` URL items, preferring HTTPS when allowed and otherwise using the first usable scheme; invalid or empty allowlists fall back to HTTPS (fixes #454).
