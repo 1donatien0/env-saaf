@@ -765,6 +765,13 @@ assert.deepStrictEqual(scanCode("const p = process; p.env['BRACKET']; p.env[`TIC
 // Only real declarations from `process` count, and reads before the alias do not.
 assert.deepStrictEqual(scanCode('const p = getProc(); p.env.NOT_AN_ALIAS;'), []);
 assert.deepStrictEqual(scanCode('p.env.TOO_EARLY; const p = process;'), []);
+
+// Issue #456: destructuring from a process.env alias reports source keys.
+assert.deepStrictEqual(scanCode('const env = process.env; const { A } = env;'), ['A']);
+assert.deepStrictEqual(
+  scanCode('const env = process.env; const { A: renamed = 1, B } = env;'),
+  ['A', 'B']);
+assert.deepStrictEqual(scanCode('const env = getEnv(); const { NOT_AN_ALIAS } = env;'), []);
 assert.deepStrictEqual(diffEnv(['A', 'B'], ['A', 'C']), { usedNotDocumented: ['B'], documentedNotUsed: ['C'] });
 
 // Issue #221: assignment-shaped lines with invalid keys must not disappear.
