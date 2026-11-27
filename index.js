@@ -65,6 +65,9 @@ class EnvSaafError extends Error {
 // Format examples per built-in type, kept in one place so every type's error
 // message shows an example and schema validation cannot drift apart from
 // coercion when a new type is added (issue #58).
+// Issue #507: URL schemes whose host must be a DNS name or an IP address.
+const WEB_URL_SCHEMES = new Set(['http:', 'https:', 'ws:', 'wss:', 'ftp:']);
+
 const TYPE_EXAMPLES = {
   string: 'hello',
   email: 'user@example.com',
@@ -875,6 +878,16 @@ function coerce(key, raw, type, trim = true, protocols, sensitive = false, of = 
       let parsed;
       try { parsed = new URL(String(v)); }
       catch { throw new Error(`${key}: expected a valid URL (e.g. ${TYPE_EXAMPLES.url}), got "${shown}"`); }
+      // Issue #507: the WHATWG parser lets characters such as ',' into the
+      // hostname of a web URL, so two URLs joined by a comma passed. For these
+      // schemes the host is a DNS name (or a bracketed IPv6 address): allow
+      // only letters, digits, '.', '-' and '_' (accepted today, used by
+      // container service names). Other schemes keep their own host syntax,
+      // e.g. a multi-host mongodb://h1,h2/db connection string.
+      if (WEB_URL_SCHEMES.has(parsed.protocol) && !/^\[.*\]$/.test(parsed.hostname)
+          && !/^[A-Za-z0-9._-]*$/.test(parsed.hostname)) {
+        throw new Error(`${key}: expected a valid URL (e.g. ${TYPE_EXAMPLES.url}), got "${shown}"`);
+      }
       // Issue #50: `protocols` allowlists the schemes (e.g. ['https']).
       // Schemes compare case-insensitively, with or without a trailing ':'.
       if (Array.isArray(protocols)) {

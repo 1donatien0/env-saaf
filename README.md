@@ -79,7 +79,7 @@ Environment inputs are strings. Output below is before an optional `transform`.
 | `int` | Plain integer literal within the safe-integer range: optional sign + digits, e.g. `42`, `-3`, `007`. Decimal and scientific spellings (`1.0`, `1e3`) are rejected, as are radix prefixes | `number` | `trim`, `min`, `max` |
 | `bigint` | Plain integer literal: optional sign + digits, e.g. `9007199254740993`, `-3`, `007`. Decimal and scientific spellings (`1.0`, `1e3`) are rejected, as are radix prefixes. Values above `Number.MAX_SAFE_INTEGER` keep full precision | `bigint` | `trim`, `min`, `max` (bigint, integer or integer string) |
 | `boolean` | Case-insensitive `true/false`, `1/0`, `yes/no`, `on/off`, `y/n` | `boolean` | None |
-| `url` | Absolute URL accepted by `new URL()`, without normalization | `string` | `trim`, `minLength`, `maxLength`, `pattern`, `protocols` |
+| `url` | Absolute URL accepted by `new URL()`, without normalization; for `http(s)`, `ws(s)` and `ftp` the hostname must be a DNS name (letters, digits, `.`, `-`, `_`) or an IP address | `string` | `trim`, `minLength`, `maxLength`, `pattern`, `protocols` |
 | `file` | Path to an existing, readable regular file. Relative paths use the process working directory. | `string` | `trim`, `minLength`, `maxLength`, `pattern` |
 | `port` | Plain integer literal from 0 to 65535. Decimal and scientific spellings (`8080.0`, `1e3`) are rejected, as are radix prefixes | `number` | `min`, `max` |
 | `email` | One `@`, local part 1–64 chars with no leading/trailing/consecutive dots, domain labels 1–63 chars (letters, digits, hyphens, never leading/trailing hyphen), total ≤ 254 chars, no whitespace | `string` | `trim`, `minLength`, `maxLength`, `pattern` |
