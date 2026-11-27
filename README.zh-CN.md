@@ -853,6 +853,7 @@ const env = loadEnv({
 - **v1.2.0** — `email` 类型和 `pattern` 选项、CLI `--json` 输出、每个键的 `transform`、`${VAR}` 插值、多文件 `loadEnv`、多行带引号的值、CLI `--no-color`、带 `min`/`max` 的 `int` 类型、README 实用示例。
 - **v1.5.0** — `duration` 和 `host` 类型、`date` 和 `file` 类型、非抛出模式、`${VAR:-default}` 插值、CLI `--schema` 校验、`.env` 文件中的重复键和裸行错误、`scan`/`check`/`example` 的目录校验、Express 示例、README 类型参考表。
 - **v1.6.0** — `bigint` 与 `ipv6` 类型、分组（嵌套）模式、带逐项强制转换的 `array` 类型、`requiredIf`/`aliases`/`conflictsWith`/`deprecated` 规则选项、`loadEnvAsync`、`toJsonSchema` 导出、CLI `init` 与 `print` 命令、`check --fix`、`check` 中的真实密钥检测、单文件 `scan`/`check`、基于属性的模糊测试——迄今最大的版本，包含许多外部贡献。
+- **v1.7.0** — 用于校验 JSON Web Token 结构的 `jwt` 类型、更严格的模式（非数组 `choices` 与 `hex` 之外的 `length` 会被预先拒绝）、跨文件的分层 `loadEnv` 插值、`scanCode` 别名解构、非字符串密钥掩码、`int`/`number` 的不安全整数拒绝、`print` 中的密钥掩码，以及空项目 `scan --json` 测试的修复。
 - **v1.4.0** — `ipv4`、`semver` 和 `base64` 类型、CLI `check` 比较真正的 `.env` 键、CLI `--version`、`example --write`、`scan` 的 UNUSED 警告、`check` 对任何结果都以 1 退出、`scanCode` 忽略注释/字符串、默认值像所提供的值一样被校验、子命令之后的 `--help`、`parseEnvFile` 中的转义引号、`port` 接受 0、GitHub Actions 工作流文档。
 - **v1.3.0** — `json`、`uuid` 和 `hex` 类型、`minLength`/`maxLength` 和 `hex` 的 `length` 选项、`trim: false`、`loadEnv` 返回类型推断、为密钥键更安全地生成 `.env.example`、`assign: true` 的 JSON 修复。
 

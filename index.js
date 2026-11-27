@@ -75,6 +75,7 @@ const TYPE_EXAMPLES = {
   boolean: 'true/false, yes/no, on/off, 1/0, y/n',
   url: 'https://example.com',
   uuid: '550e8400-e29b-41d4-a716-446655440000',
+  jwt: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiaWF0IjoxNTE2MjM5MDIyfQ.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c',
   hex: 'deadbeef',
   ipv4: '192.168.0.1',
   ipv6: '::1',
@@ -94,7 +95,7 @@ const KNOWN_TYPES = new Set(Object.keys(TYPE_EXAMPLES));
 // (`pattern`, `minLength`, `maxLength`) are rejected up front on any other
 // type so they cannot sit silently ignored as dead config (issue #211).
 const STRING_TYPES = new Set([
-  'string', 'email', 'url', 'file', 'uuid', 'hex', 'ipv4', 'ipv6', 'semver', 'base64', 'host',
+  'string', 'email', 'url', 'file', 'uuid', 'jwt', 'hex', 'ipv4', 'ipv6', 'semver', 'base64', 'host',
 ]);
 const KNOWN_RULE_OPTIONS = new Set([
   'type',
@@ -393,6 +394,12 @@ function validateSchemaRules(schema, warn, patterns = new Map(), prefix = '', an
       if (effectiveType !== 'url' && effectiveType !== 'array' && rule.protocols !== undefined) {
         errors.push(`${key}: "protocols" only applies to type 'url' (cannot be used with type '${effectiveType}')`);
       }
+      // Issue #453: `length` is only read for `hex` rules (the exact
+      // character count for fixed-size tokens and hashes); anywhere else
+      // it is dead config in the same way `protocols` is off `url`.
+      if (effectiveType !== 'hex' && rule.length !== undefined) {
+        errors.push(`${key}: "length" only applies to type 'hex' (cannot be used with type '${effectiveType}')`);
+      }
     }
     const pattern = rule.pattern;
     if (pattern !== undefined) compilePattern(pattern, key, errors, patterns);
@@ -497,8 +504,11 @@ function validateSchemaRules(schema, warn, patterns = new Map(), prefix = '', an
       errors.push(`${key}: "length" must be a non-negative integer`);
     }
     // Issue #220: an empty `choices` list can never match any value — it is
-    // a schema bug, not a value that fails validation.
-    if (rule.choices !== undefined && Array.isArray(rule.choices) && rule.choices.length === 0) {
+    // a schema bug, not a value that fails validation. Issue #450: a
+    // non-array `choices` is the same class of bug — a string would degrade
+    // to substring matching and a number would crash with a raw TypeError
+    // at runtime, so reject it here with the same message.
+    if (rule.choices !== undefined && (!Array.isArray(rule.choices) || rule.choices.length === 0)) {
       errors.push(`${key}: "choices" must be a non-empty array`);
     }
     // Issue #305: a choice is compared against the *coerced* value
@@ -881,6 +891,27 @@ function coerce(key, raw, type, trim = true, protocols, sensitive = false, of = 
       }
       return s;
     }
+    case 'jwt': {
+      // Issue #471: JSON Web Token shape only — exactly three base64url
+      // segments, and the header and payload must decode to JSON objects.
+      // The signature is never verified: a token that merely looks right
+      // still passes, so a truncated or mangled token fails here at boot
+      // instead of later as a confusing 401 from the API. The value is
+      // returned exactly as provided.
+      const s = String(v);
+      const parts = s.split('.');
+      const segmentsOk = parts.length === 3 && parts.every(p => /^[A-Za-z0-9_-]+$/.test(p));
+      const payloadsOk = segmentsOk && parts.slice(0, 2).every(p => {
+        try {
+          const decoded = JSON.parse(Buffer.from(p, 'base64url').toString('utf8'));
+          return decoded !== null && typeof decoded === 'object' && !Array.isArray(decoded);
+        } catch { return false; }
+      });
+      if (!segmentsOk || !payloadsOk) {
+        throw new Error(`${key}: expected a valid JSON Web Token (e.g. ${TYPE_EXAMPLES.jwt}), got "${shown}"`);
+      }
+      return s;
+    }
     case 'hex': {
       // Hex strings only: API tokens, colour codes, hashes. An empty
       // value never reaches here (it counts as missing), so '+' is right.
@@ -1156,8 +1187,8 @@ function verifyTransformedType(key, val, type, protocols, sensitive, of) {
       return val;
     }
     default:
-      // Remaining built-in types ('email', 'url', 'file', 'uuid', 'hex',
-      // 'ipv4', 'semver', 'base64', 'host') are string-valued: reject
+      // Remaining built-in types ('email', 'url', 'file', 'uuid', 'jwt',
+      // 'hex', 'ipv4', 'semver', 'base64', 'host') are string-valued: reject
       // non-strings before delegating to `coerce()` so e.g. `42` is never
       // silently stringified to `'42'`.
       if (typeof val !== 'string') {
@@ -1388,7 +1419,10 @@ function validateEnvCore(schema, env, options, valueSources) {
         try { if (rule.max !== undefined) hi = coerce(key, rule.max, 'date'); } catch (_) {}
         const t = val.getTime();
         if ((lo !== null && t < lo.getTime()) || (hi !== null && t > hi.getTime())) {
-          const boundText = (b) => (b instanceof Date ? b.toISOString().slice(0, 10) : String(b));
+          // A Date bound is written like toJsonSchema's `$comment` (issue #497): cut
+          // to its day only at UTC midnight, so the message never names a day the
+          // rejected value is on. A string bound is shown as the rule wrote it.
+          const boundText = (b) => (b instanceof Date ? dateBoundText(b) : String(b));
           const range = lo !== null && hi !== null ? `between ${boundText(rule.min)} and ${boundText(rule.max)}`
             : lo !== null ? `on or after ${boundText(rule.min)}` : `on or before ${boundText(rule.max)}`;
           pushErr(`${key}: expected a date ${range}, got "${shown}"`, valueSource());
@@ -1431,7 +1465,7 @@ function validateEnvCore(schema, env, options, valueSources) {
         }
       }
       // minLength/maxLength: allowed length for string values (string,
-      // email, url, file, uuid, hex, ipv4, semver, base64, host). Checked
+      // email, url, file, uuid, jwt, hex, ipv4, semver, base64, host). Checked
       // after coercion, before choices/pattern; the error names the allowed
       // length. Non-string types are rejected up front in validateSchema.
       if (typeof val === 'string' && (rule.minLength !== undefined || rule.maxLength !== undefined)) {
@@ -1768,6 +1802,9 @@ function* loadEnvSteps(schema, options) {
   // Issue #350: remember the winning file path for each key under layering
   // (later files overwrite earlier ones). Ambient precedence is applied below.
   const fileSources = Object.create(null);
+  const stackRaw = {};
+  const stackQuoteOf = {};
+  const stackLineOf = Object.create(null);
   let foundAny = false;
   for (const filePath of fileList) {
     let fileText;
@@ -1787,12 +1824,21 @@ function* loadEnvSteps(schema, options) {
       continue;
     }
     foundAny = true;
-    const parsed = parseEnvFileWithSource(fileText, filePath);
-    for (const key of Object.keys(parsed)) {
-      fileEnv[key] = parsed[key];
+    // Issue #449: collect each file's raw values; a later file wins a key's
+    // value together with its quote style and line, so references are
+    // expanded once below, against the whole stack.
+    const { raw, quoteOf, seen } = collectEnvFile(fileText);
+    for (const key of Object.keys(raw)) {
+      stackRaw[key] = raw[key];
+      stackQuoteOf[key] = quoteOf[key];
+      stackLineOf[key] = seen.get(key);
       fileSources[key] = filePath;
     }
   }
+  // A reference reads the winning value across the files, then process.env,
+  // before the ambient merge below, so a single file expands as it always has.
+  const expanded = expandEnvValues(stackRaw, stackQuoteOf, (key) => stackLineOf[key], (key) => fileSources[key]);
+  for (const key of Object.keys(expanded)) fileEnv[key] = expanded[key];
   if (!foundAny) {
     // Issue #228: count required rules across groups too, under their full
     // env names, so a required DB_HOST is not missed when no file was found.
@@ -1887,6 +1933,16 @@ function parseEnvFile(text) {
 }
 
 function parseEnvFileWithSource(text, sourceFile) {
+  const { raw, quoteOf, seen } = collectEnvFile(text);
+  return expandEnvValues(raw, quoteOf, (key) => seen.get(key), () => sourceFile);
+}
+
+// Read one .env text into raw values, without expanding `${...}` references:
+// quotes are removed, comments stripped, multiline values joined and the
+// double-quoted escapes applied. `quoteOf` keeps each key's quote style (a
+// single-quoted value is never expanded) and `seen` its line number. loadEnv
+// collects every file this way and expands once on the merged stack (#449).
+function collectEnvFile(text) {
   // A file path passed by mistake (e.g. parseEnvFile('.env')) used to silently
   // return {} because no line matched KEY=VALUE. Detect that confusion: a
   // single-line string with no '=' that looks like a path is almost certainly
@@ -1956,6 +2012,13 @@ function parseEnvFileWithSource(text, sourceFile) {
     raw[key] = val;
     quoteOf[key] = quote;
   }
+  return { raw, quoteOf, seen };
+}
+
+// Expand `${...}` references in collected values. A reference reads `raw`
+// first, then process.env. `lineOf(key)` and `sourceOf(key)` give the line and
+// file of the key whose value holds the reference, for `${X:?message}` errors.
+function expandEnvValues(raw, quoteOf, lineOf, sourceOf) {
   // Interpolation uses file values before process.env. Keep escaped references
   // protected until all expansion rounds are complete.
   const ESC = String.fromCharCode(92) + '${';
@@ -2004,9 +2067,10 @@ function parseEnvFileWithSource(text, sourceFile) {
           if (missing) {
             const detail = expandValue(operand, remaining, self).split(PH).join('${')
               || (colon ? 'is unset or empty' : 'is unset');
+            const sourceFile = sourceOf(self);
             const err = new Error(sourceFile !== undefined
-              ? `env-saaf: ${self} (from ${sourceFile}) at line ${seen.get(self)}: ${name}: ${detail}`
-              : `env-saaf: ${self} at line ${seen.get(self)}: ${name}: ${detail}`);
+              ? `env-saaf: ${self} (from ${sourceFile}) at line ${lineOf(self)}: ${name}: ${detail}`
+              : `env-saaf: ${self} at line ${lineOf(self)}: ${name}: ${detail}`);
             if (sourceFile !== undefined) err.source = sourceFile;
             throw err;
           }
@@ -2359,6 +2423,29 @@ function collectEnvReads(text) {
       if (codeView[previous] === '.' && codeView.slice(previous - 2, previous + 1) !== '...') continue;
       add(m[2] ?? m[4], m.index);
     }
+    // Issue #456: destructuring from a process.env alias is the same read as
+    // destructuring from process.env directly. Renames, defaults and rest
+    // follow the same extraction rules as the direct destructure above.
+    for (const [name, declaredAt] of aliases) {
+      const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const aliasDestructure = new RegExp(
+        `(?:const|let|var)\\s*\\{([^}]+)\\}\\s*=\\s*${escaped}(?![$\\p{ID_Continue}])`, 'gu');
+      for (const m of codeView.matchAll(aliasDestructure)) {
+        if (declaredAt > m.index) continue;
+        const start = m.index + m[0].indexOf('{') + 1;
+        let offset = 0;
+        for (const part of m[1].split(',')) {
+          const key = part.split(':')[0].split('=')[0].trim();
+          if (/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) add(key, start + offset + part.indexOf(key));
+          if (part.trim().startsWith(':')) {
+            const original = src.slice(start + offset, start + offset + part.length);
+            const quoted = /^\s*(['"])([A-Za-z_][A-Za-z0-9_.-]*)\1\s*:/.exec(original);
+            if (quoted) add(quoted[2], start + offset + original.indexOf(quoted[2]));
+          }
+          offset += part.length + 1;
+        }
+      }
+    }
   }
   if (processObjectAliases.size) {
     for (const [name, declaredAt] of processObjectAliases) {
@@ -2662,6 +2749,7 @@ const ARRAY_ITEM_EXAMPLES = {
   boolean: ['true', 'false', 'true'],
   url: ['https://a.example', 'https://b.example', 'https://c.example'],
   uuid: ['550e8400-e29b-41d4-a716-446655440000', '6ba7b810-9dad-11d1-80b4-00c04fd430c8', '7c9e6679-7425-40de-944b-e07fc1f90ae7'],
+  jwt: ['eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiaWF0IjoxNTE2MjM5MDIyfQ.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c', 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIyIiwibmFtZSI6IkFkYSIsImlhdCI6MTcwMDAwMDAwMH0.AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA', 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIzIiwicm9sZSI6ImFkbWluIiwiaWF0IjoxNzAwMDAwMDAxfQ.AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA'],
   hex: ['deadbeef', 'cafebabe', '0123abcd'],
   ipv4: ['192.168.0.1', '10.0.0.1', '172.16.0.1'],
   ipv6: ['::1', '2001:db8::1', 'fe80::1%eth0'],
@@ -2753,6 +2841,14 @@ function durationArrayPlaceholder(rule, separator) {
 }
 
 /** Placeholder for an `array` rule: example items of the `of` type (or the rule's `choices`), sized to fit minItems/maxItems, joined by `separator`. */
+function urlPlaceholder(protocols, hostname = 'example.com') {
+  const usable = Array.isArray(protocols)
+    ? protocols.filter(p => typeof p === 'string' && /^[a-z][a-z0-9+.-]*:?$/i.test(p))
+      .map(p => p.replace(/:$/, '').toLowerCase()) : [];
+  const protocol = usable.includes('https') ? 'https' : (usable[0] ?? 'https');
+  return `${protocol}://${hostname}`;
+}
+
 function arrayPlaceholder(rule) {
   const separator = rule.separator || ',';
   if (rule.of === 'duration' && (rule.min !== undefined || rule.max !== undefined)) {
@@ -2768,6 +2864,8 @@ function arrayPlaceholder(rule) {
     const strings = rule.choices.map(choice => String(exampleNumber(choice, rule.of)));
     const usable = [...new Set(strings.filter(s => !s.includes(separator)))];
     examples = usable.length ? usable : [...new Set(strings)];
+  } else if (rule.of === 'url') {
+    examples = ['a', 'b', 'c'].map(host => urlPlaceholder(rule.protocols, `${host}.example`));
   } else {
     examples = ARRAY_ITEM_EXAMPLES[rule.of || 'string'] || ARRAY_ITEM_EXAMPLES.string;
   }
@@ -2913,11 +3011,12 @@ function formatDuration(ms) {
  * whose './config.json' path the user must create. */
 function scalarPlaceholder(rule, stringGrowth) {
   const type = rule.type === undefined ? 'string' : rule.type;
-  const placeholder = type === 'port' ? '3000' : type === 'url' ? 'https://example.com'
+  const placeholder = type === 'port' ? '3000' : type === 'url' ? urlPlaceholder(rule.protocols)
     : type === 'ipv4' ? '192.168.0.1' : type === 'ipv6' ? '::1' : type === 'semver' ? '1.0.0'
     : type === 'date' ? '2026-01-31' : type === 'duration' ? '15m' : type === 'host' ? 'localhost'
     : type === 'file' ? './config.json'
     : type === 'email' ? 'user@example.com' : type === 'uuid' ? '550e8400-e29b-41d4-a716-446655440000'
+    : type === 'jwt' ? TYPE_EXAMPLES.jwt
     : type === 'number' ? '3.14' : type === 'int' ? '42' : type === 'bigint' ? '9007199254740993' : type === 'boolean' ? 'true'
     : type === 'json' ? '{"key":"value"}' : type === 'base64' ? 'aGVsbG8=' : type === 'hex' ? 'deadbeef'
     : 'your_value_here';
@@ -3009,7 +3108,10 @@ function generateExample(schema) {
     if (rule === null || typeof rule !== 'object' || Array.isArray(rule)) rule = {};
     // Issue #206: note aliases and requiredIf in the comment, so the
     // generated file documents the fallbacks and conditions a reader needs.
-    let comment = `# type: ${rule.type || 'string'}${rule.required ? ', required' : ''}${rule.choices ? ', one of: ' + rule.choices.join('|') : ''}`;
+    // Issue #450: `generateExample` does not validate the schema first, so
+    // a non-array `choices` must not crash the comment builder — only an
+    // actual array is listed.
+    let comment = `# type: ${rule.type || 'string'}${rule.required ? ', required' : ''}${Array.isArray(rule.choices) && rule.choices.length ? ', one of: ' + rule.choices.join('|') : ''}`;
     // Issue #343: the rule's own text leads the comment a reader sees.
     if (typeof rule.description === 'string' && rule.description.trim() !== '') {
       comment = `# ${rule.description.trim()}; ${comment.slice(2)}`;
@@ -3067,6 +3169,7 @@ function jsonSchemaForScalar(type, protocols) {
     case 'date': return { type: 'string', anyOf: [{ format: 'date' }, { format: 'date-time' }] };
     case 'host': return { type: 'string', anyOf: [{ format: 'hostname' }, { format: 'ipv4' }, { format: 'ipv6' }] };
     case 'email': case 'uuid': case 'ipv4': case 'ipv6': return { type: 'string', format: type };
+    case 'jwt': return { type: 'string', pattern: '^[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+$' };
     case 'hex': return { type: 'string', pattern: '^[0-9a-fA-F]+$' };
     case 'semver': return { type: 'string', pattern: SEMVER_RE.source };
     case 'base64': return { type: 'string', pattern: BASE64_RE.source };
@@ -3145,6 +3248,28 @@ function jsonSchemaDefault(key, rule, type) {
   }
 }
 
+// A Date bound written in UTC: its day when it falls on midnight, the full
+// instant otherwise. Shared by toJsonSchema's `$comment` and validateEnv's
+// range error, so both show a bound the same way (issues #482 and #497).
+function dateBoundText(bound) {
+  const iso = Date.prototype.toISOString.call(bound);
+  // Cut at the T, not at a fixed width: years past 9999 or before 0 are written
+  // with six digits and a sign (+010000-01-01T…).
+  return iso.endsWith('T00:00:00.000Z') ? iso.slice(0, iso.indexOf('T')) : iso;
+}
+
+// A `date` bound as the rule wrote it, for the `$comment` of toJsonSchema. A
+// Date object goes through dateBoundText. A date-time without an offset is local
+// time, so it is not written down, the same way such defaults are skipped
+// (jsonSchemaDefault).
+function jsonSchemaDateBound(bound) {
+  if (bound === undefined) return undefined;
+  if (bound instanceof Date) return dateBoundText(bound);
+  const text = String(bound);
+  if (text.includes('T') && !/(?:Z|[+-]\d{2}:?\d{2})$/.test(text)) return undefined;
+  return text;
+}
+
 /** Describe coerced values as JSON Schema, without reading the environment. */
 // Convert one rule to its JSON Schema property, pushing `key` onto `required`
 // when the rule demands it. A group rule nests its inner rules as one object
@@ -3174,6 +3299,19 @@ function jsonSchemaForRule(key, rule, required) {
     if (rule.unique === true) property.uniqueItems = true;
   } else {
     property = jsonSchemaForScalar(type, rule.protocols);
+  }
+  // Issue #482: JSON Schema has no keyword for comparing dates, so `date`
+  // bounds travel as a `$comment` next to the `anyOf`. It is an annotation
+  // only (Ajv's strict mode accepts it, unlike a custom `x-` keyword);
+  // validateEnv stays the only place that enforces them.
+  if (type === 'date') {
+    const bounds = [['min', rule.min], ['max', rule.max]]
+      .map(([name, bound]) => [name, jsonSchemaDateBound(bound)])
+      .filter(([, text]) => text !== undefined)
+      .map(([name, text]) => `${name} ${text}`);
+    if (bounds.length) {
+      property.$comment = `env-saaf bounds (inclusive, enforced by validateEnv only): ${bounds.join(', ')}`;
+    }
   }
   // JSON Schema numerical bounds also apply to numbers in an otherwise unconstrained `json` rule.
   if (type === 'json' || property.type === 'number' || property.type === 'integer') {
@@ -3208,6 +3346,12 @@ function jsonSchemaForRule(key, rule, required) {
     if (value !== undefined) property.default = value;
   }
   if (rule.sensitive === true) property.writeOnly = true;
+  // Issue #464: JSON Schema 2020-12 has a boolean `deprecated` keyword. Both
+  // the boolean and message-string forms of the env-saaf option mean the same
+  // thing to a schema consumer, so emit the keyword without the message.
+  if (rule.deprecated === true || typeof rule.deprecated === 'string') {
+    property.deprecated = true;
+  }
   if (rule.required) required.push(key);
   return property;
 }

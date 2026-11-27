@@ -36,6 +36,55 @@ const { loadEnv, validateEnv, validateSchema, EnvSaafError, parseEnvFile, scanCo
   assert.deepStrictEqual(loadEnv(portSchema, { paths: [], env: nullProtoEnv }), { PORT: 8000 });
 }
 
+// Issue #454: generated URL examples honor protocol allowlists, including array items.
+{
+  for (const protocol of ['wss', 'ftp']) {
+    const schema = { A: { type: 'url', protocols: [protocol] } };
+    const generated = parseEnvFile(generateExample(schema));
+    assert.strictEqual(generated.A, `${protocol}://example.com`);
+    assert.strictEqual(validateEnv(schema, generated).A, generated.A);
+
+    const arraySchema = { A: { type: 'array', of: 'url', protocols: [protocol] } };
+    const generatedArray = parseEnvFile(generateExample(arraySchema));
+    const items = generatedArray.A.split(',');
+    assert.strictEqual(items.length, 3);
+    assert.ok(items.every(value => value.startsWith(`${protocol}://`)), generatedArray.A);
+    assert.deepStrictEqual(validateEnv(arraySchema, generatedArray).A, items);
+  }
+
+  const invalidProtocolSchema = { A: { type: 'url', protocols: ['bad!'] } };
+  assert.strictEqual(parseEnvFile(generateExample(invalidProtocolSchema)).A, 'https://example.com');
+
+  const preferHttpsSchema = { A: { type: 'url', protocols: ['http', 'https'] } };
+  assert.strictEqual(parseEnvFile(generateExample(preferHttpsSchema)).A, 'https://example.com');
+
+  const preferHttpsArraySchema = { A: { type: 'array', of: 'url', protocols: ['http', 'https'] } };
+  const preferHttpsArray = parseEnvFile(generateExample(preferHttpsArraySchema)).A.split(',');
+  assert.strictEqual(preferHttpsArray.length, 3);
+  assert.ok(preferHttpsArray.every(value => value.startsWith('https://')), preferHttpsArray.join(','));
+
+  const invalidProtocolArraySchema = { A: { type: 'array', of: 'url', protocols: ['bad!'] } };
+  const invalidProtocolArray = parseEnvFile(generateExample(invalidProtocolArraySchema)).A.split(',');
+  assert.strictEqual(invalidProtocolArray.length, 3);
+  assert.ok(invalidProtocolArray.every(value => value.startsWith('https://')), invalidProtocolArray.join(','));
+
+  const firstAllowedSchema = { A: { type: 'url', protocols: ['wss', 'ftp'] } };
+  const firstAllowed = parseEnvFile(generateExample(firstAllowedSchema));
+  assert.strictEqual(firstAllowed.A, 'wss://example.com');
+  assert.strictEqual(validateEnv(firstAllowedSchema, firstAllowed).A, firstAllowed.A);
+
+  const defaultSchema = { A: { type: 'url' } };
+  const defaultExample = parseEnvFile(generateExample(defaultSchema));
+  assert.strictEqual(defaultExample.A, 'https://example.com');
+  assert.strictEqual(validateEnv(defaultSchema, defaultExample).A, defaultExample.A);
+
+  const defaultArraySchema = { A: { type: 'array', of: 'url' } };
+  const defaultArrayExample = parseEnvFile(generateExample(defaultArraySchema));
+  const defaultItems = defaultArrayExample.A.split(',');
+  assert.ok(defaultItems.every(value => value.startsWith('https://')), defaultArrayExample.A);
+  assert.deepStrictEqual(validateEnv(defaultArraySchema, defaultArrayExample).A, defaultItems);
+}
+
 // Issue #439: whitespace-only values follow the same unset and trimming rules as empty strings.
 {
   const required = { NAME: { type: 'string', required: true } };
@@ -460,6 +509,7 @@ function assertDraft202012Schema(schema, path = '#', root = true) {
     email: { type: 'string', format: 'email' },
     json: {},
     uuid: { type: 'string', format: 'uuid' },
+    jwt: { type: 'string', pattern: '^[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+$' },
     hex: { type: 'string', pattern: '^[0-9a-fA-F]+$' },
     ipv4: { type: 'string', format: 'ipv4' },
     semver: {
@@ -509,7 +559,7 @@ function assertDraft202012Schema(schema, path = '#', root = true) {
     HEX: { type: 'hex', length: 4, minLength: 2, maxLength: 6, pattern: /^fe/ },
     PORTS: { type: 'array', of: 'port', minItems: 0, maxItems: 2, separator: ';', default: '0;443' },
     EMPTY: { type: 'array', maxItems: 0, default: [] },
-    RAW: { trim: false, default: ' text ', max: 1, length: 1 },
+    RAW: { trim: false, default: ' text ', max: 1 },
   });
   assert.deepStrictEqual(options.required, ['MODE']);
   assert.deepStrictEqual(options.properties, {
@@ -765,6 +815,13 @@ assert.deepStrictEqual(scanCode("const p = process; p.env['BRACKET']; p.env[`TIC
 // Only real declarations from `process` count, and reads before the alias do not.
 assert.deepStrictEqual(scanCode('const p = getProc(); p.env.NOT_AN_ALIAS;'), []);
 assert.deepStrictEqual(scanCode('p.env.TOO_EARLY; const p = process;'), []);
+
+// Issue #456: destructuring from a process.env alias reports source keys.
+assert.deepStrictEqual(scanCode('const env = process.env; const { A } = env;'), ['A']);
+assert.deepStrictEqual(
+  scanCode('const env = process.env; const { A: renamed = 1, B } = env;'),
+  ['A', 'B']);
+assert.deepStrictEqual(scanCode('const env = getEnv(); const { NOT_AN_ALIAS } = env;'), []);
 
 // Issue #459: destructuring process.env in a parameter default is a read.
 assert.deepStrictEqual(scanCode('function f({ A } = process.env) { return A; }'), ['A']);
@@ -2006,6 +2063,67 @@ assert.deepStrictEqual(
   fs.rmSync(dir, { recursive: true, force: true });
 }
 
+// Issue #449: `${VAR}` in a layered loadEnv stack sees the values of the other
+// files. References read the winning value across the files, then process.env.
+// `env: {}` isolates validation, not interpolation, so every key is prefixed.
+const layeredInterpolationTest = (async () => {
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const path = require('node:path');
+  const { loadEnv, loadEnvAsync } = require('./index');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'env-saaf-layered-interp-'));
+  const base = path.join(dir, '.env');
+  const local = path.join(dir, '.env.local');
+  const P = 'ENV_SAAF_TEST_449_';
+  const schema = { [P + 'HOST']: {}, [P + 'PORT']: { type: 'port' }, [P + 'URL']: {}, [P + 'FULL']: {} };
+  try {
+    // The issue's repro, in both orders, for both loaders.
+    fs.writeFileSync(base, `${P}HOST=example.com\n${P}PORT=8080\n`);
+    fs.writeFileSync(local, `${P}URL=https://\${${P}HOST}/api\n${P}FULL=\${${P}HOST}:\${${P}PORT}\n`);
+    for (const paths of [[base, local], [local, base]]) {
+      const expected = { [P + 'HOST']: 'example.com', [P + 'PORT']: 8080,
+        [P + 'URL']: 'https://example.com/api', [P + 'FULL']: 'example.com:8080' };
+      assert.deepStrictEqual(loadEnv(schema, { paths, env: {} }), expected);
+      assert.deepStrictEqual(await loadEnvAsync(schema, { paths, env: {} }), expected);
+    }
+
+    // A key defined in both files: the reference reads the later file's value.
+    fs.writeFileSync(base, `${P}HOST=base.example\n${P}URL=https://\${${P}HOST}/api\n`);
+    fs.writeFileSync(local, `${P}HOST=local.example\n`);
+    assert.strictEqual(loadEnv(schema, { paths: [base, local], env: {} })[P + 'URL'], 'https://local.example/api');
+    assert.strictEqual(loadEnv(schema, { paths: [local, base], env: {} })[P + 'URL'], 'https://base.example/api');
+
+    // A `:?` reference in the first file is satisfied by the second (it threw before).
+    fs.writeFileSync(base, `${P}URL=https://\${${P}HOST:?missing}/api\n`);
+    fs.writeFileSync(local, `${P}HOST=example.com\n`);
+    assert.strictEqual(loadEnv(schema, { paths: [base, local], env: {} })[P + 'URL'], 'https://example.com/api');
+    // ...and still names the file and line of the referencing key when no file defines it.
+    assert.throws(() => loadEnv(schema, { paths: [base], env: {} }),
+      (e) => e.message === `env-saaf: ${P}URL (from ${base}) at line 1: ${P}HOST: missing`);
+
+    // A key in no file still falls back to process.env.
+    const previous = process.env[P + 'HOST'];
+    process.env[P + 'HOST'] = 'from-process.example';
+    try {
+      fs.writeFileSync(base, `${P}PORT=8080\n`);
+      fs.writeFileSync(local, `${P}URL=https://\${${P}HOST}/api\n`);
+      assert.strictEqual(loadEnv({ [P + 'URL']: {} }, { paths: [base, local], env: {} })[P + 'URL'],
+        'https://from-process.example/api');
+    } finally {
+      if (previous === undefined) delete process.env[P + 'HOST'];
+      else process.env[P + 'HOST'] = previous;
+    }
+
+    // The winning value keeps its own quote style: single quotes stay literal,
+    // even when an earlier file wrote the same key unquoted.
+    fs.writeFileSync(base, `${P}HOST=example.com\n${P}URL=https://\${${P}HOST}/api\n`);
+    fs.writeFileSync(local, `${P}URL='https://\${${P}HOST}/api'\n`);
+    assert.strictEqual(loadEnv(schema, { paths: [base, local], env: {} })[P + 'URL'], `https://\${${P}HOST}/api`);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+})();
+
 // Issue #34: per-key 'transform' — custom parsing after coercion
 {
   const { validateEnv, loadEnv } = require('./index');
@@ -2564,6 +2682,61 @@ assert.deepStrictEqual(
   assert.throws(() => validateEnv({ H: { type: 'hex', maxLength: 2 } }, { H: 'a1b2' }), /at most 2 characters/);
 }
 
+// Issue #471: 'jwt' type — JSON Web Token shape (three base64url segments,
+// header and payload decoding to JSON objects). Shape only: the signature
+// is never verified, and the value is returned unchanged.
+{
+  const TOKEN = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiaWF0IjoxNTE2MjM5MDIyfQ.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c';
+  const OTHER = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIyIiwibmFtZSI6IkFkYSIsImlhdCI6MTcwMDAwMDAwMH0.AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA';
+  const [head, payload, sig] = TOKEN.split('.');
+  // A well-formed token passes, returned unchanged; a different payload does too.
+  assert.strictEqual(validateEnv({ T: { type: 'jwt' } }, { T: TOKEN }).T, TOKEN);
+  assert.strictEqual(validateEnv({ T: { type: 'jwt' } }, { T: OTHER }).T, OTHER);
+  assert.throws(() => validateEnv({ T: { type: 'jwt', required: true } }, {}), EnvSaafError);
+  // Malformed tokens are rejected with an error naming the key and the format.
+  for (const bad of [
+    'not-a-jwt', // one segment
+    `${head}.${payload}`, // two segments
+    `${TOKEN}.extra`, // four segments
+    `${head}.${payload}.`, // empty signature
+    `.${payload}.${sig}`, // empty header
+    `${head}..${sig}`, // empty payload
+    `+${head.slice(1)}.${payload}.${sig}`, // '+' is not a base64url character
+    `bm90IGpzb24.${payload}.${sig}`, // header is not JSON ('not json')
+    `${head}.WzEsMl0.${sig}`, // payload is a JSON array, not an object ('[1,2]')
+    `${head}.Ingi.${sig}`, // payload is a JSON string, not an object ('"x"')
+    `${head}.MTIz.${sig}`, // payload is a JSON number, not an object ('123')
+  ]) {
+    assert.throws(() => validateEnv({ T: { type: 'jwt' } }, { T: bad }), /expected a valid JSON Web Token/);
+  }
+  // A non-string is coerced to text first, then fails the shape check —
+  // exactly like `uuid` (a number is never silently accepted as a token).
+  assert.throws(() => validateEnv({ T: { type: 'jwt' } }, { T: 42 }), /expected a valid JSON Web Token/);
+  // String-type workflows behave as for `uuid`: pattern, length bounds, sensitive.
+  assert.strictEqual(validateEnv({ T: { type: 'jwt', pattern: /^eyJ/ } }, { T: TOKEN }).T, TOKEN);
+  assert.throws(() => validateEnv({ T: { type: 'jwt', pattern: /^xxx/ } }, { T: TOKEN }), /expected to match/);
+  assert.strictEqual(validateEnv({ T: { type: 'jwt', minLength: 100 } }, { T: TOKEN }).T, TOKEN);
+  assert.throws(() => validateEnv({ T: { type: 'jwt', maxLength: 10 } }, { T: TOKEN }), /at most 10 characters/);
+  assert.throws(
+    () => validateEnv({ T: { type: 'jwt', sensitive: true } }, { T: 'not-a-jwt' }),
+    err => err instanceof EnvSaafError && !err.message.includes('not-a-jwt'),
+  );
+  // `generateExample` emits a token that validates against its own rule,
+  // and `toJsonSchema` renders the three-segment shape as a pattern.
+  const ex = generateExample({ T: { type: 'jwt' } });
+  assert.ok(ex.includes(`T=${TOKEN}`), ex);
+  assert.strictEqual(validateEnv({ T: { type: 'jwt' } }, parseEnvFile(ex)).T, TOKEN);
+  assert.deepStrictEqual(toJsonSchema({ T: { type: 'jwt' } }).properties.T,
+    { type: 'string', pattern: '^[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+$' });
+  // Arrays of tokens coerce each item.
+  assert.deepStrictEqual(
+    validateEnv({ T: { type: 'array', of: 'jwt' } }, { T: `${TOKEN},${OTHER}` }).T,
+    [TOKEN, OTHER],
+  );
+  const exArr = generateExample({ T: { type: 'array', of: 'jwt' } });
+  assert.strictEqual(validateEnv({ T: { type: 'array', of: 'jwt' } }, parseEnvFile(exArr)).T.length, 3);
+}
+
 // Issues #38 + #39 + #43: 'ipv4', 'semver' and 'base64' types. All three
 // return the value unchanged; a bad value is rejected naming the key.
 {
@@ -2661,6 +2834,29 @@ assert.deepStrictEqual(
     /on or after 2026-01-01T12:00:00Z/);
   // A Date object as a bound works; a default outside the bounds fails like a value.
   assert.strictEqual(validateEnv({ D: { type: 'date', min: new Date('2026-01-01T00:00:00Z') } }, { D: '2026-06-01' }).D.toISOString().slice(0, 10), '2026-06-01');
+  // Issue #497: the range error writes a Date bound like toJsonSchema's $comment.
+  // At UTC midnight it is its day, as before; otherwise the full instant, so the
+  // message never names a day the rejected value is on.
+  assert.throws(() => validateEnv({ D: { type: 'date', max: new Date('2026-12-31T00:00:00Z') } }, { D: '2027-01-01' }),
+    /D: expected a date on or before 2026-12-31, got "2027-01-01"/);
+  assert.throws(() => validateEnv({ D: { type: 'date', max: new Date('2026-06-01T12:30:00Z') } }, { D: '2026-06-01T15:00:00Z' }),
+    /D: expected a date on or before 2026-06-01T12:30:00\.000Z, got "2026-06-01T15:00:00Z"/);
+  assert.throws(() => validateEnv({ D: { type: 'date', min: new Date('2026-01-01T00:00:00Z'), max: new Date('2026-06-01T12:30:00Z') } }, { D: '2026-06-01T13:00:00Z' }),
+    /D: expected a date between 2026-01-01 and 2026-06-01T12:30:00\.000Z/);
+  // An expanded year is not cut mid-date.
+  assert.throws(() => validateEnv({ D: { type: 'date', min: new Date('+010000-01-01T00:00:00Z') } }, { D: '2026-01-01' }),
+    /D: expected a date on or after \+010000-01-01, got "2026-01-01"/);
+  {
+    // A local midnight east of Greenwich is 23:00 UTC the day before: it is
+    // written as that instant, not as the day before the bound. Run in a child
+    // process with TZ set, so the test does not depend on the machine's zone.
+    const { spawnSync } = require('node:child_process');
+    const script = `const { validateEnv } = require(${JSON.stringify(require.resolve('./index.js'))});
+      try { validateEnv({ D: { type: 'date', min: new Date(2026, 0, 1) } }, { D: '2025-12-31T22:00:00Z' }); }
+      catch (e) { process.stdout.write(e.message); }`;
+    const out = spawnSync('node', ['-e', script], { encoding: 'utf8', env: { ...process.env, TZ: 'Europe/Paris' } }).stdout;
+    assert.match(out, /D: expected a date on or after 2025-12-31T23:00:00\.000Z, got "2025-12-31T22:00:00Z"/);
+  }
   assert.throws(() => validateEnv({ D: { type: 'date', min: '2026-01-01', default: '2025-01-01' } }, {}), /on or after 2026-01-01/);
   // Schema errors: a numeric bound, a nonsense bound, and min above max.
   assert.throws(() => validateSchema({ D: { type: 'date', min: 20260101 } }), /D: "min" must be an ISO date string for type 'date'/);
@@ -2675,6 +2871,33 @@ assert.deepStrictEqual(
   assert.ok(generateExample({ D: { type: 'date', min: '2027-01-01' } }).includes('D=2027-01-01'));
   assert.ok(generateExample({ D: { type: 'date', max: '2026-01-15' } }).includes('D=2026-01-15'));
   assert.ok(generateExample({ D: { type: 'date', min: '2026-01-01', max: '2026-12-31' } }).includes('D=2026-01-31'));
+  // Issue #482: toJsonSchema carries the bounds as a $comment next to the anyOf,
+  // an annotation only (validateEnv stays the enforcer). Only present bounds are
+  // listed, as the rule wrote them.
+  const dateShape = { type: 'string', anyOf: [{ format: 'date' }, { format: 'date-time' }] };
+  const boundsComment = (text) => `env-saaf bounds (inclusive, enforced by validateEnv only): ${text}`;
+  const dateProperty = (rule) => toJsonSchema({ D: { type: 'date', ...rule } }).properties.D;
+  assert.deepStrictEqual(dateProperty({ min: '2026-01-01', max: '2026-12-31' }),
+    { ...dateShape, $comment: boundsComment('min 2026-01-01, max 2026-12-31') });
+  assert.deepStrictEqual(dateProperty({ min: '2026-01-01' }), { ...dateShape, $comment: boundsComment('min 2026-01-01') });
+  assert.deepStrictEqual(dateProperty({ max: '2026-12-31T23:00:00+02:00' }),
+    { ...dateShape, $comment: boundsComment('max 2026-12-31T23:00:00+02:00') });
+  // Without bounds the property is unchanged.
+  assert.deepStrictEqual(dateProperty({}), dateShape);
+  // A date-time bound without an offset is local time: it is not written down.
+  assert.deepStrictEqual(dateProperty({ min: '2026-01-01T10:00', max: '2026-12-31' }),
+    { ...dateShape, $comment: boundsComment('max 2026-12-31') });
+  assert.deepStrictEqual(dateProperty({ min: '2026-01-01T10:00' }), dateShape);
+  // A Date object is written in UTC: its day at midnight, the full instant otherwise.
+  assert.deepStrictEqual(dateProperty({ min: new Date('2026-01-01T00:00:00Z'), max: new Date('2026-06-01T12:30:00Z') }),
+    { ...dateShape, $comment: boundsComment('min 2026-01-01, max 2026-06-01T12:30:00.000Z') });
+  // The midnight is UTC: a local midnight west of Greenwich is an instant, and a
+  // year past 9999 keeps its expanded form instead of being cut at 10 characters.
+  assert.deepStrictEqual(dateProperty({ max: new Date('+010000-01-01T00:00:00Z') }),
+    { ...dateShape, $comment: boundsComment('max +010000-01-01') });
+  // The user's description is left as written.
+  assert.deepStrictEqual(dateProperty({ min: '2026-01-01', description: 'Launch day' }),
+    { ...dateShape, $comment: boundsComment('min 2026-01-01'), description: 'Launch day' });
   console.log('date min/max tests passed');
 }
 
@@ -3622,6 +3845,7 @@ assert.deepStrictEqual(
     ['boolean', 'maybe', 'e.g. true/false, yes/no, on/off, 1/0, y/n'],
     ['url', 'not-a-url', 'e.g. https://example.com'],
     ['uuid', 'not-a-uuid', 'e.g. 550e8400-e29b-41d4-a716-446655440000'],
+    ['jwt', 'not-a-jwt', 'e.g. eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiaWF0IjoxNTE2MjM5MDIyfQ.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c'],
     ['hex', 'not-hex!', 'e.g. deadbeef'],
     ['ipv4', '999.1.1.1', 'e.g. 192.168.0.1'],
     ['semver', '1.2', 'e.g. 1.2.3'],
@@ -5489,6 +5713,27 @@ assert.deepStrictEqual(
     () => validateEnv({ M: { type: 'string', choices: [] } }, {}),
     err => err instanceof EnvSaafError && err.errors.includes('M: "choices" must be a non-empty array'),
   );
+  // Issue #450: a non-array `choices` is the same schema bug — a string
+  // would degrade to substring matching and a number would crash with a
+  // raw TypeError at runtime. All four shapes are rejected up front, and
+  // no code path surfaces the raw error for them.
+  for (const bad of ['abc', 42, {}, null]) {
+    assert.throws(
+      () => validateSchema({ M: { type: 'string', choices: bad } }),
+      err => err instanceof EnvSaafError && err.errors.includes('M: "choices" must be a non-empty array'),
+    );
+    assert.throws(
+      () => validateEnv({ M: { type: 'string', choices: bad } }, { M: 'b' }),
+      err => err instanceof EnvSaafError && err.errors.includes('M: "choices" must be a non-empty array'),
+    );
+  }
+  // The exact runtime fallout from the issue: 'b' used to pass by substring
+  // match, 'abcd' used to crash in the error formatter.
+  assert.throws(() => validateEnv({ M: { type: 'string', choices: 'abc' } }, { M: 'b' }), EnvSaafError);
+  assert.throws(() => validateEnv({ M: { type: 'string', choices: 'abc' } }, { M: 'abcd' }), EnvSaafError);
+  assert.throws(() => validateEnv({ M: { type: 'string', choices: 42 } }, { M: 'a' }), EnvSaafError);
+  assert.doesNotThrow(() => generateExample({ M: { type: 'string', choices: 'abc' } }));
+  assert.doesNotThrow(() => generateExample({ M: { type: 'string', choices: 42 } }));
   // Valid combinations keep working exactly as before.
   assert.strictEqual(validateEnv({ N: { type: 'number', min: 5, max: 10 } }, { N: '7' }).N, 7);
   assert.strictEqual(validateEnv({ N: { type: 'number', min: 5, max: 5 } }, { N: '5' }).N, 5);
@@ -6140,7 +6385,7 @@ assert.deepStrictEqual(
   // valid against the rule — the init -> check loop stays clean. ('file' is
   // excluded: that type checks the path exists on disk, which a placeholder
   // in a fresh repo cannot guarantee.)
-  const scalarTypes = ['string', 'email', 'number', 'int', 'boolean', 'url', 'uuid', 'hex', 'ipv4', 'semver', 'base64', 'port', 'date', 'duration', 'host', 'json'];
+  const scalarTypes = ['string', 'email', 'number', 'int', 'boolean', 'url', 'uuid', 'jwt', 'hex', 'ipv4', 'semver', 'base64', 'port', 'date', 'duration', 'host', 'json'];
   for (const of of scalarTypes) {
     const ex = generateExample({ K: { type: 'array', of } });
     const line = ex.split('\n').find((l) => l.startsWith('K='));
@@ -6169,11 +6414,12 @@ assert.deepStrictEqual(
   const schema = {
     E: { type: 'email' }, U: { type: 'uuid' }, N: { type: 'number' },
     I: { type: 'int' }, B: { type: 'boolean' }, J: { type: 'json' },
-    B64: { type: 'base64' }, HX: { type: 'hex' },
+    B64: { type: 'base64' }, HX: { type: 'hex' }, T: { type: 'jwt' },
   };
   const ex = generateExample(schema);
   assert.ok(ex.includes('E=user@example.com'), ex);
   assert.ok(ex.includes('U=550e8400-e29b-41d4-a716-446655440000'), ex);
+  assert.ok(ex.includes('T=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiaWF0IjoxNTE2MjM5MDIyfQ.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c'), ex);
   assert.ok(ex.includes('N=3.14'), ex);
   assert.ok(ex.includes('I=42'), ex);
   assert.ok(ex.includes('B=true'), ex);
@@ -6190,6 +6436,7 @@ assert.deepStrictEqual(
   assert.deepStrictEqual(parsed.J, { key: 'value' });
   assert.strictEqual(parsed.B64, 'aGVsbG8=');
   assert.strictEqual(parsed.HX, 'deadbeef');
+  assert.strictEqual(parsed.T, 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiaWF0IjoxNTE2MjM5MDIyfQ.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c');
   // Placeholders for the already-correct types are unchanged.
   assert.ok(generateExample({ P: { type: 'port' } }).includes('P=3000'));
   assert.ok(generateExample({ A: { type: 'url' } }).includes('A=https://example.com'));
@@ -7233,6 +7480,15 @@ const formatErrorThrowingHookTest = (async () => {
   assert.throws(() => validateEnv({ N: { type: 'int', separator: ';' } }, {}), /N: "separator" only applies to type 'array'/);
   assert.throws(() => validateEnv({ S: { type: 'string', protocols: ['https'] } }, {}), /S: "protocols" only applies to type 'url'/);
   assert.throws(() => validateEnv({ B: { type: 'boolean', protocols: ['https'] } }, {}), /B: "protocols" only applies to type 'url'/);
+  // Issue #453: `length` only applies to `hex` rules — on any other type
+  // it is the same dead config and is rejected up front.
+  assert.throws(() => validateEnv({ S: { type: 'string', length: 4 } }, {}), /S: "length" only applies to type 'hex'/);
+  assert.throws(() => validateEnv({ N: { type: 'number', length: 4 } }, {}), /N: "length" only applies to type 'hex'/);
+  assert.throws(() => validateEnv({ E: { type: 'email', length: 4 } }, {}), /E: "length" only applies to type 'hex'/);
+  assert.throws(() => validateEnv({ B: { type: 'boolean', length: 4 } }, {}), /B: "length" only applies to type 'hex'/);
+  assert.throws(() => validateEnv({ A: { type: 'array', length: 4 } }, {}), /A: "length" only applies to type 'hex'/);
+  assert.strictEqual(validateEnv({ H: { type: 'hex', length: 4 } }, { H: 'a1b2' }).H, 'a1b2');
+  assert.throws(() => validateEnv({ H: { type: 'hex', length: 4 } }, { H: 'a1' }), /4 characters long/);
   // The combinations that do apply keep working:
   assert.deepStrictEqual(validateEnv({ A: { type: 'array', of: 'url', protocols: ['https'] } }, { A: 'https://a.com,https://b.com' }).A, ['https://a.com', 'https://b.com']);
   assert.throws(() => validateEnv({ A: { type: 'array', of: 'url', protocols: ['https'] } }, { A: 'http://a.com' }), /expected a URL with one of these protocols/);
@@ -7321,6 +7577,20 @@ const formatErrorThrowingHookTest = (async () => {
     $schema: 'https://json-schema.org/draft/2020-12/schema', type: 'object',
     properties: { S: { type: 'string' }, N: { type: 'integer' } },
   }));
+}
+
+// Issue #464: deprecated rules carry JSON Schema's boolean `deprecated` keyword.
+{
+  const exported = toJsonSchema({
+    BOOLEAN: { type: 'string', deprecated: true },
+    MESSAGE: { type: 'string', deprecated: 'Use REPLACEMENT instead' },
+    FALSE: { type: 'string', deprecated: false },
+    PLAIN: { type: 'string' },
+  });
+  assert.deepStrictEqual(exported.properties.BOOLEAN, { type: 'string', deprecated: true });
+  assert.deepStrictEqual(exported.properties.MESSAGE, { type: 'string', deprecated: true });
+  assert.deepStrictEqual(exported.properties.FALSE, { type: 'string' });
+  assert.deepStrictEqual(exported.properties.PLAIN, { type: 'string' });
 }
 
 // Issue #303: toJsonSchema expresses `semver` as a pattern on scalar rules and array items.
@@ -9545,6 +9815,6 @@ const crossFieldRulesTest = (async () => {
   }
 })();
 
-Promise.all([watchModeTest, watchModeErrorPathTest, watchModeEsmSchemaTest, loadEnvAsyncTest, formatErrorThrowingHookTest, loadEnvSourceErrorsTest, conflictsWithTest, interpolationOperatorsTest, crossFieldRulesTest])
+Promise.all([watchModeTest, watchModeErrorPathTest, watchModeEsmSchemaTest, loadEnvAsyncTest, layeredInterpolationTest, formatErrorThrowingHookTest, loadEnvSourceErrorsTest, conflictsWithTest, interpolationOperatorsTest, crossFieldRulesTest])
   .then(() => console.log('env-saaf v1.5.0: all tests passed'))
   .catch((err) => { console.error(err); process.exit(1); });
