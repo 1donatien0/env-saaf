@@ -1998,6 +1998,67 @@ assert.deepStrictEqual(
   fs.rmSync(dir, { recursive: true, force: true });
 }
 
+// Issue #449: `${VAR}` in a layered loadEnv stack sees the values of the other
+// files. References read the winning value across the files, then process.env.
+// `env: {}` isolates validation, not interpolation, so every key is prefixed.
+const layeredInterpolationTest = (async () => {
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const path = require('node:path');
+  const { loadEnv, loadEnvAsync } = require('./index');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'env-saaf-layered-interp-'));
+  const base = path.join(dir, '.env');
+  const local = path.join(dir, '.env.local');
+  const P = 'ENV_SAAF_TEST_449_';
+  const schema = { [P + 'HOST']: {}, [P + 'PORT']: { type: 'port' }, [P + 'URL']: {}, [P + 'FULL']: {} };
+  try {
+    // The issue's repro, in both orders, for both loaders.
+    fs.writeFileSync(base, `${P}HOST=example.com\n${P}PORT=8080\n`);
+    fs.writeFileSync(local, `${P}URL=https://\${${P}HOST}/api\n${P}FULL=\${${P}HOST}:\${${P}PORT}\n`);
+    for (const paths of [[base, local], [local, base]]) {
+      const expected = { [P + 'HOST']: 'example.com', [P + 'PORT']: 8080,
+        [P + 'URL']: 'https://example.com/api', [P + 'FULL']: 'example.com:8080' };
+      assert.deepStrictEqual(loadEnv(schema, { paths, env: {} }), expected);
+      assert.deepStrictEqual(await loadEnvAsync(schema, { paths, env: {} }), expected);
+    }
+
+    // A key defined in both files: the reference reads the later file's value.
+    fs.writeFileSync(base, `${P}HOST=base.example\n${P}URL=https://\${${P}HOST}/api\n`);
+    fs.writeFileSync(local, `${P}HOST=local.example\n`);
+    assert.strictEqual(loadEnv(schema, { paths: [base, local], env: {} })[P + 'URL'], 'https://local.example/api');
+    assert.strictEqual(loadEnv(schema, { paths: [local, base], env: {} })[P + 'URL'], 'https://base.example/api');
+
+    // A `:?` reference in the first file is satisfied by the second (it threw before).
+    fs.writeFileSync(base, `${P}URL=https://\${${P}HOST:?missing}/api\n`);
+    fs.writeFileSync(local, `${P}HOST=example.com\n`);
+    assert.strictEqual(loadEnv(schema, { paths: [base, local], env: {} })[P + 'URL'], 'https://example.com/api');
+    // ...and still names the file and line of the referencing key when no file defines it.
+    assert.throws(() => loadEnv(schema, { paths: [base], env: {} }),
+      (e) => e.message === `env-saaf: ${P}URL (from ${base}) at line 1: ${P}HOST: missing`);
+
+    // A key in no file still falls back to process.env.
+    const previous = process.env[P + 'HOST'];
+    process.env[P + 'HOST'] = 'from-process.example';
+    try {
+      fs.writeFileSync(base, `${P}PORT=8080\n`);
+      fs.writeFileSync(local, `${P}URL=https://\${${P}HOST}/api\n`);
+      assert.strictEqual(loadEnv({ [P + 'URL']: {} }, { paths: [base, local], env: {} })[P + 'URL'],
+        'https://from-process.example/api');
+    } finally {
+      if (previous === undefined) delete process.env[P + 'HOST'];
+      else process.env[P + 'HOST'] = previous;
+    }
+
+    // The winning value keeps its own quote style: single quotes stay literal,
+    // even when an earlier file wrote the same key unquoted.
+    fs.writeFileSync(base, `${P}HOST=example.com\n${P}URL=https://\${${P}HOST}/api\n`);
+    fs.writeFileSync(local, `${P}URL='https://\${${P}HOST}/api'\n`);
+    assert.strictEqual(loadEnv(schema, { paths: [base, local], env: {} })[P + 'URL'], `https://\${${P}HOST}/api`);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+})();
+
 // Issue #34: per-key 'transform' — custom parsing after coercion
 {
   const { validateEnv, loadEnv } = require('./index');
@@ -9537,6 +9598,6 @@ const crossFieldRulesTest = (async () => {
   }
 })();
 
-Promise.all([watchModeTest, watchModeErrorPathTest, watchModeEsmSchemaTest, loadEnvAsyncTest, formatErrorThrowingHookTest, loadEnvSourceErrorsTest, conflictsWithTest, interpolationOperatorsTest, crossFieldRulesTest])
+Promise.all([watchModeTest, watchModeErrorPathTest, watchModeEsmSchemaTest, loadEnvAsyncTest, layeredInterpolationTest, formatErrorThrowingHookTest, loadEnvSourceErrorsTest, conflictsWithTest, interpolationOperatorsTest, crossFieldRulesTest])
   .then(() => console.log('env-saaf v1.5.0: all tests passed'))
   .catch((err) => { console.error(err); process.exit(1); });
