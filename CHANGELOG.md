@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Fixed: `toJsonSchema` no longer drops the `min` / `max` of a `date` rule: they travel as a `$comment` next to the date formats (`env-saaf bounds (inclusive, enforced by validateEnv only): min …, max …`), as the rule wrote them and only when present. It is an annotation, not validation: JSON Schema has no keyword for comparing dates, and Ajv's default strict mode accepts `$comment` where a custom `x-` keyword would fail to compile. A date-time bound without an offset is left out. Rules without bounds and other types are unchanged (fixes #482).
 - Docs: refreshed the sitemap `lastmod` dates on both landing pages (GitHub Pages and Vercel) to the v1.7.0 release date.
 
 ## 1.7.0 — 2026-11-27

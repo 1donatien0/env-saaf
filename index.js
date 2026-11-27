@@ -3215,6 +3215,23 @@ function jsonSchemaDefault(key, rule, type) {
   }
 }
 
+// A `date` bound as the rule wrote it, for the `$comment` of toJsonSchema. A
+// Date object is written in UTC: its day when it falls on midnight, the full
+// instant otherwise. A date-time without an offset is local time, so it is
+// not written down, the same way such defaults are skipped (jsonSchemaDefault).
+function jsonSchemaDateBound(bound) {
+  if (bound === undefined) return undefined;
+  if (bound instanceof Date) {
+    const iso = Date.prototype.toISOString.call(bound);
+    // Cut at the T, not at a fixed width: years past 9999 or before 0 are written
+    // with six digits and a sign (+010000-01-01T…).
+    return iso.endsWith('T00:00:00.000Z') ? iso.slice(0, iso.indexOf('T')) : iso;
+  }
+  const text = String(bound);
+  if (text.includes('T') && !/(?:Z|[+-]\d{2}:?\d{2})$/.test(text)) return undefined;
+  return text;
+}
+
 /** Describe coerced values as JSON Schema, without reading the environment. */
 // Convert one rule to its JSON Schema property, pushing `key` onto `required`
 // when the rule demands it. A group rule nests its inner rules as one object
@@ -3244,6 +3261,19 @@ function jsonSchemaForRule(key, rule, required) {
     if (rule.unique === true) property.uniqueItems = true;
   } else {
     property = jsonSchemaForScalar(type, rule.protocols);
+  }
+  // Issue #482: JSON Schema has no keyword for comparing dates, so `date`
+  // bounds travel as a `$comment` next to the `anyOf`. It is an annotation
+  // only (Ajv's strict mode accepts it, unlike a custom `x-` keyword);
+  // validateEnv stays the only place that enforces them.
+  if (type === 'date') {
+    const bounds = [['min', rule.min], ['max', rule.max]]
+      .map(([name, bound]) => [name, jsonSchemaDateBound(bound)])
+      .filter(([, text]) => text !== undefined)
+      .map(([name, text]) => `${name} ${text}`);
+    if (bounds.length) {
+      property.$comment = `env-saaf bounds (inclusive, enforced by validateEnv only): ${bounds.join(', ')}`;
+    }
   }
   // JSON Schema numerical bounds also apply to numbers in an otherwise unconstrained `json` rule.
   if (type === 'json' || property.type === 'number' || property.type === 'integer') {
