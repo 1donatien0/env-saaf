@@ -1121,7 +1121,16 @@ that depend on object identity or custom membership behavior are also omitted.
 For a `json` discriminator, JSON scalars (including `null`) can match; values
 like `Infinity` cannot match canonical JSON and are ignored in membership lists.
 
-**Not represented:** `conflictsWith`, `transform`, `validate`, `aliases`, `sensitive`,
+`conflictsWith` adds one `allOf` clause per conflicting pair: for flat keys A
+and B, `{ not: { required: ['A', 'B'] } }` rejects objects containing both.
+Repeated or reciprocal declarations produce only one clause. Grouped conflicts
+use full env names in the source schema and the corresponding nested JSON
+paths in the export, including every parent group. An absent group or missing
+member does not trigger a conflict. These clauses compose with `requiredIf`;
+resolve aliases and apply defaults first, since presence is checked on the
+canonical JSON object and default annotations do not fill in values.
+
+**Not represented:** `transform`, `validate`, `aliases`, `sensitive`,
 input trimming and splitting, regular-expression flags (flagged patterns are omitted),
 and defaults that cannot be converted to JSON without loss or depend on local time.
 File existence and the detailed `base64` check remain runtime-only.

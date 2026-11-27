@@ -473,6 +473,7 @@ function assertDraft202012Schema(schema, path = '#', root = true) {
       case 'if':
       case 'then':
       case 'else':
+      case 'not':
         assertDraft202012Schema(value, at, false);
         break;
       default:
@@ -7770,6 +7771,96 @@ for (const head of ['process.env', 'import.meta.env']) {
 }
 
 assert.deepStrictEqual(scanCode("const env = process.env; env['DB.PORT']; env[`MY-KEY`];"), ['DB.PORT', 'MY-KEY']);
+
+// Issue #465: JSON Schema preserves each unordered conflict exactly once.
+{
+  for (const schema of [
+    { A: { conflictsWith: 'B' }, B: {} },
+    { B: { conflictsWith: ['A', 'A'] }, A: { conflictsWith: ['B'] } },
+  ]) {
+    const result = toJsonSchema(schema);
+    assert.deepStrictEqual(result.allOf, [{ not: { required: ['A', 'B'] } }]);
+    assert.strictEqual(result.required, undefined);
+    assertDraft202012Schema(result);
+  }
+  const conflicts = Object.freeze(['C', 'B', 'C']);
+  const schema = Object.freeze({
+    A: Object.freeze({ conflictsWith: conflicts }),
+    B: Object.freeze({ conflictsWith: 'A' }), C: Object.freeze({}),
+  });
+  const result = toJsonSchema(schema);
+  assert.deepStrictEqual(result.allOf, [
+    { not: { required: ['A', 'C'] } }, { not: { required: ['A', 'B'] } },
+  ]);
+  assert.deepStrictEqual(conflicts, ['C', 'B', 'C']);
+  assertDraft202012Schema(result);
+  assert.strictEqual(toJsonSchema({ A: {}, B: {} }).allOf, undefined);
+  const broken = { ...result, allOf: [{ not: [] }] };
+  assert.throws(() => assertDraft202012Schema(broken), /not: expected a schema object/);
+}
+
+// Issue #465: full env names map to nested JSON paths, requiring every ancestor.
+{
+  const result = toJsonSchema({
+    DIRECT: { conflictsWith: 'CFG_DB_USER' },
+    APP: { prefix: 'CFG_', schema: {
+      DB: { prefix: 'DB_', schema: {
+        USER: { conflictsWith: ['CFG_DB_PASSWORD', 'CACHE_URL'] }, PASSWORD: {},
+      } },
+    } },
+    CACHE: { prefix: 'CACHE_', schema: { URL: { conflictsWith: 'CFG_DB_USER' } } },
+  });
+  const user = { required: ['APP'], properties: {
+    APP: { type: 'object', required: ['DB'], properties: {
+      DB: { type: 'object', required: ['USER'] },
+    } },
+  } };
+  const password = { required: ['APP'], properties: {
+    APP: { type: 'object', required: ['DB'], properties: {
+      DB: { type: 'object', required: ['PASSWORD'] },
+    } },
+  } };
+  const url = { required: ['CACHE'], properties: {
+    CACHE: { type: 'object', required: ['URL'] },
+  } };
+  assert.deepStrictEqual(result.allOf, [
+    { not: { allOf: [user, { required: ['DIRECT'] }] } },
+    { not: { allOf: [password, user] } },
+    { not: { allOf: [url, user] } },
+  ]);
+  assert.strictEqual(result.required, undefined);
+  assert.strictEqual(result.properties.APP.required, undefined);
+  assert.strictEqual(result.properties.APP.properties.DB.required, undefined);
+  assertDraft202012Schema(result);
+}
+
+// Issue #465: conflict clauses compose with both forms of requiredIf output.
+{
+  for (const conditions of [
+    { TOKEN: { requiredIf: { key: 'MODE', equals: 'prod' } } },
+    {
+      TOKEN: { requiredIf: { key: 'MODE', equals: 'prod' } },
+      CERT: { requiredIf: { key: 'MODE', equals: 'tls' } },
+    },
+  ]) {
+    const schema = { MODE: {}, OTHER: {}, NAME: { required: true }, ...conditions };
+    const before = toJsonSchema(schema);
+    const result = toJsonSchema({ ...schema, MODE: { conflictsWith: 'OTHER' } });
+    assert.deepStrictEqual(result, {
+      ...before, allOf: [...(before.allOf || []), { not: { required: ['MODE', 'OTHER'] } }],
+    });
+    assertDraft202012Schema(result);
+  }
+  const result = toJsonSchema({
+    ['__proto__']: { conflictsWith: ['constructor', 'toString'] },
+    constructor: { conflictsWith: '__proto__' }, toString: {},
+  });
+  assert.deepStrictEqual(result.allOf, [
+    { not: { required: ['__proto__', 'constructor'] } },
+    { not: { required: ['__proto__', 'toString'] } },
+  ]);
+  assertDraft202012Schema(result);
+}
 
 // Issue #289: a flat equals condition requires a present discriminator.
 {

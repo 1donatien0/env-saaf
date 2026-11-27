@@ -418,6 +418,7 @@ export interface JsonSchemaProperty {
   uniqueItems?: boolean;
   anyOf?: JsonSchemaProperty[];
   allOf?: JsonSchemaProperty[];
+  not?: JsonSchemaProperty;
   if?: JsonSchemaProperty;
   then?: JsonSchemaProperty;
 }
