@@ -2791,6 +2791,33 @@ assert.deepStrictEqual(
   assert.ok(generateExample({ D: { type: 'date', min: '2027-01-01' } }).includes('D=2027-01-01'));
   assert.ok(generateExample({ D: { type: 'date', max: '2026-01-15' } }).includes('D=2026-01-15'));
   assert.ok(generateExample({ D: { type: 'date', min: '2026-01-01', max: '2026-12-31' } }).includes('D=2026-01-31'));
+  // Issue #482: toJsonSchema carries the bounds as a $comment next to the anyOf,
+  // an annotation only (validateEnv stays the enforcer). Only present bounds are
+  // listed, as the rule wrote them.
+  const dateShape = { type: 'string', anyOf: [{ format: 'date' }, { format: 'date-time' }] };
+  const boundsComment = (text) => `env-saaf bounds (inclusive, enforced by validateEnv only): ${text}`;
+  const dateProperty = (rule) => toJsonSchema({ D: { type: 'date', ...rule } }).properties.D;
+  assert.deepStrictEqual(dateProperty({ min: '2026-01-01', max: '2026-12-31' }),
+    { ...dateShape, $comment: boundsComment('min 2026-01-01, max 2026-12-31') });
+  assert.deepStrictEqual(dateProperty({ min: '2026-01-01' }), { ...dateShape, $comment: boundsComment('min 2026-01-01') });
+  assert.deepStrictEqual(dateProperty({ max: '2026-12-31T23:00:00+02:00' }),
+    { ...dateShape, $comment: boundsComment('max 2026-12-31T23:00:00+02:00') });
+  // Without bounds the property is unchanged.
+  assert.deepStrictEqual(dateProperty({}), dateShape);
+  // A date-time bound without an offset is local time: it is not written down.
+  assert.deepStrictEqual(dateProperty({ min: '2026-01-01T10:00', max: '2026-12-31' }),
+    { ...dateShape, $comment: boundsComment('max 2026-12-31') });
+  assert.deepStrictEqual(dateProperty({ min: '2026-01-01T10:00' }), dateShape);
+  // A Date object is written in UTC: its day at midnight, the full instant otherwise.
+  assert.deepStrictEqual(dateProperty({ min: new Date('2026-01-01T00:00:00Z'), max: new Date('2026-06-01T12:30:00Z') }),
+    { ...dateShape, $comment: boundsComment('min 2026-01-01, max 2026-06-01T12:30:00.000Z') });
+  // The midnight is UTC: a local midnight west of Greenwich is an instant, and a
+  // year past 9999 keeps its expanded form instead of being cut at 10 characters.
+  assert.deepStrictEqual(dateProperty({ max: new Date('+010000-01-01T00:00:00Z') }),
+    { ...dateShape, $comment: boundsComment('max +010000-01-01') });
+  // The user's description is left as written.
+  assert.deepStrictEqual(dateProperty({ min: '2026-01-01', description: 'Launch day' }),
+    { ...dateShape, $comment: boundsComment('min 2026-01-01'), description: 'Launch day' });
   console.log('date min/max tests passed');
 }
 
