@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Added: `scanCode` now follows `env` imported from the process module (`import { env } from 'node:process'`, `const { env } = require('process')`, default/namespace imports used as `proc.env.X`), applying the usual alias behaviour (member, bracket and destructured reads); an `env` from any other module is left alone. Optional chaining on an env alias (`env?.KEY`, `env?.['KEY']`) is a read too, as it already was for `process.env` directly (fixes #463).
+
 - Fixed: the `email` type now rejects malformed addresses no mail system would route — a local part starting, ending or doubling a dot, an empty or hyphen-edged domain label, and parts over their length limits (local 64, label 63, total 254 chars). Plus-addressing, subdomains, uppercase and IP-literal domains (`a@[127.0.0.1]`) still pass (fixes #452).
 
 - Fixed: `scanCode` now reports keys destructured from `process.env` in function parameter defaults, including renames and defaults (fixes #459).

@@ -2431,15 +2431,81 @@ function collectEnvReads(text) {
       if (aliasName && !aliases.has(aliasName)) aliases.set(aliasName, end);
     }
   }
+  // Issue #463: `env` imported from the process module is a process.env
+  // source too — named ESM imports, default/namespace imports (which bind
+  // the process object itself), and require() forms. Only the 'process' /
+  // 'node:process' specifier counts: `env` from any other module stays an
+  // ordinary local. The specifier text lives inside a string literal, so it
+  // is masked in codeView — match on src and check only the head (up to the
+  // specifier's opening quote) is real code, which also keeps imports inside
+  // comments and strings from registering.
+  // The specifier's opening quote is the first quote at or after 'from' /
+  // 'require' — the head before it must be real code.
+  const specQuoteAt = (m, anchor) => m.index + m[0].indexOf(m[2], m[0].indexOf(anchor));
+  for (const m of src.matchAll(/import\s*\{([^}]*)\}\s*from\s*(['"])(?:node:)?process\2/g)) {
+    const quoteAt = specQuoteAt(m, 'from');
+    if (!isCode(m.index, quoteAt)) continue;
+    const end = m.index + m[0].length;
+    for (const part of m[1].split(',')) {
+      const segs = part.split(/\s+as\s+/).map((s) => s.trim());
+      if (segs[0] !== 'env' || segs.length > 2) continue;
+      const name = segs[1] || 'env';
+      if (/^[A-Za-z_$][\w$]*$/.test(name) && !aliases.has(name)) aliases.set(name, end);
+    }
+  }
+  // Default and namespace imports bind the process object itself. A combined
+  // default + named import (`import process, { env } from 'node:process'`)
+  // registers both bindings.
+  for (const m of src.matchAll(/import\s+([A-Za-z_$][\w$]*)\s*(?:,\s*\{([^}]*)\})?\s*from\s*(['"])(?:node:)?process\3/g)) {
+    const quoteAt = specQuoteAt(m, 'from');
+    if (!isCode(m.index, quoteAt)) continue;
+    const end = m.index + m[0].length;
+    if (!processObjectAliases.has(m[1])) processObjectAliases.set(m[1], end);
+    if (m[2] !== undefined) {
+      for (const part of m[2].split(',')) {
+        const segs = part.split(/\s+as\s+/).map((x) => x.trim());
+        if (segs[0] !== 'env' || segs.length > 2) continue;
+        const name = segs[1] || 'env';
+        if (/^[A-Za-z_$][\w$]*$/.test(name) && !aliases.has(name)) aliases.set(name, end);
+      }
+    }
+  }
+  for (const m of src.matchAll(/import\s*\*\s*as\s+([A-Za-z_$][\w$]*)\s+from\s*(['"])(?:node:)?process\2/g)) {
+    const quoteAt = specQuoteAt(m, 'from');
+    if (!isCode(m.index, quoteAt)) continue;
+    if (!processObjectAliases.has(m[1])) processObjectAliases.set(m[1], m.index + m[0].length);
+  }
+  // require() forms: destructured env and the process object.
+  for (const m of src.matchAll(/(?:const|let|var)\s*\{([^}]+)\}\s*=\s*require\s*\(\s*(['"])(?:node:)?process\2\s*\)/g)) {
+    const quoteAt = specQuoteAt(m, 'require');
+    if (!isCode(m.index, quoteAt)) continue;
+    const end = m.index + m[0].length;
+    for (const part of m[1].split(',')) {
+      const pattern = part.split('=')[0].trim();
+      const segs = pattern.split(':').map((s) => s.trim());
+      let name = '';
+      if (segs.length === 1 && segs[0] === 'env') name = 'env';
+      else if (segs.length === 2 && segs[0] === 'env' && /^[A-Za-z_$][\w$]*$/.test(segs[1])) name = segs[1];
+      if (name && !aliases.has(name)) aliases.set(name, end);
+    }
+  }
+  for (const m of src.matchAll(/(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*require\s*\(\s*(['"])(?:node:)?process\2\s*\)/g)) {
+    const quoteAt = specQuoteAt(m, 'require');
+    if (!isCode(m.index, quoteAt)) continue;
+    if (!processObjectAliases.has(m[1])) processObjectAliases.set(m[1], m.index + m[0].length);
+  }
   if (aliases.size) {
-    const access = /(?<![#$\p{ID_Continue}])([A-Za-z_$][\w$]*)(?:\.([A-Za-z_]\w*)(?![$\p{ID_Continue}])|\[(['"\x60])([A-Za-z_][\w.-]*)\3\])/gu;
+    // Optional chaining on an alias (`env?.KEY`, `env?.['KEY']`) reads the key
+    // just like the direct `process.env?.KEY` forms (issue #463: the imported
+    // `env` goes through this same path, and the gap showed up while testing it).
+    const access = /(?<![#$\p{ID_Continue}])([A-Za-z_$][\w$]*)(?:\.([A-Za-z_]\w*)(?![$\p{ID_Continue}])|\[(['"\x60])([A-Za-z_][\w.-]*)\3\]|\?\.([A-Za-z_]\w*)(?![$\p{ID_Continue}])|\?\.\[['"\x60]([A-Za-z_][\w.-]*)['"\x60]\])/gu;
     for (const m of src.matchAll(access)) {
       const declaredAt = aliases.get(m[1]);
       if (declaredAt === undefined || declaredAt > m.index || !isCode(m.index, m.index + m[1].length)) continue;
       let previous = m.index - 1;
       while (previous >= 0 && /\s/.test(codeView[previous])) previous--;
       if (codeView[previous] === '.' && codeView.slice(previous - 2, previous + 1) !== '...') continue;
-      add(m[2] ?? m[4], m.index);
+      add(m[2] ?? m[4] ?? m[5] ?? m[6], m.index);
     }
     // Issue #456: destructuring from a process.env alias is the same read as
     // destructuring from process.env directly. Renames, defaults and rest

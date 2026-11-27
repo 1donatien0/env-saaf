@@ -830,6 +830,21 @@ assert.deepStrictEqual(
   scanCode('function f(x, { A: renamed = 1 } = process.env) { return renamed; }'),
   ['A']);
 assert.deepStrictEqual(scanCode('function f({ C } = getConfig()) { return C; }'), []);
+
+// Issue #463: `env` imported from the process module is an env source too.
+assert.deepStrictEqual(scanCode("import { env } from 'node:process'; const x = env.FOO;"), ['FOO']);
+assert.deepStrictEqual(scanCode("const { env } = require('process'); const { A } = env;"), ['A']);
+assert.deepStrictEqual(scanCode("import process from 'node:process'; process.env.X;"), ['X']);
+assert.deepStrictEqual(scanCode("import * as proc from 'node:process'; proc.env.FOO;"), ['FOO']);
+assert.deepStrictEqual(scanCode("const proc = require('node:process'); proc.env.FOO;"), ['FOO']);
+assert.deepStrictEqual(scanCode("import { env as myEnv } from 'process'; myEnv.FOO;"), ['FOO']);
+assert.deepStrictEqual(scanCode("import process, { env } from 'node:process'; env.FOO; process.env.BAR;"), ['BAR', 'FOO']);
+assert.deepStrictEqual(scanCode("import { env } from 'node:process'; env?.OPT;"), ['OPT']);
+assert.deepStrictEqual(scanCode('const env = process.env; env?.OPT;'), ['OPT']);
+// ...but an unrelated local `env` (any other module) is not a source.
+assert.deepStrictEqual(scanCode("import { env } from './config'; env.FOO;"), []);
+assert.deepStrictEqual(scanCode("const { env } = require('./config'); env.FOO;"), []);
+assert.deepStrictEqual(scanCode("import env from 'node:process'; env.FOO;"), []);
 assert.deepStrictEqual(diffEnv(['A', 'B'], ['A', 'C']), { usedNotDocumented: ['B'], documentedNotUsed: ['C'] });
 
 // Issue #221: assignment-shaped lines with invalid keys must not disappear.
