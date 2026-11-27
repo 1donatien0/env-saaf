@@ -243,6 +243,29 @@ try {
     assert.ok(!/MISSING/.test(check.stdout), `no MISSING after init in ESM project: ${check.stdout}`);
   }
 
+  // --- init --from-example infers url for non-http schemes (issue #470) ------
+  {
+    const dir = mkProject({
+      '.env.example': [
+        'DATABASE_URL=postgres://localhost:5432/db',
+        'WEBHOOK=wss://socket.example.com',
+        'API_URL=https://api.example.com/v1',
+        'HOST_PORT=localhost:5432',
+        'DOMAIN=example.com/path',
+        'WORD=hello',
+      ].join('\n') + '\n',
+    });
+    const init = run(['init', dir, '--from-example'], dir);
+    assert.strictEqual(init.status, 0, init.stderr);
+    const schema = fs.readFileSync(path.join(dir, 'env.schema.js'), 'utf8');
+    for (const key of ['DATABASE_URL', 'WEBHOOK', 'API_URL']) {
+      assert.match(schema, new RegExp(`\\b${key}: \\{ type: 'url' \\}`), `${key} should infer as url:\n${schema}`);
+    }
+    for (const key of ['HOST_PORT', 'DOMAIN', 'WORD']) {
+      assert.match(schema, new RegExp(`\\b${key}: \\{ type: 'string' \\}`), `${key} should stay string:\n${schema}`);
+    }
+  }
+
   // --- missing directory: exit 2, clear message, no stack trace --------------
   {
     const dir = mkProject({});
