@@ -214,15 +214,18 @@ try {
     assert.strictEqual(init.status, 0, init.stderr);
     assert.ok(fs.existsSync(path.join(dir, 'env.schema.js')), 'CJS project gets env.schema.js');
     assert.ok(fs.existsSync(path.join(dir, '.env.example')));
-    // The scanned keys are folded into the scaffold (issue #171), so the
-    // post-init check reports no MISSING lines; the scaffold's own fixed keys
-    // are still UNUSED until code reads them, which fails the check per #113.
+    // A plain check still flags scaffold keys that code does not read.
+    // Passing the generated schema accounts for those keys (issue #506).
     const example = fs.readFileSync(path.join(dir, '.env.example'), 'utf8');
     assert.match(example, /^PORT=/m);
     assert.match(example, /^DATABASE_URL=/m);
-    const check = run(['check', dir, '--schema', 'env.schema.js'], dir);
+    const check = run(['check', dir], dir);
+    assert.strictEqual(check.status, 1);
     assert.ok(!/MISSING/.test(check.stdout), `no MISSING after init: ${check.stdout}`);
     assert.match(check.stdout, /UNUSED: APP_NAME/);
+    const withSchema = run(['check', dir, '--schema', 'env.schema.js'], dir);
+    assert.strictEqual(withSchema.status, 0, withSchema.stdout + withSchema.stderr);
+    assert.doesNotMatch(withSchema.stdout, /UNUSED:/);
     // init refuses to overwrite without --force
     const again = run(['init', dir], dir);
     assert.strictEqual(again.status, 1);
@@ -241,6 +244,47 @@ try {
     assert.ok(!fs.existsSync(path.join(dir, 'env.schema.js')));
     const check = run(['check', dir, '--schema', 'env.schema.cjs'], dir);
     assert.ok(!/MISSING/.test(check.stdout), `no MISSING after init in ESM project: ${check.stdout}`);
+  }
+
+  // --- schema-only usage and genuine template drift (issue #506) -------------
+  {
+    const dir = mkProject({
+      'app.js': "const { loadEnv } = require('env-saaf');\nloadEnv(require('./env.schema.js'));\n",
+      'env.schema.js': "module.exports = { PORT: { type: 'port' }, DB: { prefix: 'DB_', schema: { HOST: { type: 'string' } } } };\n",
+      '.env.example': 'PORT=3000\nDB_HOST=localhost\n',
+    });
+    const args = ['check', dir, '--schema', 'env.schema.js'];
+    const clean = run(args, dir);
+    assert.strictEqual(clean.status, 0, clean.stdout + clean.stderr);
+    assert.doesNotMatch(clean.stdout, /UNUSED:/);
+
+    fs.appendFileSync(path.join(dir, '.env.example'), 'OLD_KEY=placeholder\n');
+    const drift = run(args, dir);
+    assert.strictEqual(drift.status, 1, drift.stdout + drift.stderr);
+    assert.deepStrictEqual(drift.stdout.match(/^UNUSED: \w+/gm), ['UNUSED: OLD_KEY']);
+    const driftJson = JSON.parse(run([...args, '--json'], dir).stdout);
+    assert.deepStrictEqual(driftJson.unused, ['OLD_KEY']);
+    assert.deepStrictEqual(driftJson.extra, ['OLD_KEY']);
+    assert.deepStrictEqual(driftJson.documentedNotInSchema, ['OLD_KEY']);
+  }
+
+  // --- init --from-example gets the first-check note (issue #506) ------------
+  {
+    const dir = mkProject({ '.env.example': 'PORT=3000\nDEBUG=false\n' });
+    const init = run(['init', dir, '--from-example'], dir);
+    assert.strictEqual(init.status, 0, init.stdout + init.stderr);
+    for (const args of [[], ['--schema', 'env.schema.js']]) {
+      const first = run(['check', dir, ...args], dir);
+      assert.strictEqual(first.status, 0, first.stdout + first.stderr);
+      assert.match(first.stdout, /no process\.env usage found in code yet.*2 keys/);
+      assert.doesNotMatch(first.stdout, /UNUSED:/);
+    }
+
+    fs.writeFileSync(path.join(dir, 'app.js'), 'console.log(process.env.PORT);\n');
+    const drift = run(['check', dir], dir);
+    assert.strictEqual(drift.status, 1, drift.stdout + drift.stderr);
+    assert.match(drift.stdout, /UNUSED: DEBUG/);
+    assert.doesNotMatch(drift.stdout, /no process\.env usage found/);
   }
 
   // --- init --from-example infers url for non-http schemes (issue #470) ------

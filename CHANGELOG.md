@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Fixed: `check --schema` counts schema keys as used and keeps the first-check note for fresh `init --from-example` projects (fixes #506).
+
 - Fixed: JSON validation rejects non-primitive choices at schema time and distinguishes strings from other values in choice errors (fixes #451).
 
 - Added: `scanCode` now follows `env` imported from the process module (`import { env } from 'node:process'`, `const { env } = require('process')`, default/namespace imports used as `proc.env.X`), applying the usual alias behaviour (member, bracket and destructured reads); an `env` from any other module is left alone. Optional chaining on an env alias (`env?.KEY`, `env?.['KEY']`) is a read too, as it already was for `process.env` directly (fixes #463).

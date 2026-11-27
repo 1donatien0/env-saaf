@@ -6,7 +6,7 @@
  *                           .env.example (or the --file given); exit 1 if anything
  *                           used is not documented or if an example value looks like a
  *                           real secret (key named, value never printed; issue #416).
- *                           --schema also validates the values
+ *                           --schema counts declared keys as used and validates the values
  *                           of the real .env file against the schema the file exports
  *                           (issue #90); --json emits machine-readable output. --json-schema
  *                           prints the schema file as a draft 2020-12 JSON Schema
@@ -1218,6 +1218,8 @@ async function runCheck() {
     const declared = flattenedSchemaKeys(schema);
     schemaNotDocumented = declared.filter((key) => !documented.includes(key));
     documentedNotInSchema = documented.filter((key) => !declared.includes(key));
+    // A schema used by loadEnv can account for keys without process.env reads.
+    documentedNotUsed = documentedNotUsed.filter((key) => !declared.includes(key));
     // Issue #352: --values names another file to validate (for example
     // .env.production); an explicit --file still names the template.
     let targetName = fileExplicit ? fileOpt : (envFileFound ? '.env' : null);
@@ -1273,19 +1275,14 @@ async function runCheck() {
     usedNotDocumented = [];
     schemaNotDocumented = schemaNotDocumented.filter(k => !fixed.includes(k));
   }
-  // Issue #170: a fresh scaffold has no code using any variable yet, so every
-  // documented key looks UNUSED. That is the scaffold waiting for code, not
-  // drift in an established project — report it as one plain note and pass
-  // instead of failing on one UNUSED line per key. The exception only fires
-  // when UNUSED is the *only* finding: any MISSING, EXTRA or INVALID still
-  // fails the check exactly as before (#113 is unchanged for a project that
-  // already reads at least one variable).
-  const scaffoldAhead = used.length === 0 && documentedNotUsed.length > 0
+  // Keep the first-check note when there are no direct code reads, including
+  // when a schema accounts for every template key. Other findings still fail.
+  const scaffoldAhead = used.length === 0 && documented.length > 0
     && usedNotDocumented.length === 0 && secrets.length === 0
     && envExtra.length === 0 && envMissing.length === 0 && invalid.length === 0
     && valuesExtra.length === 0
     && schemaNotDocumented.length === 0 && documentedNotInSchema.length === 0;
-  const scaffoldNote = `no process.env usage found in code yet — ${documentedNotUsed.length} ${documentedNotUsed.length === 1 ? 'key' : 'keys'} in ${fileOpt} ${documentedNotUsed.length === 1 ? 'is' : 'are'} not used by any code yet`;
+  const scaffoldNote = `no process.env usage found in code yet — ${documented.length} ${documented.length === 1 ? 'key' : 'keys'} in ${fileOpt} ${documented.length === 1 ? 'is' : 'are'} not used by any code yet`;
   const ok = scaffoldAhead || (usedNotDocumented.length === 0 && documentedNotUsed.length === 0
     && secrets.length === 0 && envExtra.length === 0 && envMissing.length === 0 && invalid.length === 0
     && valuesExtra.length === 0
@@ -1323,7 +1320,7 @@ async function runCheck() {
   } else {
     fixed.forEach(k => console.log(`FIXED in ${fileOpt}: ${k} (added to ${fileOpt})`));
     usedNotDocumented.forEach(k => console.log(`MISSING in ${fileOpt}: ${k} (used in code)`));
-    documentedNotUsed.forEach(k => console.log(`UNUSED: ${k} (in ${fileOpt}, never used in code)`));
+    documentedNotUsed.forEach(k => console.log(`UNUSED: ${k} (in ${fileOpt}, never used in code${schema ? ' or declared in the schema' : ''})`));
     secrets.forEach(k => console.log(`SECRET in ${fileOpt}: ${k} (value [REDACTED] looks like a real secret; use an empty value or placeholder)`));
     envExtra.forEach(k => console.log(`EXTRA in .env: ${k} (not in ${fileOpt})`));
     valuesExtra.forEach(k => console.log(`EXTRA in ${valuesOpt}: ${k} (not in ${fileOpt})`));
