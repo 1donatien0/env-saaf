@@ -36,6 +36,55 @@ const { loadEnv, validateEnv, validateSchema, EnvSaafError, parseEnvFile, scanCo
   assert.deepStrictEqual(loadEnv(portSchema, { paths: [], env: nullProtoEnv }), { PORT: 8000 });
 }
 
+// Issue #454: generated URL examples honor protocol allowlists, including array items.
+{
+  for (const protocol of ['wss', 'ftp']) {
+    const schema = { A: { type: 'url', protocols: [protocol] } };
+    const generated = parseEnvFile(generateExample(schema));
+    assert.strictEqual(generated.A, `${protocol}://example.com`);
+    assert.strictEqual(validateEnv(schema, generated).A, generated.A);
+
+    const arraySchema = { A: { type: 'array', of: 'url', protocols: [protocol] } };
+    const generatedArray = parseEnvFile(generateExample(arraySchema));
+    const items = generatedArray.A.split(',');
+    assert.strictEqual(items.length, 3);
+    assert.ok(items.every(value => value.startsWith(`${protocol}://`)), generatedArray.A);
+    assert.deepStrictEqual(validateEnv(arraySchema, generatedArray).A, items);
+  }
+
+  const invalidProtocolSchema = { A: { type: 'url', protocols: ['bad!'] } };
+  assert.strictEqual(parseEnvFile(generateExample(invalidProtocolSchema)).A, 'https://example.com');
+
+  const preferHttpsSchema = { A: { type: 'url', protocols: ['http', 'https'] } };
+  assert.strictEqual(parseEnvFile(generateExample(preferHttpsSchema)).A, 'https://example.com');
+
+  const preferHttpsArraySchema = { A: { type: 'array', of: 'url', protocols: ['http', 'https'] } };
+  const preferHttpsArray = parseEnvFile(generateExample(preferHttpsArraySchema)).A.split(',');
+  assert.strictEqual(preferHttpsArray.length, 3);
+  assert.ok(preferHttpsArray.every(value => value.startsWith('https://')), preferHttpsArray.join(','));
+
+  const invalidProtocolArraySchema = { A: { type: 'array', of: 'url', protocols: ['bad!'] } };
+  const invalidProtocolArray = parseEnvFile(generateExample(invalidProtocolArraySchema)).A.split(',');
+  assert.strictEqual(invalidProtocolArray.length, 3);
+  assert.ok(invalidProtocolArray.every(value => value.startsWith('https://')), invalidProtocolArray.join(','));
+
+  const firstAllowedSchema = { A: { type: 'url', protocols: ['wss', 'ftp'] } };
+  const firstAllowed = parseEnvFile(generateExample(firstAllowedSchema));
+  assert.strictEqual(firstAllowed.A, 'wss://example.com');
+  assert.strictEqual(validateEnv(firstAllowedSchema, firstAllowed).A, firstAllowed.A);
+
+  const defaultSchema = { A: { type: 'url' } };
+  const defaultExample = parseEnvFile(generateExample(defaultSchema));
+  assert.strictEqual(defaultExample.A, 'https://example.com');
+  assert.strictEqual(validateEnv(defaultSchema, defaultExample).A, defaultExample.A);
+
+  const defaultArraySchema = { A: { type: 'array', of: 'url' } };
+  const defaultArrayExample = parseEnvFile(generateExample(defaultArraySchema));
+  const defaultItems = defaultArrayExample.A.split(',');
+  assert.ok(defaultItems.every(value => value.startsWith('https://')), defaultArrayExample.A);
+  assert.deepStrictEqual(validateEnv(defaultArraySchema, defaultArrayExample).A, defaultItems);
+}
+
 // Issue #439: whitespace-only values follow the same unset and trimming rules as empty strings.
 {
   const required = { NAME: { type: 'string', required: true } };

@@ -2821,6 +2821,14 @@ function durationArrayPlaceholder(rule, separator) {
 }
 
 /** Placeholder for an `array` rule: example items of the `of` type (or the rule's `choices`), sized to fit minItems/maxItems, joined by `separator`. */
+function urlPlaceholder(protocols, hostname = 'example.com') {
+  const usable = Array.isArray(protocols)
+    ? protocols.filter(p => typeof p === 'string' && /^[a-z][a-z0-9+.-]*:?$/i.test(p))
+      .map(p => p.replace(/:$/, '').toLowerCase()) : [];
+  const protocol = usable.includes('https') ? 'https' : (usable[0] ?? 'https');
+  return `${protocol}://${hostname}`;
+}
+
 function arrayPlaceholder(rule) {
   const separator = rule.separator || ',';
   if (rule.of === 'duration' && (rule.min !== undefined || rule.max !== undefined)) {
@@ -2836,6 +2844,8 @@ function arrayPlaceholder(rule) {
     const strings = rule.choices.map(choice => String(exampleNumber(choice, rule.of)));
     const usable = [...new Set(strings.filter(s => !s.includes(separator)))];
     examples = usable.length ? usable : [...new Set(strings)];
+  } else if (rule.of === 'url') {
+    examples = ['a', 'b', 'c'].map(host => urlPlaceholder(rule.protocols, `${host}.example`));
   } else {
     examples = ARRAY_ITEM_EXAMPLES[rule.of || 'string'] || ARRAY_ITEM_EXAMPLES.string;
   }
@@ -2981,7 +2991,7 @@ function formatDuration(ms) {
  * whose './config.json' path the user must create. */
 function scalarPlaceholder(rule, stringGrowth) {
   const type = rule.type === undefined ? 'string' : rule.type;
-  const placeholder = type === 'port' ? '3000' : type === 'url' ? 'https://example.com'
+  const placeholder = type === 'port' ? '3000' : type === 'url' ? urlPlaceholder(rule.protocols)
     : type === 'ipv4' ? '192.168.0.1' : type === 'ipv6' ? '::1' : type === 'semver' ? '1.0.0'
     : type === 'date' ? '2026-01-31' : type === 'duration' ? '15m' : type === 'host' ? 'localhost'
     : type === 'file' ? './config.json'

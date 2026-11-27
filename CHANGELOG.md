@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Fixed: `generateExample` now uses usable allowed URL schemes for scalar `url` rules and `array` URL items, preferring HTTPS when allowed and otherwise using the first usable scheme; invalid or empty allowlists fall back to HTTPS (fixes #454).
+
 - Added: `init --from-example` now infers `url` for any absolute sample with an explicit `scheme://` authority (`postgres://`, `redis://`, `wss://`, …), not just `http(s)`. Values without `://` — plain hosts, `host:port`, and ordinary words — keep their previous inference (fixes #470).
 - Added: `toJsonSchema` now emits JSON Schema's boolean `deprecated: true` keyword for rules with `deprecated: true` or a message string, so schema consumers can surface retirement hints. `deprecated: false` and rules without the option stay unchanged (fixes #464).
 - Fixed: `check --values <file>` now reports the values file's undocumented keys with the same `EXTRA in <file>: KEY (not in .env.example)` finding the real `.env` gets, listing them in `envExtra` under `--json` and failing the check (exit 1); keys documented in the schema count as documented. Invalid values and missing keys in the values file behave exactly as before, so a typo'd deployment key (`PORTT` for `PORT`) can no longer pass the gate silently (fixes #494).
