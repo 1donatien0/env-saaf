@@ -7522,6 +7522,20 @@ const formatErrorThrowingHookTest = (async () => {
   }));
 }
 
+// Issue #464: deprecated rules carry JSON Schema's boolean `deprecated` keyword.
+{
+  const exported = toJsonSchema({
+    BOOLEAN: { type: 'string', deprecated: true },
+    MESSAGE: { type: 'string', deprecated: 'Use REPLACEMENT instead' },
+    FALSE: { type: 'string', deprecated: false },
+    PLAIN: { type: 'string' },
+  });
+  assert.deepStrictEqual(exported.properties.BOOLEAN, { type: 'string', deprecated: true });
+  assert.deepStrictEqual(exported.properties.MESSAGE, { type: 'string', deprecated: true });
+  assert.deepStrictEqual(exported.properties.FALSE, { type: 'string' });
+  assert.deepStrictEqual(exported.properties.PLAIN, { type: 'string' });
+}
+
 // Issue #303: toJsonSchema expresses `semver` as a pattern on scalar rules and array items.
 {
   const scalar = toJsonSchema({ V: { type: 'semver' } });
