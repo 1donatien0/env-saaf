@@ -1,4 +1,4 @@
-export type EnvScalarType = 'string' | 'number' | 'int' | 'bigint' | 'boolean' | 'url' | 'port' | 'email' | 'json' | 'uuid' | 'hex' | 'ipv4' | 'ipv6' | 'semver' | 'base64' | 'date' | 'file' | 'duration' | 'host';
+export type EnvScalarType = 'string' | 'number' | 'int' | 'bigint' | 'boolean' | 'url' | 'port' | 'email' | 'json' | 'uuid' | 'jwt' | 'hex' | 'ipv4' | 'ipv6' | 'semver' | 'base64' | 'date' | 'file' | 'duration' | 'host';
 export type EnvType = EnvScalarType | 'array';
 
 export type RequiredIfCondition =
@@ -51,7 +51,7 @@ export interface EnvRule {
   /** See `min`. */
   max?: number | string | bigint;
   /**
-   * Allowed length for string values (`string`, `email`, `url`, `file`, `uuid`, `hex`,
+   * Allowed length for string values (`string`, `email`, `url`, `file`, `uuid`, `jwt`, `hex`,
    * `ipv4`, `semver`, `base64`, `host`).
    * `minLength` alone or `maxLength` alone both work; a too-short or
    * too-long value is rejected with an error naming the allowed length.
@@ -75,7 +75,7 @@ export interface EnvRule {
   protocols?: string[];
   /**
    * A RegExp or regular expression source string that a string value
-   * (`string`, `email`, `url`, `file`, `uuid`, `hex`, `ipv4`, `semver`,
+   * (`string`, `email`, `url`, `file`, `uuid`, `jwt`, `hex`, `ipv4`, `semver`,
    * `base64`, `host`) must match. Checked after coercion and `choices`,
    * before `transform`; a mismatch error names the pattern.
    * Strings are compiled without flags. Invalid sources and uses on
@@ -183,7 +183,7 @@ type EnvScalarValue<T> =
  * 'boolean' -> boolean,
  * 'json' -> unknown (parsed JSON can be any shape), 'date' -> Date,
  * 'array' -> array of the `of` item type (default `string[]`),
- * everything else (string / url / file / email / uuid / hex / ipv4 / semver / base64
+ * everything else (string / url / file / email / uuid / jwt / hex / ipv4 / semver / base64
  * / host / no type given) -> string.
  * A rule with a `transform` returns the transform's return type instead.
  */
