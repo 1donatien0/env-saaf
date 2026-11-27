@@ -509,7 +509,7 @@ function assertDraft202012Schema(schema, path = '#', root = true) {
     HEX: { type: 'hex', length: 4, minLength: 2, maxLength: 6, pattern: /^fe/ },
     PORTS: { type: 'array', of: 'port', minItems: 0, maxItems: 2, separator: ';', default: '0;443' },
     EMPTY: { type: 'array', maxItems: 0, default: [] },
-    RAW: { trim: false, default: ' text ', max: 1, length: 1 },
+    RAW: { trim: false, default: ' text ', max: 1 },
   });
   assert.deepStrictEqual(options.required, ['MODE']);
   assert.deepStrictEqual(options.properties, {
@@ -5549,6 +5549,27 @@ assert.deepStrictEqual(
     () => validateEnv({ M: { type: 'string', choices: [] } }, {}),
     err => err instanceof EnvSaafError && err.errors.includes('M: "choices" must be a non-empty array'),
   );
+  // Issue #450: a non-array `choices` is the same schema bug — a string
+  // would degrade to substring matching and a number would crash with a
+  // raw TypeError at runtime. All four shapes are rejected up front, and
+  // no code path surfaces the raw error for them.
+  for (const bad of ['abc', 42, {}, null]) {
+    assert.throws(
+      () => validateSchema({ M: { type: 'string', choices: bad } }),
+      err => err instanceof EnvSaafError && err.errors.includes('M: "choices" must be a non-empty array'),
+    );
+    assert.throws(
+      () => validateEnv({ M: { type: 'string', choices: bad } }, { M: 'b' }),
+      err => err instanceof EnvSaafError && err.errors.includes('M: "choices" must be a non-empty array'),
+    );
+  }
+  // The exact runtime fallout from the issue: 'b' used to pass by substring
+  // match, 'abcd' used to crash in the error formatter.
+  assert.throws(() => validateEnv({ M: { type: 'string', choices: 'abc' } }, { M: 'b' }), EnvSaafError);
+  assert.throws(() => validateEnv({ M: { type: 'string', choices: 'abc' } }, { M: 'abcd' }), EnvSaafError);
+  assert.throws(() => validateEnv({ M: { type: 'string', choices: 42 } }, { M: 'a' }), EnvSaafError);
+  assert.doesNotThrow(() => generateExample({ M: { type: 'string', choices: 'abc' } }));
+  assert.doesNotThrow(() => generateExample({ M: { type: 'string', choices: 42 } }));
   // Valid combinations keep working exactly as before.
   assert.strictEqual(validateEnv({ N: { type: 'number', min: 5, max: 10 } }, { N: '7' }).N, 7);
   assert.strictEqual(validateEnv({ N: { type: 'number', min: 5, max: 5 } }, { N: '5' }).N, 5);
@@ -7293,6 +7314,15 @@ const formatErrorThrowingHookTest = (async () => {
   assert.throws(() => validateEnv({ N: { type: 'int', separator: ';' } }, {}), /N: "separator" only applies to type 'array'/);
   assert.throws(() => validateEnv({ S: { type: 'string', protocols: ['https'] } }, {}), /S: "protocols" only applies to type 'url'/);
   assert.throws(() => validateEnv({ B: { type: 'boolean', protocols: ['https'] } }, {}), /B: "protocols" only applies to type 'url'/);
+  // Issue #453: `length` only applies to `hex` rules — on any other type
+  // it is the same dead config and is rejected up front.
+  assert.throws(() => validateEnv({ S: { type: 'string', length: 4 } }, {}), /S: "length" only applies to type 'hex'/);
+  assert.throws(() => validateEnv({ N: { type: 'number', length: 4 } }, {}), /N: "length" only applies to type 'hex'/);
+  assert.throws(() => validateEnv({ E: { type: 'email', length: 4 } }, {}), /E: "length" only applies to type 'hex'/);
+  assert.throws(() => validateEnv({ B: { type: 'boolean', length: 4 } }, {}), /B: "length" only applies to type 'hex'/);
+  assert.throws(() => validateEnv({ A: { type: 'array', length: 4 } }, {}), /A: "length" only applies to type 'hex'/);
+  assert.strictEqual(validateEnv({ H: { type: 'hex', length: 4 } }, { H: 'a1b2' }).H, 'a1b2');
+  assert.throws(() => validateEnv({ H: { type: 'hex', length: 4 } }, { H: 'a1' }), /4 characters long/);
   // The combinations that do apply keep working:
   assert.deepStrictEqual(validateEnv({ A: { type: 'array', of: 'url', protocols: ['https'] } }, { A: 'https://a.com,https://b.com' }).A, ['https://a.com', 'https://b.com']);
   assert.throws(() => validateEnv({ A: { type: 'array', of: 'url', protocols: ['https'] } }, { A: 'http://a.com' }), /expected a URL with one of these protocols/);

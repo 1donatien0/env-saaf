@@ -63,7 +63,7 @@ export interface EnvRule {
   /**
    * Exact length in characters for `hex` values (e.g. a 64-character
    * hash). A wrong-length value is rejected with an error naming the
-   * expected length. Ignored for other types.
+   * expected length. Rejected up front on non-`hex` rules.
    */
   length?: number;
   /**
