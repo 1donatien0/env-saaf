@@ -1419,7 +1419,10 @@ function validateEnvCore(schema, env, options, valueSources) {
         try { if (rule.max !== undefined) hi = coerce(key, rule.max, 'date'); } catch (_) {}
         const t = val.getTime();
         if ((lo !== null && t < lo.getTime()) || (hi !== null && t > hi.getTime())) {
-          const boundText = (b) => (b instanceof Date ? b.toISOString().slice(0, 10) : String(b));
+          // A Date bound is written like toJsonSchema's `$comment` (issue #497): cut
+          // to its day only at UTC midnight, so the message never names a day the
+          // rejected value is on. A string bound is shown as the rule wrote it.
+          const boundText = (b) => (b instanceof Date ? dateBoundText(b) : String(b));
           const range = lo !== null && hi !== null ? `between ${boundText(rule.min)} and ${boundText(rule.max)}`
             : lo !== null ? `on or after ${boundText(rule.min)}` : `on or before ${boundText(rule.max)}`;
           pushErr(`${key}: expected a date ${range}, got "${shown}"`, valueSource());
@@ -3215,18 +3218,23 @@ function jsonSchemaDefault(key, rule, type) {
   }
 }
 
+// A Date bound written in UTC: its day when it falls on midnight, the full
+// instant otherwise. Shared by toJsonSchema's `$comment` and validateEnv's
+// range error, so both show a bound the same way (issues #482 and #497).
+function dateBoundText(bound) {
+  const iso = Date.prototype.toISOString.call(bound);
+  // Cut at the T, not at a fixed width: years past 9999 or before 0 are written
+  // with six digits and a sign (+010000-01-01T…).
+  return iso.endsWith('T00:00:00.000Z') ? iso.slice(0, iso.indexOf('T')) : iso;
+}
+
 // A `date` bound as the rule wrote it, for the `$comment` of toJsonSchema. A
-// Date object is written in UTC: its day when it falls on midnight, the full
-// instant otherwise. A date-time without an offset is local time, so it is
-// not written down, the same way such defaults are skipped (jsonSchemaDefault).
+// Date object goes through dateBoundText. A date-time without an offset is local
+// time, so it is not written down, the same way such defaults are skipped
+// (jsonSchemaDefault).
 function jsonSchemaDateBound(bound) {
   if (bound === undefined) return undefined;
-  if (bound instanceof Date) {
-    const iso = Date.prototype.toISOString.call(bound);
-    // Cut at the T, not at a fixed width: years past 9999 or before 0 are written
-    // with six digits and a sign (+010000-01-01T…).
-    return iso.endsWith('T00:00:00.000Z') ? iso.slice(0, iso.indexOf('T')) : iso;
-  }
+  if (bound instanceof Date) return dateBoundText(bound);
   const text = String(bound);
   if (text.includes('T') && !/(?:Z|[+-]\d{2}:?\d{2})$/.test(text)) return undefined;
   return text;
