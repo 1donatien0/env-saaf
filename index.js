@@ -2612,8 +2612,13 @@ function diffEnv(usedKeys, documentedKeys) {
   };
 }
 
-/** Mask a string; non-string inputs are returned unchanged. String examples: "sk_live_123456" -> "sk***56". Short values are fully masked; an empty string is returned unchanged — there is nothing to hide. */
+/** Mask a scalar value. Strings, numbers and bigints use the same rule: "sk_live_123456" -> "sk***56", 123456 -> "12***56";
+ *  short values are fully masked, and an empty string is returned unchanged — there is nothing to hide.
+ *  Booleans always become "****", so true and false cannot be told apart (issue #448).
+ *  null, undefined, symbols, functions and objects are returned unchanged (issue #281). */
 function maskValue(v) {
+  if (typeof v === 'boolean') return '****';
+  if (typeof v === 'number' || typeof v === 'bigint') v = String(v);
   if (typeof v !== 'string') return v;
   const s = v;
   if (s.length === 0) return '';
@@ -2621,10 +2626,10 @@ function maskValue(v) {
   return s.slice(0, 2) + '***' + s.slice(-2);
 }
 
-/** Return a copy of an env object with string values masked.
+/** Return a copy of an env object with string, number, boolean and bigint values masked.
  *  Plain objects and arrays are walked recursively (issue #234), so the masked
  *  structure mirrors the input shape; scalar leaves use the maskValue rules.
- *  Non-string primitives and non-plain objects stay unchanged.
+ *  null, undefined, symbols, functions and non-plain objects stay unchanged.
  *  A repeated reference (e.g. a cycle) is replaced with a fixed placeholder
  *  instead of hanging. The input is never mutated. */
 function maskSecrets(obj) {

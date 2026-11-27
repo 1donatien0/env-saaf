@@ -1126,7 +1126,7 @@ env-saaf's checks. JSON Schema counts Unicode characters for string lengths;
 env-saaf counts JavaScript UTF-16 code units. Use `validateEnv` or `loadEnv`
 for runtime validation.
 
-### Mask string config values
+### Mask config values
 
 ```js
 const { maskSecrets } = require('env-saaf');
@@ -1135,9 +1135,9 @@ console.log(maskSecrets(process.env)); // values masked: sk***56
 
 An empty value stays empty — `maskValue('')` returns `''`, so an unset secret no longer looks set in logs.
 
-`maskValue` masks strings only. Empty strings stay empty; numbers, booleans, bigints, symbols, `null`, `undefined`, functions and objects pass through unchanged.
+`maskValue` masks strings, numbers and bigints with the same rule, so a secret validated as a number is masked like its text (`maskValue(123456)` returns `'12***56'`, like `maskValue('123456')`). Booleans always become `'****'`, so `true` and `false` cannot be told apart. Empty strings stay empty; symbols, `null`, `undefined`, functions and objects pass through unchanged.
 
-`maskSecrets` recurses into plain objects and arrays, copies their shape and masks string leaves. Other primitives and non-plain objects (`Date`, `RegExp`, class instances) keep their values and identity. A repeated plain-object or array reference, including a cycle, becomes `'[Circular]'`. The input is never mutated. TypeScript's `Masked<T>` preserves non-string leaf types. These helpers have no schema or sensitive-key context: a numeric secret or a secret stored inside a class instance is not masked, so do not treat their output as automatically safe to log.
+`maskSecrets` recurses into plain objects and arrays, copies their shape and masks every string, number, boolean and bigint leaf, whatever its key (`{ PORT: 8080 }` becomes `{ PORT: '****' }`). `null`, `undefined` and non-plain objects (`Date`, `RegExp`, class instances) keep their values and identity. A repeated plain-object or array reference, including a cycle, becomes `'[Circular]'`. The input is never mutated. TypeScript's `Masked<T>` types masked leaves as `string` and keeps the other leaf types. These helpers have no schema or sensitive-key context: a secret stored inside a class instance is not masked, so do not treat their output as automatically safe to log.
 
 ## Troubleshooting
 
