@@ -3316,6 +3316,12 @@ function jsonSchemaForRule(key, rule, required) {
     if (value !== undefined) property.default = value;
   }
   if (rule.sensitive === true) property.writeOnly = true;
+  // Issue #464: JSON Schema 2020-12 has a boolean `deprecated` keyword. Both
+  // the boolean and message-string forms of the env-saaf option mean the same
+  // thing to a schema consumer, so emit the keyword without the message.
+  if (rule.deprecated === true || typeof rule.deprecated === 'string') {
+    property.deprecated = true;
+  }
   if (rule.required) required.push(key);
   return property;
 }
