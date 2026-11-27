@@ -757,6 +757,14 @@ assert.throws(() => validateEnv({ A: { required: true } }, {}), EnvSaafError);
 // v0.2.0
 assert.deepStrictEqual(parseEnvFile('PORT=3000\nNAME="my app"\n'), { PORT: '3000', NAME: 'my app' });
 assert.deepStrictEqual(scanCode('process.env.API_URL; const { PORT } = process.env;'), ['API_URL', 'PORT']);
+
+// Issue #481: a local bound to the process object is a process.env source too.
+assert.deepStrictEqual(scanCode('const p = process; const x = p.env.FOO;'), ['FOO']);
+assert.deepStrictEqual(scanCode('const p = process; const { A } = p.env;'), ['A']);
+assert.deepStrictEqual(scanCode("const p = process; p.env['BRACKET']; p.env[`TICK`];"), ['BRACKET', 'TICK']);
+// Only real declarations from `process` count, and reads before the alias do not.
+assert.deepStrictEqual(scanCode('const p = getProc(); p.env.NOT_AN_ALIAS;'), []);
+assert.deepStrictEqual(scanCode('p.env.TOO_EARLY; const p = process;'), []);
 assert.deepStrictEqual(diffEnv(['A', 'B'], ['A', 'C']), { usedNotDocumented: ['B'], documentedNotUsed: ['C'] });
 
 // Issue #221: assignment-shaped lines with invalid keys must not disappear.
