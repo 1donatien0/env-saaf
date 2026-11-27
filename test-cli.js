@@ -108,6 +108,44 @@ try {
     assert.ok(Array.isArray(parsed.invalid) && parsed.invalid.length === 1 && /PORT/.test(parsed.invalid[0]));
   }
 
+  // --- check --values: undocumented keys in the values file are EXTRA and fail
+  // (issue #494: a typo'd deployment key passed the gate silently before) -----
+  {
+    const dir = mkProject({
+      'src/app.js': SRC_WITH_USAGE,
+      '.env.example': EXAMPLE_BOTH,
+      'env.schema.js': SCHEMA,
+      'prod.env': 'PORT=3000\nEXTRA=zzz\nPORTT=4000\n',
+    });
+    const r = run(['check', dir, '--schema', 'env.schema.js', '--values', 'prod.env'], dir);
+    assert.strictEqual(r.status, 1, 'extra keys in the values file must exit 1');
+    assert.match(r.stdout, /EXTRA in prod\.env: EXTRA \(not in \.env\.example\)/);
+    assert.match(r.stdout, /EXTRA in prod\.env: PORTT/);
+    assert.doesNotMatch(r.stdout, /EXTRA in prod\.env: PORT\n/, 'the documented key itself is not extra');
+    const rj = run(['check', dir, '--schema', 'env.schema.js', '--values', 'prod.env', '--json'], dir);
+    const parsed = JSON.parse(rj.stdout);
+    assert.strictEqual(parsed.ok, false);
+    assert.strictEqual(parsed.valuesFile, 'prod.env');
+    assert.deepStrictEqual(parsed.envExtra, ['EXTRA', 'PORTT']);
+  }
+
+  // --- check --values: a values file with no extra keys behaves as before ----
+  {
+    const dir = mkProject({
+      'src/app.js': 'console.log(process.env.PORT);\n',
+      '.env.example': 'PORT=\n',
+      'env.schema.js': SCHEMA,
+      'prod.env': 'PORT=3000\n',
+    });
+    const r = run(['check', dir, '--schema', 'env.schema.js', '--values', 'prod.env'], dir);
+    assert.strictEqual(r.status, 0, `clean values file should exit 0, got ${r.status}: ${r.stdout}${r.stderr}`);
+    assert.match(r.stdout, /all clean/);
+    const rj = run(['check', dir, '--schema', 'env.schema.js', '--values', 'prod.env', '--json'], dir);
+    const parsed = JSON.parse(rj.stdout);
+    assert.strictEqual(parsed.ok, true);
+    assert.deepStrictEqual(parsed.envExtra, []);
+  }
+
   // --- check: missing .env.example exits 2 with a hint ----------------------
   {
     const dir = mkProject({ 'src/app.js': SRC_WITH_USAGE });

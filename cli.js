@@ -1186,6 +1186,12 @@ async function runCheck() {
   const envFileFound = fs.existsSync(envPath);
   let envExtra = [];
   let envMissing = [];
+  // Issue #494: --values names the deployment file being validated, so its
+  // undocumented keys get the same EXTRA treatment the real .env gets — a
+  // typo'd key there (PORTT for PORT) passed the gate silently before. A key
+  // documented in the schema counts as documented too, since --schema is the
+  // other source of truth the values file is judged by.
+  let valuesExtra = [];
   if (envFileFound) {
     const envKeys = Object.keys(readEnvFile(envPath));
     const envDiff = diffEnv(envKeys, documented);
@@ -1239,6 +1245,9 @@ async function runCheck() {
         if (!(e instanceof EnvSaafError)) throw e;
         invalid = guard ? guardValidationErrors(e.errors, guard) : e.errors;
       }
+      if (valuesOpt !== null) {
+        valuesExtra = Object.keys(rawValues).filter((k) => !documented.includes(k) && !declared.includes(k));
+      }
     }
   }
   // Issue #428: --fix appends the missing keys to the template file instead
@@ -1274,10 +1283,12 @@ async function runCheck() {
   const scaffoldAhead = used.length === 0 && documentedNotUsed.length > 0
     && usedNotDocumented.length === 0 && secrets.length === 0
     && envExtra.length === 0 && envMissing.length === 0 && invalid.length === 0
+    && valuesExtra.length === 0
     && schemaNotDocumented.length === 0 && documentedNotInSchema.length === 0;
   const scaffoldNote = `no process.env usage found in code yet — ${documentedNotUsed.length} ${documentedNotUsed.length === 1 ? 'key' : 'keys'} in ${fileOpt} ${documentedNotUsed.length === 1 ? 'is' : 'are'} not used by any code yet`;
   const ok = scaffoldAhead || (usedNotDocumented.length === 0 && documentedNotUsed.length === 0
     && secrets.length === 0 && envExtra.length === 0 && envMissing.length === 0 && invalid.length === 0
+    && valuesExtra.length === 0
     && schemaNotDocumented.length === 0 && documentedNotInSchema.length === 0);
   // Issue #352: --values validates its own file, so a missing .env is not a skip then.
   const skippedValues = schemaOpt && !fileExplicit && !envFileFound && valuesOpt === null;
@@ -1295,7 +1306,7 @@ async function runCheck() {
       unused: scaffoldAhead ? [] : documentedNotUsed,
       invalid,
       secrets,
-      envExtra,
+      envExtra: [...new Set([...envExtra, ...valuesExtra])],
       envMissing,
     };
     if (valuesOpt !== null) result.valuesFile = valuesOpt;
@@ -1315,11 +1326,13 @@ async function runCheck() {
     documentedNotUsed.forEach(k => console.log(`UNUSED: ${k} (in ${fileOpt}, never used in code)`));
     secrets.forEach(k => console.log(`SECRET in ${fileOpt}: ${k} (value [REDACTED] looks like a real secret; use an empty value or placeholder)`));
     envExtra.forEach(k => console.log(`EXTRA in .env: ${k} (not in ${fileOpt})`));
+    valuesExtra.forEach(k => console.log(`EXTRA in ${valuesOpt}: ${k} (not in ${fileOpt})`));
     envMissing.forEach(k => console.log(`MISSING in .env: ${k} (in ${fileOpt}, not set locally)`));
     invalid.forEach(e => console.log(`INVALID${valuesOpt !== null ? ` in ${valuesOpt}` : ''}: ${e}`));
     schemaNotDocumented.forEach(k => console.log(`NOT DOCUMENTED: ${k} (in schema, missing from ${fileOpt})`));
     documentedNotInSchema.forEach(k => console.log(`NOT IN SCHEMA: ${k} (in ${fileOpt}, not declared in the schema)`));
     if (!usedNotDocumented.length && !documentedNotUsed.length && !secrets.length && !envExtra.length && !envMissing.length && !invalid.length
+      && !valuesExtra.length
       && !schemaNotDocumented.length && !documentedNotInSchema.length) {
       console.log(`env-saaf: all clean — code and ${fileOpt} match.`);
     }
