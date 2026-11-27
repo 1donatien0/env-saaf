@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Added: `toJsonSchema` preserves `conflictsWith` as `allOf`/`not` constraints, deduplicates reciprocal pairs, resolves grouped keys to nested JSON paths, and composes with existing `requiredIf` clauses (fixes #465).
+
 - Fixed: `check --schema` counts schema keys as used and keeps the first-check note for fresh `init --from-example` projects (fixes #506).
 
 - Fixed: JSON validation rejects non-primitive choices at schema time and distinguishes strings from other values in choice errors (fixes #451).

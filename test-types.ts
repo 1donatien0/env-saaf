@@ -236,6 +236,10 @@ const requiredKeys: string[] | undefined = jsonSchema.required;
 const discriminator: string | number | boolean | null | undefined = jsonSchema.if?.properties?.MODE.const;
 const conditionalKeys: string[] | undefined = jsonSchema.then?.required;
 const groupConditionKeys: string[] | undefined = jsonSchema.allOf?.[0].then?.properties?.APP.required;
+const conflictKeys: string[] | undefined = jsonSchema.allOf?.[0].not?.required;
+const groupedConflictKeys: string[] | undefined = jsonSchema.allOf?.[0].not?.allOf?.[0].properties?.APP.required;
+// @ts-expect-error — a negated schema's required keys are strings, not numbers
+const badConflictKeys: number[] | undefined = jsonSchema.allOf?.[0].not?.required;
 toJsonSchema({
   DATA: { type: 'json' },
   A: { requiredIf: { key: 'DATA', equals: null } },

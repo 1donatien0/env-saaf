@@ -3559,6 +3559,27 @@ function addJsonSchemaRequiredIf(schema, result) {
   else if (clauses.length) result.allOf = clauses;
 }
 
+function addJsonSchemaConflicts(schema, result) {
+  const { flat, groupOf } = flattenSchema(schema);
+  const seen = new Set();
+  const clauses = [];
+  for (const [key, rule] of Object.entries(flat)) {
+    for (const other of normalizeConflictsWith(rule.conflictsWith)) {
+      const pair = [key, other].sort();
+      const id = JSON.stringify(pair);
+      if (seen.has(id)) continue;
+      seen.add(id);
+      // Both complete paths must exist. Merely testing properties inside
+      // an optional group would also match when the group is absent.
+      const both = pair.some(name => groupOf.has(name))
+        ? { allOf: pair.map(name => jsonSchemaRequiredPath(name, groupOf)) }
+        : { required: pair };
+      clauses.push({ not: both });
+    }
+  }
+  if (clauses.length) result.allOf = [...(result.allOf || []), ...clauses];
+}
+
 function toJsonSchema(schema) {
   validateSchema(schema);
   const required = [];
@@ -3567,6 +3588,7 @@ function toJsonSchema(schema) {
   const result = { $schema: 'https://json-schema.org/draft/2020-12/schema', type: 'object', properties };
   if (required.length) result.required = required;
   addJsonSchemaRequiredIf(schema, result);
+  addJsonSchemaConflicts(schema, result);
   return result;
 }
 
