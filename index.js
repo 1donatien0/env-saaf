@@ -2339,6 +2339,29 @@ function collectEnvReads(text) {
       if (codeView[previous] === '.' && codeView.slice(previous - 2, previous + 1) !== '...') continue;
       add(m[2] ?? m[4], m.index);
     }
+    // Issue #456: destructuring from a process.env alias is the same read as
+    // destructuring from process.env directly. Renames, defaults and rest
+    // follow the same extraction rules as the direct destructure above.
+    for (const [name, declaredAt] of aliases) {
+      const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const aliasDestructure = new RegExp(
+        `(?:const|let|var)\\s*\\{([^}]+)\\}\\s*=\\s*${escaped}(?![$\\p{ID_Continue}])`, 'gu');
+      for (const m of codeView.matchAll(aliasDestructure)) {
+        if (declaredAt > m.index) continue;
+        const start = m.index + m[0].indexOf('{') + 1;
+        let offset = 0;
+        for (const part of m[1].split(',')) {
+          const key = part.split(':')[0].split('=')[0].trim();
+          if (/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) add(key, start + offset + part.indexOf(key));
+          if (part.trim().startsWith(':')) {
+            const original = src.slice(start + offset, start + offset + part.length);
+            const quoted = /^\s*(['"])([A-Za-z_][A-Za-z0-9_.-]*)\1\s*:/.exec(original);
+            if (quoted) add(quoted[2], start + offset + original.indexOf(quoted[2]));
+          }
+          offset += part.length + 1;
+        }
+      }
+    }
   }
   if (processObjectAliases.size) {
     for (const [name, declaredAt] of processObjectAliases) {
